@@ -647,6 +647,39 @@ function SceneGlobalStyles() {
           to { transform: translateX(120vw); }
         }
 
+        /* ── Button base states ── */
+        .island-btn {
+          transition: filter 140ms ease, transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+        }
+        .island-btn:hover:not(:disabled) {
+          filter: brightness(1.14);
+          transform: translateY(-1px);
+          box-shadow: 0 4px 14px rgba(0,0,0,0.22);
+        }
+        .island-btn:active:not(:disabled) {
+          filter: brightness(0.95);
+          transform: translateY(0);
+          box-shadow: none;
+        }
+        .island-btn:focus-visible {
+          outline: 2px solid var(--bi-primary-glow);
+          outline-offset: 2px;
+        }
+        .island-btn:disabled {
+          opacity: 0.48;
+          cursor: not-allowed;
+          filter: none;
+          transform: none;
+          box-shadow: none;
+        }
+
+        /* ── Input / textarea / select focus ── */
+        input:focus, textarea:focus, select:focus {
+          outline: 2px solid var(--bi-primary-glow);
+          outline-offset: 0;
+          border-color: var(--bi-primary-glow) !important;
+        }
+
         @media (prefers-reduced-motion: reduce) {
           .island-palm-canopy-l,
           .island-palm-canopy-r,
@@ -655,6 +688,9 @@ function SceneGlobalStyles() {
           .island-cloud-b,
           .island-cloud-c {
             animation: none !important;
+          }
+          .island-btn {
+            transition: none !important;
           }
         }
       `}

@@ -263,7 +263,7 @@ function PresenceDot({ inVoice, size }: { inVoice: boolean; size: number }) {
         width: size,
         height: size,
         borderRadius: 999,
-        background: inVoice ? "#4ade80" : "#94a3b8",
+        background: inVoice ? islandTheme.color.successAccent : islandTheme.color.textMuted,
         border: `2px solid ${islandTheme.color.panelBg}`
       }}
     />

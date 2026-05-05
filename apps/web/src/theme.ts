@@ -21,8 +21,11 @@ export const islandTheme = {
     danger: "#7f1d1d",
     dangerSurface: "#3f1d1d",
     dangerText: "#fee2e2",
+    dangerAccent: "#ef4444",
     success: "#14532d",
-    successText: "#dcfce7"
+    successText: "#dcfce7",
+    successAccent: "#22c55e",
+    warnAccent: "#f59e0b"
   },
   radius: {
     control: 10,

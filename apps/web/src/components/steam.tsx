@@ -162,7 +162,7 @@ export function SteamStatusBadge({
           width: Math.max(7, size * 0.28),
           height: Math.max(7, size * 0.28),
           borderRadius: 999,
-          background: linked ? "#4ade80" : "#94a3b8",
+          background: linked ? islandTheme.color.successAccent : islandTheme.color.textMuted,
           border: `2px solid ${islandTheme.color.panelMutedBg}`
         }}
       />

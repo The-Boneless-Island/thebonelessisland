@@ -134,8 +134,8 @@ function Hero({
             width: 8,
             height: 8,
             borderRadius: 999,
-            background: "#4ade80",
-            boxShadow: "0 0 0 4px rgba(74, 222, 128, 0.18)"
+            background: islandTheme.color.successAccent,
+            boxShadow: "0 0 0 4px rgba(34, 197, 94, 0.18)"
           }}
         />
         {onlineCount} on the island right now
@@ -481,7 +481,7 @@ function CrewRow({ member }: { member: GuildMember }) {
           letterSpacing: "0.06em",
           color:
             status === "voice"
-              ? "#4ade80"
+              ? islandTheme.color.successAccent
               : status === "active"
                 ? islandTheme.color.primaryGlow
                 : islandTheme.color.textMuted

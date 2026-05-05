@@ -509,7 +509,7 @@ function NewsCardRow({
               </div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button type="button" style={smallBtn(islandTheme.color.primary, "#fff")} onClick={() => setEditing(true)}>
+              <button type="button" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)} onClick={() => setEditing(true)}>
                 Edit
               </button>
               <button
@@ -595,7 +595,7 @@ function NewsSubpage({
               {gameCurateState === "running" ? "Curating…" : "Re-curate Game News"}
             </IslandButton>
             {gameCurateMsg ? (
-              <span style={{ fontSize: 12, color: gameCurateState === "error" ? islandTheme.color.danger : islandTheme.color.success }}>
+              <span style={{ fontSize: 12, color: gameCurateState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
                 {gameCurateMsg}
               </span>
             ) : null}
@@ -744,10 +744,10 @@ function ConnectorRow({
 }) {
   const tone =
     entry.status === "ok"
-      ? { dot: "#4ade80", label: "OK" }
+      ? { dot: islandTheme.color.successAccent, label: "OK" }
       : entry.status === "warn"
-        ? { dot: "#facc15", label: "WARN" }
-        : { dot: "#94a3b8", label: "OFF" };
+        ? { dot: islandTheme.color.warnAccent, label: "WARN" }
+        : { dot: islandTheme.color.textMuted, label: "OFF" };
   return (
     <div
       style={{
@@ -845,10 +845,10 @@ function MembersSubpage() {
             <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>Joined 2 days ago</div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button type="button" style={smallBtn(islandTheme.color.primary, "#fff")}>
+            <button type="button" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)}>
               Promote
             </button>
-            <button type="button" style={smallBtn("transparent", "#fca5a5", true, "#7f1d1d")}>
+            <button type="button" style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)}>
               Remove
             </button>
           </div>
@@ -865,7 +865,7 @@ function MemberRow({
   entry: { handle: string; roles: string[]; joined: string; status: string };
   firstRow: boolean;
 }) {
-  const dot = entry.status === "online" ? "#4ade80" : entry.status === "live" ? "#ef4444" : "#94a3b8";
+  const dot = entry.status === "online" ? islandTheme.color.successAccent : entry.status === "live" ? islandTheme.color.dangerAccent : islandTheme.color.textMuted;
   return (
     <div
       style={{
@@ -1054,12 +1054,12 @@ function ForumReportsTab() {
                 Dismiss
               </button>
               {r.postId ? (
-                <button type="button" onClick={() => resolve(r.id, "delete_post")} style={smallBtn("transparent", "#fca5a5", true, "#7f1d1d")}>
+                <button type="button" onClick={() => resolve(r.id, "delete_post")} style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)}>
                   Delete Post
                 </button>
               ) : null}
               {r.threadId ? (
-                <button type="button" onClick={() => resolve(r.id, "delete_thread")} style={smallBtn("transparent", "#fca5a5", true, "#7f1d1d")}>
+                <button type="button" onClick={() => resolve(r.id, "delete_thread")} style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)}>
                   Delete Thread
                 </button>
               ) : null}
@@ -1153,7 +1153,7 @@ function ForumCategoriesTab() {
               <button type="button" onClick={() => setEditing(c)} style={smallBtn(islandTheme.color.panelMutedBg, islandTheme.color.textSubtle, true)}>
                 Edit
               </button>
-              <button type="button" onClick={() => remove(c.id)} style={smallBtn("transparent", "#fca5a5", true, "#7f1d1d")}>
+              <button type="button" onClick={() => remove(c.id)} style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)}>
                 Delete
               </button>
             </div>
@@ -1680,7 +1680,7 @@ function NewsSourcesSubpage({
                     alignItems: "center",
                     justifyContent: "center",
                     fontSize: 9,
-                    color: "#fff"
+                    color: islandTheme.color.textInverted
                   }}
                 >
                   {active ? "✓" : ""}
@@ -1691,7 +1691,7 @@ function NewsSourcesSubpage({
           })}
         </div>
         {saved["rss"] && (
-          <div style={{ marginTop: 8, fontSize: 12, color: islandTheme.color.success }}>Sources saved</div>
+          <div style={{ marginTop: 8, fontSize: 12, color: islandTheme.color.successAccent }}>Sources saved</div>
         )}
       </IslandCard>
 
@@ -1790,7 +1790,7 @@ function NewsSourcesSubpage({
               {ingestState === "running" ? "Fetching…" : "Fetch & Curate"}
             </IslandButton>
             {ingestMsg && (
-              <span style={{ fontSize: 12, color: ingestState === "error" ? islandTheme.color.danger : islandTheme.color.success }}>
+              <span style={{ fontSize: 12, color: ingestState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
                 {ingestMsg}
               </span>
             )}
@@ -1823,7 +1823,7 @@ function NewsSourcesSubpage({
               {curateState === "running" ? "Curating…" : "Curate Articles"}
             </IslandButton>
             {curateMsg && (
-              <span style={{ fontSize: 12, color: curateState === "error" ? islandTheme.color.danger : islandTheme.color.success }}>
+              <span style={{ fontSize: 12, color: curateState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
                 {curateMsg}
               </span>
             )}
@@ -1856,7 +1856,7 @@ function NewsSourcesSubpage({
               {recurateState === "running" ? "Regenerating…" : "Regenerate All Summaries"}
             </IslandButton>
             {recurateMsg && (
-              <span style={{ fontSize: 12, color: recurateState === "error" ? islandTheme.color.danger : islandTheme.color.success }}>
+              <span style={{ fontSize: 12, color: recurateState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
                 {recurateMsg}
               </span>
             )}
@@ -2285,7 +2285,7 @@ function Toggle({ on }: { on: boolean }) {
           width: 14,
           height: 14,
           borderRadius: 999,
-          background: on ? "#4ade80" : "#94a3b8",
+          background: on ? islandTheme.color.successAccent : islandTheme.color.textMuted,
           transition: "left 200ms"
         }}
       />
@@ -2696,7 +2696,7 @@ function AISettingsSubpage({
               className="island-mono"
               style={{
                 fontSize: 12,
-                color: testState === "ok" ? islandTheme.color.success : islandTheme.color.danger,
+                color: testState === "ok" ? islandTheme.color.successAccent : islandTheme.color.dangerAccent,
                 lineHeight: 1.4
               }}
             >
@@ -2871,7 +2871,7 @@ function EconomySubpage() {
             <IslandButton variant="primary" onClick={() => void handleGrant()} disabled={granting || !grantTarget || !grantAmount || !grantReason}>
               {granting ? "Applying…" : "Apply"}
             </IslandButton>
-            {grantMsg && <span style={{ fontSize: 13, color: grantMsg.ok ? "#4ade80" : islandTheme.color.danger }}>{grantMsg.text}</span>}
+            {grantMsg && <span style={{ fontSize: 13, color: grantMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{grantMsg.text}</span>}
           </div>
         </div>
       </IslandCard>
@@ -2894,7 +2894,7 @@ function EconomySubpage() {
           <IslandButton variant="primary" onClick={() => void handleAwardAttendance()} disabled={awarding || !selectedNight}>
             {awarding ? "Awarding…" : "Award 🍗 to Attendees"}
           </IslandButton>
-          {awardMsg && <span style={{ fontSize: 13, color: awardMsg.ok ? "#4ade80" : islandTheme.color.danger }}>{awardMsg.text}</span>}
+          {awardMsg && <span style={{ fontSize: 13, color: awardMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{awardMsg.text}</span>}
         </div>
       </IslandCard>
 
@@ -2935,7 +2935,7 @@ function EconomySubpage() {
             <IslandButton variant="primary" onClick={() => void handleAddItem()} disabled={addingItem || !newItem.name || !newItem.description || !newItem.price || !newItem.emoji}>
               {addingItem ? "Creating…" : "Create Item"}
             </IslandButton>
-            {itemMsg && <span style={{ fontSize: 13, color: itemMsg.ok ? "#4ade80" : islandTheme.color.danger }}>{itemMsg.text}</span>}
+            {itemMsg && <span style={{ fontSize: 13, color: itemMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{itemMsg.text}</span>}
           </div>
         </div>
       </IslandCard>

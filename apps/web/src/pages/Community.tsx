@@ -115,7 +115,7 @@ function CrewCard({
   onNavigate: (page: PageId) => void;
 }) {
   const statusColor =
-    card.status === "online" ? "#4ade80" : card.status === "live" ? "#ef4444" : "#94a3b8";
+    card.status === "online" ? islandTheme.color.successAccent : card.status === "live" ? islandTheme.color.dangerAccent : islandTheme.color.textMuted;
   return (
     <article
       style={{

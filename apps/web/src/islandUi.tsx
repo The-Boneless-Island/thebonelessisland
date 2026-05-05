@@ -53,8 +53,8 @@ type IslandButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: IslandButtonVariant;
 };
 
-export function IslandButton({ variant = "secondary", style, ...props }: IslandButtonProps) {
-  return <button {...props} style={{ ...islandButtonStyle(variant), ...style }} />;
+export function IslandButton({ variant = "secondary", style, className, ...props }: IslandButtonProps) {
+  return <button {...props} className={`island-btn${className ? ` ${className}` : ""}`} style={{ ...islandButtonStyle(variant), ...style }} />;
 }
 
 type IslandCardProps = HTMLAttributes<HTMLElement> & {

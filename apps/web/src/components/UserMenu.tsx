@@ -385,7 +385,7 @@ function SteamMenuRow({ linked, steamId64, lastSyncedAt, onSync, onLink }: Steam
           width: 7,
           height: 7,
           borderRadius: 999,
-          background: "#4ade80",
+          background: islandTheme.color.successAccent,
           flexShrink: 0
         }}
       />
@@ -410,7 +410,7 @@ function MenuLink({ icon, children, onClick, danger, rightSlot }: MenuLinkProps)
     gap: 10,
     padding: "7px 10px",
     borderRadius: 8,
-    color: danger ? "#fca5a5" : islandTheme.color.textSubtle,
+    color: danger ? islandTheme.color.dangerText : islandTheme.color.textSubtle,
     cursor: onClick ? "pointer" : "default",
     fontSize: 13,
     border: "none",

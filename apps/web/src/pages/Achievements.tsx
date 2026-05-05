@@ -194,7 +194,7 @@ export function AchievementsPage() {
               </IslandButton>
             )}
             {claimMsg && (
-              <div style={{ fontSize: 13, color: claimMsg.startsWith("+") ? "#4ade80" : islandTheme.color.textMuted }}>
+              <div style={{ fontSize: 13, color: claimMsg.startsWith("+") ? islandTheme.color.successAccent : islandTheme.color.textMuted }}>
                 {claimMsg}
               </div>
             )}
@@ -270,7 +270,7 @@ export function AchievementsPage() {
                 ₦{fmt(me.balance)} / ₦{fmt(next)} · {pct}% to next milestone
               </div>
               <div style={{ height: 6, borderRadius: 999, background: islandTheme.color.panelMutedBg, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#2563eb,#60a5fa)", borderRadius: 999, transition: "width 600ms ease" }} />
+                <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, var(--bi-primary), var(--bi-primary-glow))", borderRadius: 999, transition: "width 600ms ease" }} />
               </div>
             </div>
           );
@@ -381,7 +381,7 @@ export function AchievementsPage() {
                     {tx.reason}
                   </div>
                 </div>
-                <span style={{ fontWeight: 700, flexShrink: 0, color: tx.amount >= 0 ? "#4ade80" : "#f87171" }}>
+                <span style={{ fontWeight: 700, flexShrink: 0, color: tx.amount >= 0 ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>
                   {tx.amount >= 0 ? "+" : ""}{fmt(tx.amount)}
                 </span>
                 <span style={{ fontSize: 11, color: islandTheme.color.textMuted, flexShrink: 0 }}>

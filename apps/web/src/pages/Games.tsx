@@ -426,7 +426,7 @@ function RosterPicker({
             const status = m.inVoice ? "voice" : m.richPresenceText ? "online" : "idle";
             const dotColor =
               status === "voice"
-                ? "#4ade80"
+                ? islandTheme.color.successAccent
                 : status === "online"
                   ? islandTheme.color.primaryGlow
                   : islandTheme.color.textMuted;
@@ -932,7 +932,7 @@ function PatchFeatured({ item, kind, ago }: { item: GameNewsItem; kind: PatchKin
                 letterSpacing: "0.1em",
                 background: "rgba(239, 68, 68, 0.15)",
                 border: "1px solid rgba(239, 68, 68, 0.35)",
-                color: "#f87171",
+                color: islandTheme.color.dangerAccent,
                 padding: "1px 6px",
                 borderRadius: 999
               }}
@@ -1053,7 +1053,7 @@ function PatchRow({
                 letterSpacing: "0.08em",
                 background: "rgba(239, 68, 68, 0.15)",
                 border: "1px solid rgba(239, 68, 68, 0.35)",
-                color: "#f87171",
+                color: islandTheme.color.dangerAccent,
                 padding: "1px 5px",
                 borderRadius: 999,
                 flexShrink: 0
@@ -1316,8 +1316,8 @@ function SelectedNightDetail({
           style={{
             marginLeft: "auto",
             background: currentUserAttending ? "transparent" : islandTheme.color.primary,
-            border: `1px solid ${currentUserAttending ? "#7f1d1d" : islandTheme.color.primary}`,
-            color: currentUserAttending ? "#fca5a5" : islandTheme.color.primaryText,
+            border: `1px solid ${currentUserAttending ? islandTheme.color.danger : islandTheme.color.primary}`,
+            color: currentUserAttending ? islandTheme.color.dangerText : islandTheme.color.primaryText,
             padding: "7px 14px",
             borderRadius: 999,
             fontSize: 12,
@@ -1346,9 +1346,9 @@ function SelectedNightDetail({
 function Pill({ tone, children }: { tone: "success" | "muted" | "danger"; children: ReactNode }) {
   const palette =
     tone === "success"
-      ? { bg: "rgba(74, 222, 128, 0.18)", fg: "#4ade80" }
+      ? { bg: "rgba(34, 197, 94, 0.18)", fg: islandTheme.color.successAccent }
       : tone === "danger"
-        ? { bg: "rgba(239, 68, 68, 0.18)", fg: "#fca5a5" }
+        ? { bg: "rgba(239, 68, 68, 0.18)", fg: islandTheme.color.dangerAccent }
         : { bg: islandTheme.color.panelMutedBg, fg: islandTheme.color.textMuted };
   return (
     <span

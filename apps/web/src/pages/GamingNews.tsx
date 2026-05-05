@@ -53,9 +53,9 @@ const NEWS_TABS: Array<{ id: NewsTab; label: string; emoji: string }> = [
 ];
 
 const LABEL_COLORS: Record<string, string> = {
-  top_news: "#f59e0b",
-  community: "#22d3ee",
-  personal: "#4ade80"
+  top_news: islandTheme.color.warnAccent,
+  community: islandTheme.color.toolAccent,
+  personal: islandTheme.color.successAccent
 };
 
 const LABEL_LABELS: Record<string, string> = {
@@ -908,7 +908,7 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
           background: "transparent",
           border: "none",
           borderRadius: 4,
-          color: userVote === 1 ? "#4ade80" : islandTheme.color.textMuted,
+          color: userVote === 1 ? islandTheme.color.successAccent : islandTheme.color.textMuted,
           cursor: "pointer",
           padding: "3px 4px",
           display: "flex",
@@ -924,7 +924,7 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
         style={{
           fontSize: 11,
           fontWeight: 700,
-          color: netVotes > 0 ? "#4ade80" : netVotes < 0 ? "#f87171" : islandTheme.color.textMuted,
+          color: netVotes > 0 ? islandTheme.color.successAccent : netVotes < 0 ? islandTheme.color.dangerAccent : islandTheme.color.textMuted,
           minWidth: 16,
           textAlign: "center",
           lineHeight: 1
@@ -942,7 +942,7 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
           background: "transparent",
           border: "none",
           borderRadius: 4,
-          color: userVote === -1 ? "#f87171" : islandTheme.color.textMuted,
+          color: userVote === -1 ? islandTheme.color.dangerAccent : islandTheme.color.textMuted,
           cursor: "pointer",
           padding: "3px 4px",
           display: "flex",
@@ -1121,7 +1121,7 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
           >
             <div
               className="island-mono"
-              style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: "#4ade80", marginBottom: 6 }}
+              style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.successAccent, marginBottom: 6 }}
             >
               Why it's relevant to your crew
             </div>
