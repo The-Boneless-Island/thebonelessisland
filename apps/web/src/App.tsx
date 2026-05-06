@@ -11,6 +11,7 @@ import { LoginScreen } from "./pages/LoginScreen.js";
 import { AchievementsPage } from "./pages/Achievements.js";
 import { ForumsPage } from "./pages/Forums.js";
 import { ProfilePage } from "./pages/Profile.js";
+import { SettingsPage } from "./pages/Settings.js";
 import { ToastHost, useToastsFromStatus } from "./system/toast.js";
 import { islandCopy, islandTheme } from "./theme.js";
 import { Topbar } from "./components/Topbar.js";
@@ -83,6 +84,7 @@ export function App() {
   const [newsCards, setNewsCards] = useState<NewsCard[]>([]);
   const [serverSettings, setServerSettings] = useState<ServerSetting[] | null>(null);
   const [steamOnboardingOpen, setSteamOnboardingOpen] = useState(false);
+  const [tagline, setTagline] = useState<string>("");
   const { toasts, dismiss: dismissToast } = useToastsFromStatus(status);
 
   const filteredGuildMembers = useMemo(() => {
@@ -100,8 +102,6 @@ export function App() {
     [gameNights, selectedNightId]
   );
   const isAdmin = Boolean(profileData?.roleNames.includes("Parent"));
-
-  const readableProseStyle = islandTheme.prose.readable;
 
   useEffect(() => {
     try {
@@ -144,6 +144,21 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("island.excludedGameAppIds", JSON.stringify(excludedOwnedGameAppIds));
   }, [excludedOwnedGameAppIds]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await apiFetch("/taglines");
+        if (!res.ok) return;
+        const data = (await res.json()) as { taglines: string[] };
+        const list = data.taglines;
+        if (!list?.length) return;
+        setTagline(list[Math.floor(Math.random() * list.length)]);
+      } catch {
+        // Non-critical — site works fine without tagline
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1230,9 +1245,8 @@ export function App() {
         onNavigate={setPage}
         profile={profileData}
         isAdmin={isAdmin}
+        tagline={tagline}
         onLogout={() => void logout()}
-        onSyncSteam={handleSyncSteam}
-        onLinkSteam={handleLinkSteam}
       />
       <div style={{ height: 62 }} aria-hidden="true" />
       <SteamOnboardingModal
@@ -1267,6 +1281,7 @@ export function App() {
           generalNews={generalNews}
           activityEvents={activityEvents}
           newsCards={newsCards}
+          tagline={tagline}
           onNavigate={setPage}
         />
       ) : null}
@@ -1352,6 +1367,24 @@ export function App() {
           featureOptIn={profileFeatureOptIn}
           onFeatureOptInChange={setProfileFeatureOptIn}
           onSave={saveProfileSettings}
+        />
+      ) : null}
+
+      {page === "settings" ? (
+        <SettingsPage
+          profileData={profileData}
+          steamVisibility={profileSteamVisibility}
+          onSteamVisibilityChange={setProfileSteamVisibility}
+          ownedGames={ownedGames}
+          ownedGameSearch={ownedGameSearch}
+          onOwnedGameSearchChange={setOwnedGameSearch}
+          excludedOwnedGameAppIds={excludedOwnedGameAppIds}
+          onToggleExcludedOwnedGame={toggleExcludedOwnedGame}
+          featureOptIn={profileFeatureOptIn}
+          onFeatureOptInChange={setProfileFeatureOptIn}
+          onSave={saveProfileSettings}
+          onSyncSteam={handleSyncSteam}
+          onLinkSteam={handleLinkSteam}
         />
       ) : null}
 

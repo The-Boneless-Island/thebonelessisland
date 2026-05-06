@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { IslandCard } from "../islandUi.js";
+import { IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type {
   CrewOwnedGame,
@@ -202,40 +202,16 @@ function SessionComposer(props: GamesPageProps) {
           gap: 12
         }}
       >
-        <span
-          className="island-mono"
-          style={{
-            fontSize: 10,
-            textTransform: "uppercase",
-            letterSpacing: "0.1em",
-            padding: "3px 8px",
-            borderRadius: 999,
-            background: "rgba(96, 165, 250, 0.18)",
-            color: islandTheme.color.primaryGlow
-          }}
-        >
-          ★ AI pick
-        </span>
+        <IslandTag tone="primary">★ AI pick</IslandTag>
         {pick ? (
           <>
             <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
               Match strength{" "}
               <strong style={{ color: islandTheme.color.textPrimary }}>{pick.matchPct}%</strong>
             </span>
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 10,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                padding: "2px 8px",
-                borderRadius: 999,
-                border: `1px solid ${islandTheme.color.cardBorder}`,
-                color: islandTheme.color.textMuted
-              }}
-            >
+            <IslandTag tone="default">
               {pick.source === "selection" ? "your crew" : "island default"}
-            </span>
+            </IslandTag>
           </>
         ) : (
           <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
@@ -244,6 +220,7 @@ function SessionComposer(props: GamesPageProps) {
         )}
         <button
           type="button"
+          className="island-btn"
           style={{
             marginLeft: "auto",
             background: "transparent",
@@ -271,7 +248,7 @@ function SessionComposer(props: GamesPageProps) {
             display: "flex",
             alignItems: "flex-end",
             padding: 6,
-            color: "#fff",
+            color: islandTheme.color.textInverted,
             fontSize: 10,
             textShadow: "0 1px 2px rgba(0,0,0,0.6)",
             fontWeight: 700,
@@ -434,6 +411,7 @@ function RosterPicker({
               <button
                 key={m.discordUserId}
                 type="button"
+                className="island-btn"
                 onClick={() => onToggleSelectedMember(m.discordUserId)}
                 style={{
                   display: "grid",
@@ -566,23 +544,9 @@ function QuickChip({
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        padding: "3px 8px",
-        borderRadius: 999,
-        fontSize: 11,
-        fontWeight: 600,
-        border: `1px solid ${active ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder}`,
-        background: active ? "rgba(96, 165, 250, 0.18)" : "transparent",
-        color: active ? islandTheme.color.textPrimary : islandTheme.color.textSubtle,
-        cursor: "pointer",
-        font: "inherit"
-      }}
-    >
+    <IslandTag tone="primary" active={active} onClick={onClick}>
       {children}
-    </button>
+    </IslandTag>
   );
 }
 
@@ -824,28 +788,15 @@ function PatchesRolodex({ gameNews }: { gameNews: GameNewsItem[] }) {
 }
 
 const AI_LABEL_CONFIG = {
-  personal:  { text: "For You",         bg: "rgba(16, 185, 129, 0.18)", border: "rgba(16, 185, 129, 0.4)", color: "#34d399" },
-  community: { text: "Crew Trending",   bg: "rgba(96, 165, 250, 0.18)", border: "rgba(96, 165, 250, 0.4)", color: "#60a5fa" },
-  top_news:  { text: "Top Gaming News", bg: "rgba(251, 146, 60, 0.18)", border: "rgba(251, 146, 60, 0.4)", color: "#fb923c" }
+  personal:  { text: "For You",         color: "#22c55e" },
+  community: { text: "Crew Trending",   color: "#38bdf8" },
+  top_news:  { text: "Top Gaming News", color: "#fb923c" }
 } as const;
 
 function AiLabelChip({ label }: { label: "personal" | "community" | "top_news" }) {
   const cfg = AI_LABEL_CONFIG[label];
   return (
-    <span
-      className="island-mono"
-      style={{
-        fontSize: 9,
-        textTransform: "uppercase",
-        letterSpacing: "0.1em",
-        background: cfg.bg,
-        border: `1px solid ${cfg.border}`,
-        color: cfg.color,
-        padding: "1px 6px",
-        borderRadius: 999,
-        flexShrink: 0
-      }}
-    >
+    <span className="island-mono" style={{ ...islandTagStyle({ color: cfg.color }), flexShrink: 0 }}>
       {cfg.text}
     </span>
   );
@@ -907,38 +858,10 @@ function PatchFeatured({ item, kind, ago }: { item: GameNewsItem; kind: PatchKin
             ★ Featured · {item.gameName}
           </span>
           {item.aiLabel ? <AiLabelChip label={item.aiLabel} /> : isAIPick ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 9,
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
-                background: "rgba(139, 92, 246, 0.2)",
-                border: "1px solid rgba(139, 92, 246, 0.4)",
-                color: "#a78bfa",
-                padding: "1px 6px",
-                borderRadius: 999
-              }}
-            >
-              AI Pick
-            </span>
+            <IslandTag color="#a78bfa">AI Pick</IslandTag>
           ) : null}
           {item.aiSpoilerWarning ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 9,
-                textTransform: "uppercase",
-                letterSpacing: "0.1em",
-                background: "rgba(239, 68, 68, 0.15)",
-                border: "1px solid rgba(239, 68, 68, 0.35)",
-                color: islandTheme.color.dangerAccent,
-                padding: "1px 6px",
-                borderRadius: 999
-              }}
-            >
-              ⚠ Spoilers
-            </span>
+            <IslandTag tone="danger">⚠ Spoilers</IslandTag>
           ) : null}
         </div>
         <div style={{ fontSize: 14, fontWeight: 700 }}>{item.title}</div>
@@ -1027,40 +950,10 @@ function PatchRow({
           {item.aiLabel ? (
             <AiLabelChip label={item.aiLabel} />
           ) : (item.aiRelevanceScore ?? 0) >= 0.75 ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 9,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                background: "rgba(139, 92, 246, 0.15)",
-                border: "1px solid rgba(139, 92, 246, 0.35)",
-                color: "#a78bfa",
-                padding: "1px 5px",
-                borderRadius: 999,
-                flexShrink: 0
-              }}
-            >
-              AI
-            </span>
+            <span className="island-mono" style={{ ...islandTagStyle({ color: "#a78bfa" }), flexShrink: 0 }}>AI</span>
           ) : null}
           {item.aiSpoilerWarning ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 9,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                background: "rgba(239, 68, 68, 0.15)",
-                border: "1px solid rgba(239, 68, 68, 0.35)",
-                color: islandTheme.color.dangerAccent,
-                padding: "1px 5px",
-                borderRadius: 999,
-                flexShrink: 0
-              }}
-            >
-              ⚠ Spoilers
-            </span>
+            <span className="island-mono" style={{ ...islandTagStyle({ color: "#ef4444" }), flexShrink: 0 }}>⚠ Spoilers</span>
           ) : null}
         </div>
         <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, marginTop: 2 }}>
@@ -1176,33 +1069,13 @@ function CreateNightStrip({
         value={title}
         onChange={(e) => onTitleChange(e.target.value)}
         placeholder="Friday Island Session"
-        style={{
-          flex: "1 1 220px",
-          minWidth: 220,
-          padding: "6px 10px",
-          borderRadius: 999,
-          border: `1px solid ${islandTheme.color.cardBorder}`,
-          background: islandTheme.color.panelMutedBg,
-          color: islandTheme.color.textPrimary,
-          fontSize: 13,
-          font: "inherit",
-          outline: "none"
-        }}
+        style={{ ...islandInputStyle, flex: "1 1 220px", minWidth: 220, fontSize: 13, borderRadius: islandTheme.radius.control }}
       />
       <input
         type="datetime-local"
         value={scheduledFor}
         onChange={(e) => onScheduledForChange(e.target.value)}
-        style={{
-          padding: "6px 10px",
-          borderRadius: 999,
-          border: `1px solid ${islandTheme.color.cardBorder}`,
-          background: islandTheme.color.panelMutedBg,
-          color: islandTheme.color.textPrimary,
-          fontSize: 13,
-          font: "inherit",
-          outline: "none"
-        }}
+        style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control }}
       />
       <button
         type="button"
@@ -1344,27 +1217,10 @@ function SelectedNightDetail({
 }
 
 function Pill({ tone, children }: { tone: "success" | "muted" | "danger"; children: ReactNode }) {
-  const palette =
-    tone === "success"
-      ? { bg: "rgba(34, 197, 94, 0.18)", fg: islandTheme.color.successAccent }
-      : tone === "danger"
-        ? { bg: "rgba(239, 68, 68, 0.18)", fg: islandTheme.color.dangerAccent }
-        : { bg: islandTheme.color.panelMutedBg, fg: islandTheme.color.textMuted };
   return (
-    <span
-      className="island-mono"
-      style={{
-        fontSize: 10,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        padding: "2px 8px",
-        borderRadius: 999,
-        background: palette.bg,
-        color: palette.fg
-      }}
-    >
+    <IslandTag tone={tone === "muted" ? "default" : tone}>
       {children}
-    </span>
+    </IslandTag>
   );
 }
 
@@ -1467,7 +1323,7 @@ function WishlistCard({ game, hypeScale }: { game: CrewWishlistGame; hypeScale: 
           alignItems: "center",
           justifyContent: "center",
           fontSize: 22,
-          color: "#fff",
+          color: islandTheme.color.textInverted,
           backgroundImage: game.headerImageUrl ? `url("${game.headerImageUrl}")` : undefined,
           backgroundSize: "cover",
           backgroundPosition: "center",
@@ -1560,6 +1416,7 @@ function LibrarySnapshot({ onNavigate }: { onNavigate: (page: PageId) => void })
       </div>
       <button
         type="button"
+        className="island-btn"
         onClick={() => onNavigate("library")}
         style={{
           background: islandTheme.color.primary,
@@ -1591,6 +1448,7 @@ function StreamDrawer() {
     <>
       <button
         type="button"
+        className="island-btn"
         onClick={() => setOpen((v) => !v)}
         style={{
           position: "fixed",
@@ -1600,7 +1458,7 @@ function StreamDrawer() {
           writingMode: "vertical-rl",
           padding: "16px 8px",
           background: "rgba(220, 38, 38, 0.85)",
-          color: "#fff",
+          color: islandTheme.color.textInverted,
           border: "none",
           borderTopLeftRadius: 12,
           borderBottomLeftRadius: 12,
@@ -1644,6 +1502,7 @@ function StreamDrawer() {
           </h3>
           <button
             type="button"
+            className="island-btn"
             onClick={() => setOpen(false)}
             aria-label="Close"
             style={{
@@ -1678,7 +1537,7 @@ function StreamDrawer() {
                   height: 32,
                   borderRadius: 999,
                   background: "rgba(220, 38, 38, 0.85)",
-                  color: "#fff",
+                  color: islandTheme.color.textInverted,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -1856,17 +1715,7 @@ function CrewChat({ onSend }: { onSend: (message: string, history: ChatMessage[]
         }}
       >
         <input
-          style={{
-            flex: 1,
-            padding: "9px 14px",
-            borderRadius: 10,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            background: islandTheme.color.panelMutedBg,
-            color: islandTheme.color.textPrimary,
-            fontSize: 13,
-            outline: "none",
-            font: "inherit"
-          }}
+          style={{ ...islandInputStyle, flex: 1, fontSize: 13 }}
           type="text"
           placeholder='Ask the Island AI — "What should we play tonight?" or "Any big patches this week?"'
           value={input}
@@ -1881,14 +1730,15 @@ function CrewChat({ onSend }: { onSend: (message: string, history: ChatMessage[]
         />
         <button
           type="button"
+          className="island-btn"
           onClick={handleSend}
           disabled={!input.trim() || sending}
           style={{
             padding: "9px 18px",
-            borderRadius: 10,
+            borderRadius: islandTheme.radius.control,
             border: "none",
             background: input.trim() && !sending ? "rgba(139, 92, 246, 0.8)" : islandTheme.color.panelMutedBg,
-            color: input.trim() && !sending ? "#fff" : islandTheme.color.textMuted,
+            color: input.trim() && !sending ? islandTheme.color.textInverted : islandTheme.color.textMuted,
             fontSize: 13,
             fontWeight: 700,
             cursor: input.trim() && !sending ? "pointer" : "default",

@@ -1,8 +1,7 @@
-import { type CSSProperties, type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { useDayNight } from "../scene/useDayNight.js";
 import { islandTheme } from "../theme.js";
 import type { MeProfile, PageId } from "../types.js";
-import { SteamLogo, steamColors, steamSignInUrl, steamSyncRelativeLabel } from "./steam.js";
 import { UserAvatar, getInitials } from "./Topbar.js";
 
 type UserMenuProps = {
@@ -13,8 +12,6 @@ type UserMenuProps = {
   onClose: () => void;
   onNavigate: (page: PageId) => void;
   onLogout: () => void;
-  onSyncSteam: () => void;
-  onLinkSteam: () => void;
 };
 
 export function UserMenu({
@@ -24,16 +21,14 @@ export function UserMenu({
   isAdmin,
   onClose,
   onNavigate,
-  onLogout,
-  onSyncSteam,
-  onLinkSteam
+  onLogout
 }: UserMenuProps) {
   const { mode, toggle } = useDayNight();
-
   const initials = getInitials(profile?.displayName ?? profile?.username ?? "??");
   const handle = profile?.username ?? "guest";
   const inVoice = profile?.inVoice ?? false;
   const presence = profile?.richPresenceText?.trim() ?? null;
+  const steamLinked = Boolean(profile?.steamId64);
 
   return (
     <div
@@ -43,413 +38,430 @@ export function UserMenu({
         position: "absolute",
         top: "calc(100% + 8px)",
         right: "clamp(0.9rem, 2vw, 1.4rem)",
-        width: 300,
+        width: 288,
         maxWidth: "calc(100vw - 24px)",
         background: islandTheme.color.panelBg,
         backdropFilter: islandTheme.glass.blurStrong,
         WebkitBackdropFilter: islandTheme.glass.blurStrong,
         border: `1px solid ${islandTheme.color.cardBorder}`,
-        borderRadius: 14,
-        boxShadow: "0 16px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.04) inset",
+        borderRadius: 12,
+        boxShadow: "0 20px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.05) inset",
         overflow: "hidden",
         zIndex: 50
       }}
     >
-      {/* ── Header banner ── */}
+      {/* ── Header ── */}
       <div
         style={{
-          height: 48,
+          height: 36,
           background:
             mode === "day"
               ? "linear-gradient(135deg, #fbbf24 0%, #f97316 50%, #ec4899 100%)"
               : "linear-gradient(135deg, #1e3a8a 0%, #0c4a6e 50%, #0e7490 100%)",
-          position: "relative",
           flexShrink: 0
         }}
       />
 
-      {/* ── Identity block ── */}
-      <div style={{ padding: "0 14px 10px" }}>
-        {/* Avatar overlaps banner */}
-        <div style={{ marginTop: -26, marginBottom: 8 }}>
+      {/* ── Identity ── */}
+      <div style={{ padding: "0 12px 10px" }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, marginTop: -22 }}>
+          {/* Avatar with presence dot */}
           <div
             style={{
-              width: 52,
-              height: 52,
+              width: 46,
+              height: 46,
               borderRadius: 999,
               border: `3px solid ${islandTheme.color.panelBg}`,
-              display: "inline-block"
+              flexShrink: 0,
+              position: "relative"
             }}
           >
-            <UserAvatar profile={profile} initials={initials} size={46} />
+            <UserAvatar profile={profile} initials={initials} size={40} />
+            {inVoice ? (
+              <span
+                aria-label="In voice"
+                style={{
+                  position: "absolute",
+                  bottom: 0,
+                  right: -1,
+                  width: 12,
+                  height: 12,
+                  borderRadius: 999,
+                  background: islandTheme.color.primaryGlow,
+                  border: `2px solid ${islandTheme.color.panelBg}`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 6
+                }}
+              >
+                🎙
+              </span>
+            ) : null}
+          </div>
+
+          {/* Name + handle */}
+          <div style={{ flex: 1, minWidth: 0, paddingBottom: 2 }}>
+            <div
+              className="island-display"
+              style={{
+                fontWeight: 700,
+                fontSize: 14,
+                lineHeight: 1.2,
+                color: islandTheme.color.textPrimary,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }}
+            >
+              {profile?.displayName ?? "Not signed in"}
+            </div>
+            <div
+              className="island-mono"
+              style={{
+                color: islandTheme.color.textMuted,
+                fontSize: 11,
+                marginTop: 1
+              }}
+            >
+              @{handle}
+            </div>
           </div>
         </div>
 
-        <div className="island-display" style={{ fontWeight: 800, fontSize: 15, lineHeight: 1.2 }}>
-          {profile?.displayName ?? "Not signed in"}
-        </div>
-        <div
-          className="island-mono"
-          style={{ color: islandTheme.color.textMuted, fontSize: 11, marginTop: 2 }}
-        >
-          @{handle}
-        </div>
-
-        {/* Rich presence — only when there's something real */}
+        {/* Rich presence */}
         {presence ? (
           <div
             style={{
               marginTop: 8,
               display: "flex",
               alignItems: "center",
-              gap: 7,
-              padding: "6px 8px",
-              borderRadius: 8,
+              gap: 6,
+              padding: "5px 8px",
+              borderRadius: 6,
               background: islandTheme.color.panelMutedBg,
               border: `1px solid ${islandTheme.color.cardBorder}`,
-              fontSize: 12,
-              color: islandTheme.color.textSubtle
+              fontSize: 11,
+              color: islandTheme.color.textMuted
             }}
           >
-            <span style={{ fontSize: 13 }}>🎮</span>
-            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 11, flexShrink: 0 }}>🎮</span>
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap"
+              }}
+            >
               {presence}
             </span>
-            {inVoice ? (
-              <span
-                className="island-mono"
-                style={{ fontSize: 10, color: islandTheme.color.primaryGlow, flexShrink: 0 }}
-              >
-                ● voice
-              </span>
-            ) : null}
           </div>
         ) : null}
       </div>
 
       {/* ── Divider ── */}
-      <div style={{ height: 1, background: islandTheme.color.cardBorder, margin: "0 14px" }} />
+      <Divider />
 
-      {/* ── Actions ── */}
-      <div style={{ padding: "6px 8px" }}>
-        <MenuLink
+      {/* ── Nav items ── */}
+      <div style={{ padding: "4px 6px" }}>
+        <NavItem
           icon="🪪"
-          onClick={() => {
-            onClose();
-            onNavigate("profile");
-          }}
+          active={page === "profile"}
+          onClick={() => { onClose(); onNavigate("profile"); }}
         >
           View profile
-        </MenuLink>
+        </NavItem>
 
         {isAdmin ? (
-          <AdminMenuRow
+          <NavItem
+            icon="🛡️"
             active={page === "admin"}
-            onClick={() => {
-              onClose();
-              onNavigate("admin");
-            }}
-          />
+            onClick={() => { onClose(); onNavigate("admin"); }}
+            badge="PARENT"
+            badgeColor="#f59e0b"
+          >
+            Admin panel
+          </NavItem>
         ) : null}
 
-        <SteamMenuRow
-          linked={Boolean(profile?.steamId64)}
-          steamId64={profile?.steamId64 ?? null}
-          lastSyncedAt={profile?.steamLastSyncedAt ?? null}
-          onSync={() => {
-            onClose();
-            onSyncSteam();
-          }}
-          onLink={() => {
-            onClose();
-            onLinkSteam();
-          }}
+        <SteamNavItem
+          linked={steamLinked}
+          onClick={() => { onClose(); onNavigate("settings"); }}
         />
 
-        <ThemeRow mode={mode} onToggle={toggle} />
+        <NavItem
+          icon="⚙️"
+          active={page === "settings"}
+          onClick={() => { onClose(); onNavigate("settings"); }}
+        >
+          Settings
+        </NavItem>
+
+        <ThemeNavItem mode={mode} onToggle={toggle} />
       </div>
 
       {/* ── Divider ── */}
-      <div style={{ height: 1, background: islandTheme.color.cardBorder, margin: "0 14px" }} />
+      <Divider />
 
-      <div style={{ padding: "4px 8px 6px" }}>
-        <MenuLink
+      <div style={{ padding: "4px 6px 6px" }}>
+        <NavItem
           icon="↩"
           danger
-          onClick={() => {
-            onClose();
-            onLogout();
-          }}
+          onClick={() => { onClose(); onLogout(); }}
         >
-          Sign out of the island
-        </MenuLink>
+          Sign out
+        </NavItem>
       </div>
     </div>
   );
 }
 
-/* ── Admin row ── */
+/* ── Shared divider ── */
 
-function AdminMenuRow({ active, onClick }: { active: boolean; onClick: () => void }) {
+function Divider() {
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "7px 10px",
-        borderRadius: 8,
-        color: active ? "#fde68a" : islandTheme.color.textSubtle,
-        fontSize: 13,
-        border: "none",
-        background: active ? "rgba(245, 158, 11, 0.14)" : "transparent",
-        textAlign: "left",
-        width: "100%",
-        font: "inherit",
-        cursor: "pointer",
-        transition: "background 140ms ease"
+        height: 1,
+        background: islandTheme.color.cardBorder,
+        margin: "0 10px"
       }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = "rgba(245, 158, 11, 0.1)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = active ? "rgba(245, 158, 11, 0.14)" : "transparent";
-      }}
-    >
-      <span style={{ width: 18, textAlign: "center", opacity: 0.85 }}>🛡️</span>
-      <span style={{ flex: 1 }}>Admin panel</span>
-      <span
-        className="island-mono"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          minWidth: 18,
-          height: 14,
-          padding: "0 4px",
-          borderRadius: 999,
-          background: "linear-gradient(135deg, #f59e0b, #d97706)",
-          color: "#0f172a",
-          fontSize: 9,
-          fontWeight: 800
-        }}
-      >
-        PARENT
-      </span>
-    </button>
+    />
   );
 }
 
-/* ── Steam row ── */
+/* ── Nav item (Fluent/Atlassian pattern) ── */
 
-type SteamMenuRowProps = {
-  linked: boolean;
-  steamId64: string | null;
-  lastSyncedAt: string | null;
-  onSync: () => void;
-  onLink: () => void;
-};
-
-function SteamMenuRow({ linked, steamId64, lastSyncedAt, onSync, onLink }: SteamMenuRowProps) {
-  if (!linked) {
-    return (
-      <div style={{ padding: "4px 2px" }}>
-        <a
-          href={steamSignInUrl()}
-          onClick={onLink}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-            padding: "8px 12px",
-            borderRadius: 8,
-            background: `linear-gradient(180deg, ${steamColors.dark2} 0%, ${steamColors.dark} 100%)`,
-            border: `1px solid rgba(102, 192, 244, 0.35)`,
-            textDecoration: "none",
-            cursor: "pointer",
-            transition: "border-color 140ms ease, box-shadow 140ms ease"
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = steamColors.blue;
-            e.currentTarget.style.boxShadow = `0 0 0 1px ${steamColors.blue}22`;
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = "rgba(102, 192, 244, 0.35)";
-            e.currentTarget.style.boxShadow = "none";
-          }}
-        >
-          <span
-            style={{
-              width: 28,
-              height: 28,
-              borderRadius: 6,
-              background: "rgba(102, 192, 244, 0.12)",
-              border: `1px solid rgba(102, 192, 244, 0.25)`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              flexShrink: 0
-            }}
-          >
-            <SteamLogo size={16} tone="light" />
-          </span>
-          <span style={{ flex: 1, display: "flex", flexDirection: "column", lineHeight: 1.2 }}>
-            <span
-              className="island-mono"
-              style={{ fontSize: 9, letterSpacing: "0.16em", color: steamColors.blue, fontWeight: 700, textTransform: "uppercase" }}
-            >
-              Steam
-            </span>
-            <span style={{ fontSize: 12, color: "#ffffff", fontWeight: 600 }}>Sign in through Steam</span>
-          </span>
-          <span
-            className="island-mono"
-            style={{
-              fontSize: 10,
-              padding: "2px 6px",
-              borderRadius: 999,
-              background: "rgba(102, 192, 244, 0.14)",
-              color: steamColors.blue,
-              fontWeight: 700,
-              flexShrink: 0
-            }}
-          >
-            + connect
-          </span>
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={onSync}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "7px 10px",
-        borderRadius: 8,
-        color: islandTheme.color.textSubtle,
-        fontSize: 13,
-        background: "transparent",
-        border: "1px solid transparent",
-        borderLeft: `3px solid transparent`,
-        cursor: "pointer",
-        width: "100%",
-        fontFamily: "inherit",
-        textAlign: "left",
-        transition: "background 140ms ease, border-color 140ms ease"
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = "rgba(27, 40, 56, 0.6)";
-        e.currentTarget.style.borderLeftColor = steamColors.blue;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.borderLeftColor = "transparent";
-      }}
-    >
-      <span
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          background: `linear-gradient(135deg, ${steamColors.dark2} 0%, ${steamColors.dark} 100%)`,
-          border: `1px solid rgba(102, 192, 244, 0.2)`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0
-        }}
-      >
-        <SteamLogo size={15} tone="light" />
-      </span>
-      <span style={{ flex: 1, minWidth: 0 }}>Sync Steam library</span>
-      <span
-        className="island-mono"
-        style={{
-          fontSize: 10,
-          color: steamColors.blue,
-          flexShrink: 0
-        }}
-      >
-        {steamSyncRelativeLabel(lastSyncedAt)}
-      </span>
-      <span
-        aria-hidden="true"
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: 999,
-          background: islandTheme.color.successAccent,
-          flexShrink: 0
-        }}
-      />
-    </button>
-  );
-}
-
-/* ── Menu link ── */
-
-type MenuLinkProps = {
+type NavItemProps = {
   icon: ReactNode;
   children: ReactNode;
-  onClick?: () => void;
+  active?: boolean;
   danger?: boolean;
+  badge?: string;
+  badgeColor?: string;
+  onClick?: () => void;
   rightSlot?: ReactNode;
 };
 
-function MenuLink({ icon, children, onClick, danger, rightSlot }: MenuLinkProps) {
-  const baseStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "7px 10px",
-    borderRadius: 8,
-    color: danger ? islandTheme.color.dangerText : islandTheme.color.textSubtle,
-    cursor: onClick ? "pointer" : "default",
-    fontSize: 13,
-    border: "none",
-    background: "transparent",
-    textAlign: "left",
-    width: "100%",
-    font: "inherit"
-  };
+function NavItem({ icon, children, active, danger, badge, badgeColor, onClick, rightSlot }: NavItemProps) {
+  const accentColor = danger
+    ? "#ef4444"
+    : active
+    ? islandTheme.color.primaryGlow
+    : islandTheme.color.primaryGlow;
+
+  const baseBg = active && !danger ? "rgba(56,189,248,0.08)" : "transparent";
+  const baseColor = danger
+    ? islandTheme.color.dangerText
+    : active
+    ? islandTheme.color.textPrimary
+    : islandTheme.color.textSubtle;
+
   return (
     <button
       type="button"
+      role="menuitem"
       onClick={onClick}
-      style={baseStyle}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "100%",
+        padding: "6px 8px",
+        borderRadius: 7,
+        border: "none",
+        borderLeft: active && !danger ? `2px solid ${accentColor}` : "2px solid transparent",
+        background: baseBg,
+        color: baseColor,
+        fontSize: 13,
+        fontFamily: "inherit",
+        fontWeight: active ? 600 : 400,
+        textAlign: "left",
+        cursor: "pointer",
+        transition: "background 120ms ease, color 120ms ease, border-color 120ms ease"
+      }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = danger
-          ? "rgba(127, 29, 29, 0.3)"
-          : islandTheme.color.secondary;
+          ? "rgba(239,68,68,0.1)"
+          : "rgba(56,189,248,0.08)";
+        e.currentTarget.style.color = danger
+          ? "#fca5a5"
+          : islandTheme.color.textPrimary;
+        if (!active) e.currentTarget.style.borderLeftColor = danger ? "#ef4444" : accentColor;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.background = baseBg;
+        e.currentTarget.style.color = baseColor;
+        e.currentTarget.style.borderLeftColor = active && !danger ? accentColor : "transparent";
       }}
     >
-      <span style={{ width: 18, textAlign: "center", opacity: 0.85 }}>{icon}</span>
+      {/* Icon container */}
+      <span
+        style={{
+          width: 26,
+          height: 26,
+          borderRadius: 6,
+          background: active
+            ? "rgba(56,189,248,0.15)"
+            : danger
+            ? "rgba(239,68,68,0.1)"
+            : "rgba(255,255,255,0.05)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 14,
+          flexShrink: 0
+        }}
+      >
+        {icon}
+      </span>
+
       <span style={{ flex: 1 }}>{children}</span>
-      {rightSlot}
+
+      {badge ? (
+        <span
+          className="island-mono"
+          style={{
+            padding: "1px 5px",
+            borderRadius: 999,
+            background: `${badgeColor ?? islandTheme.color.primaryGlow}22`,
+            color: badgeColor ?? islandTheme.color.primaryGlow,
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: "0.06em",
+            flexShrink: 0
+          }}
+        >
+          {badge}
+        </span>
+      ) : null}
+
+      {rightSlot ?? (
+        onClick ? (
+          <span
+            style={{
+              color: islandTheme.color.textMuted,
+              fontSize: 12,
+              flexShrink: 0,
+              opacity: 0.5
+            }}
+          >
+            ›
+          </span>
+        ) : null
+      )}
     </button>
   );
 }
 
-/* ── Theme row ── */
+/* ── Steam nav item ── */
 
-function ThemeRow({ mode, onToggle }: { mode: "day" | "night"; onToggle: () => void }) {
+function SteamNavItem({ linked, onClick }: { linked: boolean; onClick: () => void }) {
+  const dotColor = linked ? "#22c55e" : "#ef4444";
+
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "100%",
+        padding: "6px 8px",
+        borderRadius: 7,
+        border: "none",
+        borderLeft: "2px solid transparent",
+        background: "transparent",
+        color: islandTheme.color.textSubtle,
+        fontSize: 13,
+        fontFamily: "inherit",
+        fontWeight: 400,
+        textAlign: "left",
+        cursor: "pointer",
+        transition: "background 120ms ease, color 120ms ease, border-color 120ms ease"
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "rgba(56,189,248,0.08)";
+        e.currentTarget.style.color = islandTheme.color.textPrimary;
+        e.currentTarget.style.borderLeftColor = islandTheme.color.primaryGlow;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = islandTheme.color.textSubtle;
+        e.currentTarget.style.borderLeftColor = "transparent";
+      }}
+    >
+      {/* Steam logo + status dot overlay */}
+      <span
+        style={{
+          width: 26,
+          height: 26,
+          borderRadius: 6,
+          background: "rgba(255,255,255,0.05)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          position: "relative"
+        }}
+      >
+        <img
+          src="/steam-logo.png"
+          width={18}
+          height={18}
+          alt="Steam"
+          aria-hidden="true"
+          style={{ borderRadius: "50%", display: "block" }}
+        />
+        {/* Status dot — bottom-left of the icon container */}
+        <span
+          aria-label={linked ? "Steam synced" : "Steam not synced"}
+          style={{
+            position: "absolute",
+            bottom: 1,
+            left: 1,
+            width: 8,
+            height: 8,
+            borderRadius: 999,
+            background: dotColor,
+            border: `2px solid ${islandTheme.color.panelBg}`,
+            boxShadow: `0 0 4px ${dotColor}88`
+          }}
+        />
+      </span>
+
+      <span style={{ flex: 1 }}>
+        {linked ? "Steam synced" : "Steam not synced"}
+      </span>
+
+      <span
+        style={{
+          color: islandTheme.color.textMuted,
+          fontSize: 12,
+          flexShrink: 0,
+          opacity: 0.5
+        }}
+      >
+        ›
+      </span>
+    </button>
+  );
+}
+
+/* ── Theme nav item ── */
+
+function ThemeNavItem({ mode, onToggle }: { mode: "day" | "night"; onToggle: () => void }) {
   const day = mode === "day";
   return (
-    <MenuLink
+    <NavItem
       icon={day ? "☀️" : "🌙"}
       onClick={onToggle}
       rightSlot={
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <span
             className="island-mono"
             style={{ fontSize: 10, color: islandTheme.color.textMuted }}
@@ -461,7 +473,7 @@ function ThemeRow({ mode, onToggle }: { mode: "day" | "night"; onToggle: () => v
       }
     >
       Theme
-    </MenuLink>
+    </NavItem>
   );
 }
 
@@ -470,13 +482,13 @@ function ThemeSwitch({ on }: { on: boolean }) {
     <span
       style={{
         display: "inline-block",
-        width: 36,
-        height: 20,
+        width: 32,
+        height: 18,
         borderRadius: 999,
-        background: on ? "rgba(244, 162, 97, 0.45)" : islandTheme.color.panelMutedBg,
+        background: on ? "rgba(244,162,97,0.4)" : islandTheme.color.panelMutedBg,
         border: `1px solid ${islandTheme.color.cardBorder}`,
         position: "relative",
-        transition: "background 320ms ease",
+        transition: "background 280ms ease",
         flexShrink: 0
       }}
     >
@@ -484,15 +496,15 @@ function ThemeSwitch({ on }: { on: boolean }) {
         style={{
           position: "absolute",
           top: 2,
-          left: on ? 18 : 2,
-          width: 14,
-          height: 14,
+          left: on ? 16 : 2,
+          width: 12,
+          height: 12,
           borderRadius: 999,
           background: on
             ? "linear-gradient(135deg, #fde68a, #f59e0b)"
             : "linear-gradient(135deg, #e2e8f0, #94a3b8)",
-          transition: "left 320ms cubic-bezier(.5,0,.25,1), background 320ms",
-          boxShadow: "0 2px 4px rgba(0,0,0,0.35)"
+          transition: "left 280ms cubic-bezier(.5,0,.25,1), background 280ms",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.35)"
         }}
       />
     </span>

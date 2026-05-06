@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandButton, IslandCard, islandInputStyle } from "../islandUi.js";
+import { IslandButton, IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type {
   ForumCategory,
@@ -328,6 +328,7 @@ function CategoryPickerCard({
         </span>
         <button
           type="button"
+          className="island-btn"
           onClick={onCancel}
           style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, fontSize: 13, cursor: "pointer", font: "inherit" }}
         >
@@ -339,6 +340,7 @@ function CategoryPickerCard({
           <button
             key={c.id}
             type="button"
+            className="island-btn"
             onClick={() => onPick(c.slug)}
             style={{
               display: "flex",
@@ -405,6 +407,7 @@ function SortFilterBar({
           <button
             key={t.key}
             type="button"
+            className="island-btn"
             onClick={() => onSortChange(t.key)}
             style={{
               background: active ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
@@ -441,6 +444,7 @@ function CategoryChipStrip({
     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
       <button
         type="button"
+        className="island-mono"
         onClick={() => onSelect(null)}
         style={chipStyle(activeSlug === null, islandTheme.color.primary)}
       >
@@ -452,6 +456,7 @@ function CategoryChipStrip({
           <button
             key={c.id}
             type="button"
+            className="island-mono"
             onClick={() => onSelect(c.slug)}
             onDoubleClick={() => onJump(c.slug)}
             title={`${c.name} (double-click to open category page)`}
@@ -475,19 +480,7 @@ function CategoryChipStrip({
 }
 
 function chipStyle(active: boolean, accent: string): React.CSSProperties {
-  return {
-    background: active ? accent : islandTheme.color.panelMutedBg,
-    color: active ? "#fff" : islandTheme.color.textSubtle,
-    border: `1px solid ${active ? accent : islandTheme.color.cardBorder}`,
-    borderRadius: 999,
-    padding: "5px 12px",
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
-    font: "inherit",
-    display: "inline-flex",
-    alignItems: "center"
-  };
+  return { ...islandTagStyle({ color: accent, active }), cursor: "pointer" };
 }
 
 // ── Feed list ───────────────────────────────────────────────────────────────
@@ -533,6 +526,7 @@ function FeedList({
           {(categoryFilter || sort !== "latest") ? (
             <button
               type="button"
+              className="island-btn"
               onClick={onClearFilter}
               style={{ marginTop: 8, background: "transparent", border: "none", color: islandTheme.color.primaryGlow, fontSize: 13, cursor: "pointer", padding: 0, font: "inherit" }}
             >
@@ -561,6 +555,7 @@ function FeedRow({
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onSelect}
       style={{
         display: "grid",
@@ -631,6 +626,7 @@ function BrowseCategoriesCollapsible({
     <IslandCard style={{ padding: 0, overflow: "hidden" }}>
       <button
         type="button"
+        className="island-btn"
         onClick={() => setOpen((v) => !v)}
         style={{
           width: "100%",
@@ -720,6 +716,7 @@ function CategoryTile({ category, onClick }: { category: ForumCategory; onClick:
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onClick}
       style={{
         textAlign: "left",
@@ -799,6 +796,7 @@ function RecentRow({
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onSelect}
       style={{
         display: "grid",
@@ -988,6 +986,7 @@ function ThreadRow({
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onSelect}
       style={{
         display: "grid",
@@ -1184,6 +1183,7 @@ function ThreadView({
         <span style={{ color: islandTheme.color.textMuted, fontSize: 13 }}>/</span>
         <button
           type="button"
+          className="island-btn"
           onClick={() => onCategory(thread.categorySlug)}
           style={{
             background: "transparent",
@@ -1342,23 +1342,7 @@ function PostCard({
           <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted }}>
             @{post.author.username}
           </div>
-          {post.isOp ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 9,
-                fontWeight: 700,
-                textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                background: islandTheme.color.primary,
-                color: islandTheme.color.primaryText,
-                borderRadius: 999,
-                padding: "2px 8px"
-              }}
-            >
-              Op
-            </span>
-          ) : null}
+          {post.isOp ? <IslandTag tone="primary">Op</IslandTag> : null}
         </div>
 
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
@@ -1382,6 +1366,7 @@ function PostCard({
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
               <button
                 type="button"
+                className="island-btn"
                 onClick={onReact}
                 style={{
                   background: post.userReacted ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
@@ -1397,13 +1382,13 @@ function PostCard({
                 👍 {post.reactionCount}
               </button>
               {canEdit ? (
-                <button type="button" onClick={onEdit} style={ghostBtn}>Edit</button>
+                <button type="button" className="island-btn" onClick={onEdit} style={ghostBtn}>Edit</button>
               ) : null}
               {canEdit ? (
-                <button type="button" onClick={onDelete} style={{ ...ghostBtn, color: islandTheme.color.dangerText }}>Delete</button>
+                <button type="button" className="island-btn" onClick={onDelete} style={{ ...ghostBtn, color: islandTheme.color.dangerText }}>Delete</button>
               ) : null}
               {!isOwner ? (
-                <button type="button" onClick={onReport} style={ghostBtn}>Report</button>
+                <button type="button" className="island-btn" onClick={onReport} style={ghostBtn}>Report</button>
               ) : null}
             </div>
           ) : null}
@@ -1428,6 +1413,7 @@ function ModButton({ children, onClick, danger }: { children: React.ReactNode; o
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onClick}
       style={{
         background: danger ? islandTheme.color.dangerSurface : islandTheme.color.panelMutedBg,
@@ -1538,6 +1524,7 @@ function BackLink({ onClick, label }: { onClick: () => void; label: string }) {
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onClick}
       style={{
         alignSelf: "flex-start",

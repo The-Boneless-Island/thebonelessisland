@@ -25,7 +25,8 @@ export const islandTheme = {
     success: "#14532d",
     successText: "#dcfce7",
     successAccent: "#22c55e",
-    warnAccent: "#f59e0b"
+    warnAccent: "#f59e0b",
+    textDark: "#0f172a"
   },
   radius: {
     control: 10,

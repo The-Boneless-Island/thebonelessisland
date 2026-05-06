@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { IslandCard } from "../islandUi.js";
+import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { CrewOwnedGame, CrewOwner, PageId } from "../types.js";
 
@@ -176,6 +176,7 @@ export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: Lib
         </p>
         <button
           type="button"
+          className="island-btn"
           onClick={() => onNavigate("games")}
           style={{
             marginTop: 6,
@@ -200,55 +201,28 @@ export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: Lib
           onChange={(e) => setSearch(e.target.value)}
           placeholder={`Search ${totalGames || 0} games…`}
           style={{
+            ...islandInputStyle,
             flex: "1 1 280px",
             minWidth: 280,
-            padding: "8px 12px",
-            borderRadius: 8,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            background: islandTheme.color.panelMutedBg,
-            color: islandTheme.color.textPrimary,
             fontFamily: islandTheme.font.mono,
-            fontSize: 12,
-            outline: "none"
+            fontSize: 12
           }}
         />
-        {filters.map((f) => {
-          const active = filter === f.id;
-          return (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilter(f.id)}
-              className="island-mono"
-              style={{
-                padding: "5px 12px",
-                borderRadius: 999,
-                border: `1px solid ${active ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder}`,
-                background: active ? islandTheme.color.primaryGlow : islandTheme.color.panelMutedBg,
-                color: active ? "#0f172a" : islandTheme.color.textMuted,
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: "pointer",
-                font: "inherit"
-              }}
-            >
-              {f.label}
-              {typeof f.count === "number" ? ` · ${f.count}` : ""}
-            </button>
-          );
-        })}
+        {filters.map((f) => (
+          <IslandTag
+            key={f.id}
+            tone="primary"
+            active={filter === f.id}
+            onClick={() => setFilter(f.id)}
+          >
+            {f.label}
+            {typeof f.count === "number" ? ` · ${f.count}` : ""}
+          </IslandTag>
+        ))}
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value as SortMode)}
-          style={{
-            padding: "6px 10px",
-            borderRadius: 8,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            background: islandTheme.color.panelMutedBg,
-            color: islandTheme.color.textPrimary,
-            fontSize: 12,
-            font: "inherit"
-          }}
+          style={{ ...islandInputStyle, fontSize: 12 }}
         >
           <option value="owned">Most owned</option>
           <option value="title">Alphabetical</option>
@@ -351,7 +325,7 @@ function LibRow({
           alignItems: "center",
           justifyContent: "center",
           fontSize: 22,
-          color: "#fff",
+          color: islandTheme.color.textInverted,
           ...cover
         }}
       >
@@ -360,22 +334,7 @@ function LibRow({
       <div>
         <div style={{ fontSize: 14, fontWeight: 700 }}>
           {game.name}
-          {mine ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 9,
-                padding: "2px 6px",
-                borderRadius: 999,
-                background: "rgba(96, 165, 250, 0.22)",
-                color: islandTheme.color.primaryGlow,
-                marginLeft: 6,
-                fontWeight: 700
-              }}
-            >
-              ★ MINE
-            </span>
-          ) : null}
+          {mine ? <IslandTag tone="primary" style={{ marginLeft: 6 }}>★ MINE</IslandTag> : null}
         </div>
         <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
           {tagLabel(game, category)}
@@ -392,7 +351,7 @@ function LibRow({
         <button
           type="button"
           onClick={onPlan}
-          className="island-mono"
+          className="island-btn island-mono"
           style={{
             background: islandTheme.color.primary,
             border: `1px solid ${islandTheme.color.primary}`,
@@ -409,7 +368,7 @@ function LibRow({
         </button>
         <button
           type="button"
-          className="island-mono"
+          className="island-btn island-mono"
           style={{
             background: "transparent",
             border: `1px solid ${islandTheme.color.cardBorder}`,
@@ -480,7 +439,7 @@ function OwnerBadge({ owner }: { owner: CrewOwner }) {
         alignItems: "center",
         justifyContent: "center",
         fontWeight: 800,
-        color: "#0f172a",
+        color: islandTheme.color.textDark,
         fontSize: 9
       }}
     >

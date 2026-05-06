@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
 import { islandTheme } from "./theme.js";
 
 export type IslandButtonVariant = "primary" | "secondary" | "danger";
@@ -400,16 +400,7 @@ export function IslandGameBlade({
           {meta ? <div style={{ fontSize: 11, opacity: 0.84 }}>{meta}</div> : null}
           <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {tags.slice(0, 2).map((tag) => (
-              <span
-                key={tag}
-                style={{
-                  fontSize: 10,
-                  borderRadius: 999,
-                  border: "1px solid rgba(203,213,225,0.42)",
-                  padding: "0.12rem 0.42rem",
-                  background: "rgba(2,6,23,0.25)"
-                }}
-              >
+              <span key={tag} className="island-mono" style={islandTagStyle({ color: getTagColor(tag) })}>
                 {tag}
               </span>
             ))}
@@ -608,20 +599,13 @@ type IslandStatusPillProps = HTMLAttributes<HTMLSpanElement> & {
 };
 
 export function IslandStatusPill({ tone, children, style, ...props }: IslandStatusPillProps) {
-  const palette =
-    tone === "success"
-      ? { bg: islandTheme.color.success, fg: islandTheme.color.successText }
-      : { bg: islandTheme.color.dangerSurface, fg: islandTheme.color.dangerText };
+  const color = tone === "success" ? "#22c55e" : "#ef4444";
   return (
     <span
       {...props}
+      className="island-mono"
       style={{
-        borderRadius: 999,
-        padding: "0.22rem 0.55rem",
-        fontSize: 12,
-        border: `1px solid ${islandTheme.color.border}`,
-        background: palette.bg,
-        color: palette.fg,
+        ...islandTagStyle({ color }),
         alignSelf: "flex-end",
         ...style
       }}
@@ -629,4 +613,108 @@ export function IslandStatusPill({ tone, children, style, ...props }: IslandStat
       {children}
     </span>
   );
+}
+
+// ── IslandTag ─────────────────────────────────────────────────────────────────
+
+type IslandTagTone = "default" | "primary" | "success" | "warning" | "danger" | "info";
+
+const SEMANTIC_TAG_COLORS: Record<IslandTagTone, string> = {
+  default: "#94a3b8",
+  primary: "#38bdf8",
+  success: "#22c55e",
+  warning: "#f59e0b",
+  danger:  "#ef4444",
+  info:    "#22d3ee",
+};
+
+export const TAG_CATEGORY_COLORS: Record<string, string> = {
+  // Editorial / news
+  News: "#fb923c",
+  Announcement: "#fbbf24",
+  Update: "#22d3ee",
+  Patch: "#22d3ee",
+  Review: "#a78bfa",
+  Interview: "#e879f9",
+  Opinion: "#f472b6",
+  Leak: "#ef4444",
+  Rumor: "#fb7185",
+  Trailer: "#facc15",
+  // Genres
+  FPS: "#ef4444",
+  RPG: "#a855f7",
+  Strategy: "#3b82f6",
+  Horror: "#dc2626",
+  Platformer: "#14b8a6",
+  Survival: "#22c55e",
+  "Battle Royale": "#f97316",
+  MOBA: "#8b5cf6",
+  Racing: "#eab308",
+  Puzzle: "#06b6d4",
+  Fighting: "#f43f5e",
+  Sim: "#84cc16",
+  MMO: "#0ea5e9",
+  // Platforms
+  PC: "#94a3b8",
+  PlayStation: "#3b82f6",
+  Xbox: "#16a34a",
+  Nintendo: "#ef4444",
+  Mobile: "#a78bfa",
+  VR: "#06b6d4"
+};
+
+export function getTagColor(tag: string): string {
+  if (TAG_CATEGORY_COLORS[tag]) return TAG_CATEGORY_COLORS[tag];
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = ((h << 5) - h + tag.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `hsl(${hue}, 60%, 62%)`;
+}
+
+export function islandTagStyle(opts: { color: string; active?: boolean }): CSSProperties {
+  const { color, active = false } = opts;
+  return {
+    fontSize: 9,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: "0.06em",
+    background: active ? `${color}55` : `${color}22`,
+    border: `1px solid ${active ? color : `${color}44`}`,
+    color,
+    borderRadius: 6,
+    padding: "1px 7px",
+    whiteSpace: "nowrap",
+    lineHeight: 1.5,
+    display: "inline-flex",
+    alignItems: "center"
+  };
+}
+
+type IslandTagProps = {
+  children: ReactNode;
+  tone?: IslandTagTone;
+  color?: string;
+  active?: boolean;
+  onClick?: (e: MouseEvent) => void;
+  style?: CSSProperties;
+};
+
+export function IslandTag({ children, tone = "default", color, active, onClick, style }: IslandTagProps) {
+  const finalColor = color ?? SEMANTIC_TAG_COLORS[tone];
+  const base: CSSProperties = { ...islandTagStyle({ color: finalColor, active }), ...style };
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="island-mono"
+        style={{ ...base, cursor: "pointer" }}
+        onMouseEnter={(e) => { e.currentTarget.style.opacity = "0.82"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.opacity = "1"; }}
+      >
+        {children}
+      </button>
+    );
+  }
+  return <span className="island-mono" style={base}>{children}</span>;
 }

@@ -359,7 +359,7 @@ export function LoginScreen({ loading, authError, exiting }: LoginScreenProps) {
               padding: "13px 16px",
               borderRadius: 12,
               background: "linear-gradient(135deg, #5865f2 0%, #4752c4 100%)",
-              color: "#ffffff",
+              color: islandTheme.color.textInverted,
               textDecoration: "none",
               fontWeight: 700,
               fontSize: 15,

@@ -18,22 +18,19 @@ export function SteamLogo({
   size?: number;
   tone?: "light" | "dark";
 }) {
-  const stroke = tone === "light" ? "#ffffff" : STEAM_DARK;
   return (
-    <svg
+    <img
+      src="/steam-logo.png"
       width={size}
       height={size}
-      viewBox="0 0 24 24"
-      fill="none"
+      alt="Steam"
       aria-hidden="true"
-      role="img"
-    >
-      <circle cx="12" cy="12" r="11" stroke={stroke} strokeWidth="1.6" />
-      <circle cx="9" cy="10" r="3.4" stroke={stroke} strokeWidth="1.6" />
-      <circle cx="9" cy="10" r="1.2" fill={stroke} />
-      <circle cx="16.5" cy="14.5" r="2.4" stroke={stroke} strokeWidth="1.6" />
-      <line x1="11.4" y1="12.4" x2="14.6" y2="13.7" stroke={stroke} strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
+      style={{
+        borderRadius: "50%",
+        display: "block",
+        opacity: tone === "dark" ? 0.4 : 1
+      }}
+    />
   );
 }
 

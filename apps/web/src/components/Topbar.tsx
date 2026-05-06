@@ -9,12 +9,11 @@ type TopbarProps = {
   onNavigate: (page: PageId) => void;
   profile: MeProfile | null;
   isAdmin: boolean;
+  tagline?: string;
   onLogout: () => void;
-  onSyncSteam: () => void;
-  onLinkSteam: () => void;
 };
 
-export function Topbar({ page, onNavigate, profile, isAdmin, onLogout, onSyncSteam, onLinkSteam }: TopbarProps) {
+export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }: TopbarProps) {
   const [search, setSearch] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -63,7 +62,7 @@ export function Topbar({ page, onNavigate, profile, isAdmin, onLogout, onSyncSte
           flexWrap: "wrap"
         }}
       >
-        <Brand onNavigate={onNavigate} />
+        <Brand onNavigate={onNavigate} tagline={tagline} />
         <MegaMenu page={page} onNavigate={onNavigate} isAdmin={isAdmin} />
         <div style={{ flex: 1, minWidth: 12 }} />
         <SearchInput value={search} onChange={setSearch} />
@@ -82,8 +81,6 @@ export function Topbar({ page, onNavigate, profile, isAdmin, onLogout, onSyncSte
             onClose={() => setMenuOpen(false)}
             onNavigate={onNavigate}
             onLogout={onLogout}
-            onSyncSteam={onSyncSteam}
-            onLinkSteam={onLinkSteam}
           />
         ) : null}
       </div>
@@ -91,7 +88,7 @@ export function Topbar({ page, onNavigate, profile, isAdmin, onLogout, onSyncSte
   );
 }
 
-function Brand({ onNavigate }: { onNavigate: (page: PageId) => void }) {
+function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; tagline?: string }) {
   return (
     <button
       type="button"
@@ -131,7 +128,7 @@ function Brand({ onNavigate }: { onNavigate: (page: PageId) => void }) {
           The Boneless Island
         </div>
         <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: -2 }}>
-          crew at the shoreline
+          {tagline || "crew at the shoreline"}
         </div>
       </div>
     </button>

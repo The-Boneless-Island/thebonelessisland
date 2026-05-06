@@ -1,7 +1,12 @@
 import { useState, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandButton, IslandCard, islandInputStyle } from "../islandUi.js";
+import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
+import { DomainPage } from "./admin/DomainPage.js";
+import type { OperationsArea, DomainTab } from "./admin/DomainPage.js";
+import { ALL_SETTINGS, DOMAIN_INFO, searchSettings } from "./admin/settingMeta.js";
+import type { SettingDomain, SettingMeta } from "./admin/settingMeta.js";
+import { QuickActionCard } from "../components/QuickActionCard.js";
 import type {
   ForumBan,
   ForumCategory,
@@ -14,17 +19,7 @@ import type {
   ServerSetting
 } from "../types.js";
 
-type AdminSection =
-  | "hub"
-  | "configuration"
-  | "news"
-  | "data-sync"
-  | "members"
-  | "events"
-  | "forums"
-  | "library"
-  | "economy"
-  | "audit";
+type AdminSection = "hub" | SettingDomain;
 
 type NewsCardInput = {
   title: string;
@@ -60,80 +55,270 @@ type AdminPageProps = {
 
 export function AdminPage(props: AdminPageProps) {
   const [section, setSection] = useState<AdminSection>("hub");
+  const [viewMode, setViewMode] = useState<DomainTab>("operations");
+  const [domainPrefSearch, setDomainPrefSearch] = useState("");
 
-  const handleSelectSection = (s: AdminSection) => {
+  const handleSelectSection = (s: AdminSection, opts?: { search?: string; tab?: DomainTab }) => {
     setSection(s);
-    if ((s === "configuration" || s === "news") && props.serverSettings === null) {
+    setDomainPrefSearch(opts?.search ?? "");
+    if (opts?.tab) setViewMode(opts.tab);
+    if (s !== "hub" && props.serverSettings === null) {
       props.onLoadServerSettings();
     }
   };
 
   if (section === "hub") {
-    return <AdminHub onSelect={handleSelectSection} />;
+    return (
+      <AdminHub
+        viewMode={viewMode}
+        onViewModeChange={(m) => {
+          setViewMode(m);
+          if (m === "settings" && props.serverSettings === null) {
+            props.onLoadServerSettings();
+          }
+        }}
+        onSelect={handleSelectSection}
+      />
+    );
   }
+
+  const operationsAreas = buildOperationsAreas(section, props);
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
-      <SubpageHeader section={section} onBack={() => setSection("hub")} />
-      {section === "configuration" ? (
-        <ConfigurationSubpage
-          settings={props.serverSettings}
-          onUpdate={props.onUpdateServerSetting}
-          onTest={props.onTestAIConnection}
-        />
-      ) : null}
-      {section === "news" ? (
-        <NewsSubpage
-          settings={props.serverSettings}
-          onUpdate={props.onUpdateServerSetting}
-          onIngest={props.onTriggerGeneralNewsIngest}
-          onCurate={props.onTriggerGeneralNewsCurate}
-          onRecurate={props.onTriggerGeneralNewsRecurate}
-          onCurateGameNews={props.onTriggerNewsCuration}
-          newsCards={props.newsCards}
-          onCreateNewsCard={props.onCreateNewsCard}
-          onUpdateNewsCard={props.onUpdateNewsCard}
-          onArchiveNewsCard={props.onArchiveNewsCard}
-        />
-      ) : null}
-      {section === "data-sync" ? <DataSyncSubpage /> : null}
-      {section === "members" ? <MembersSubpage /> : null}
-      {section === "events" ? (
-        <EventsSubpage
-          selectedMemberCount={props.selectedMemberCount}
-          recommendations={props.recommendations}
-          onRunRecommendation={props.onRunRecommendation}
-        />
-      ) : null}
-      {section === "forums" ? <ForumsModSubpage /> : null}
-      {section === "library" ? <LibrarySubpage /> : null}
-      {section === "economy" ? <EconomySubpage /> : null}
-      {section === "audit" ? <AuditSubpage profileJson={props.profileJson} /> : null}
+      <BackToHub onBack={() => setSection("hub")} />
+      <DomainPage
+        domain={section}
+        operationsAreas={operationsAreas}
+        settings={props.serverSettings}
+        onSettingSave={props.onUpdateServerSetting}
+        initialTab={viewMode}
+        initialSettingsSearch={domainPrefSearch}
+      />
+    </div>
+  );
+}
+
+function BackToHub({ onBack }: { onBack: () => void }) {
+  return (
+    <button
+      type="button"
+      className="island-btn"
+      onClick={onBack}
+      style={{
+        alignSelf: "flex-start",
+        background: "transparent",
+        border: "none",
+        color: islandTheme.color.primaryGlow,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: "pointer",
+        padding: 0,
+        font: "inherit"
+      }}
+    >
+      ← Admin hub
+    </button>
+  );
+}
+
+function buildOperationsAreas(domain: SettingDomain, props: AdminPageProps): OperationsArea[] {
+  switch (domain) {
+    case "people":
+      return [
+        { id: "members", label: "Members & Roles", icon: "👥", render: () => <MembersSubpage /> },
+        { id: "forums", label: "Forum Moderation", icon: "💬", render: () => <ForumsModSubpage /> }
+      ];
+    case "content":
+      return [
+        { id: "library", label: "Game Library", icon: "🗂", render: () => <LibrarySubpage /> },
+        {
+          id: "news",
+          label: "News Pipeline",
+          icon: "📰",
+          render: () => (
+            <NewsSubpage
+              settings={props.serverSettings}
+              onUpdate={props.onUpdateServerSetting}
+              onIngest={props.onTriggerGeneralNewsIngest}
+              onCurate={props.onTriggerGeneralNewsCurate}
+              onRecurate={props.onTriggerGeneralNewsRecurate}
+              onCurateGameNews={props.onTriggerNewsCuration}
+              newsCards={props.newsCards}
+              onCreateNewsCard={props.onCreateNewsCard}
+              onUpdateNewsCard={props.onUpdateNewsCard}
+              onArchiveNewsCard={props.onArchiveNewsCard}
+            />
+          )
+        },
+        {
+          id: "events",
+          label: "Game Nights & Events",
+          icon: "🎮",
+          render: () => (
+            <EventsSubpage
+              selectedMemberCount={props.selectedMemberCount}
+              recommendations={props.recommendations}
+              onRunRecommendation={props.onRunRecommendation}
+            />
+          )
+        }
+      ];
+    case "engagement":
+      return [
+        { id: "economy", label: "Economy Operations", icon: "🍗", render: () => <EconomySubpage /> }
+      ];
+    case "system":
+      return [
+        {
+          id: "ai-health",
+          label: "AI Health",
+          icon: "🤖",
+          render: () => (
+            <AIHealthArea settings={props.serverSettings} onTest={props.onTestAIConnection} />
+          )
+        },
+        { id: "data-sync", label: "Data Sync", icon: "🔄", render: () => <DataSyncSubpage /> },
+        { id: "audit", label: "Audit Log", icon: "📜", render: () => <AuditSubpage profileJson={props.profileJson} /> }
+      ];
+  }
+}
+
+function AIHealthArea({
+  settings,
+  onTest
+}: {
+  settings: ServerSetting[] | null;
+  onTest: (opts: { provider: string; model?: string; apiKey?: string }) => Promise<{ ok: boolean; provider?: string; model?: string; error?: string }>;
+}) {
+  const getSetting = (key: string) => settings?.find((s) => s.key === key)?.value ?? "";
+  const enabled = getSetting("ai_enabled") === "true";
+  const provider = getSetting("ai_provider");
+  const model = getSetting("ai_model");
+  const keySet = getSetting("ai_api_key") === "••••••••";
+
+  const [testState, setTestState] = useState<"idle" | "running" | "ok" | "error">("idle");
+  const [testMsg, setTestMsg] = useState("");
+
+  async function runTest() {
+    if (!provider) return;
+    setTestState("running");
+    setTestMsg("");
+    try {
+      const result = await onTest({ provider });
+      if (result.ok) {
+        setTestState("ok");
+        setTestMsg(`Reached ${result.provider}${result.model ? ` (${result.model})` : ""}`);
+      } else {
+        setTestState("error");
+        setTestMsg(result.error ?? "Test failed");
+      }
+    } catch (e) {
+      setTestState("error");
+      setTestMsg(e instanceof Error ? e.message : "Test failed");
+    }
+  }
+
+  const ready = enabled && !!provider && keySet;
+
+  return (
+    <IslandCard style={{ padding: 18 }}>
+      <div style={{ display: "grid", gap: 14 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              background: ready ? "rgba(34,197,94,0.18)" : "rgba(148,163,184,0.18)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 18
+            }}
+          >
+            🤖
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>
+              AI {ready ? "ready" : "not configured"}
+            </div>
+            <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
+              Edit values in the Settings tab
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+          <StatRow label="Enabled" value={enabled ? "Yes" : "No"} ok={enabled} />
+          <StatRow label="Provider" value={provider || "—"} ok={!!provider} />
+          <StatRow label="Model" value={model || "default"} ok={!!provider} />
+          <StatRow label="API key" value={keySet ? "Set" : "Not set"} ok={keySet} />
+        </div>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <IslandButton
+            variant="primary"
+            disabled={!provider || testState === "running"}
+            onClick={() => void runTest()}
+          >
+            {testState === "running" ? "Testing…" : "Test connection"}
+          </IslandButton>
+          {testState === "ok" && (
+            <span style={{ fontSize: 12, color: islandTheme.color.successAccent }}>✓ {testMsg}</span>
+          )}
+          {testState === "error" && (
+            <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>✗ {testMsg}</span>
+          )}
+        </div>
+      </div>
+    </IslandCard>
+  );
+}
+
+function StatRow({ label, value, ok }: { label: string; value: string; ok: boolean }) {
+  return (
+    <div
+      style={{
+        padding: "8px 12px",
+        borderRadius: 8,
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${ok ? "rgba(34,197,94,0.28)" : islandTheme.color.cardBorder}`
+      }}
+    >
+      <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 700, color: islandTheme.color.textPrimary, marginTop: 2 }}>
+        {value}
+      </div>
     </div>
   );
 }
 
 type AdminTile = {
-  id: AdminSection;
+  id: SettingDomain;
   title: string;
   blurb: string;
   icon: string;
   accent: string;
 };
 
-const ADMIN_TILES: AdminTile[] = [
-  { id: "configuration", title: "Configuration", blurb: "Discord server, AI provider, API keys. All server-level settings in one place.", icon: "⚙️", accent: "#6366f1" },
-  { id: "news", title: "News", blurb: "External RSS feeds, GNews key, manual triggers, and community drift log cards.", icon: "📰", accent: "#0ea5e9" },
-  { id: "data-sync", title: "Data Sync", blurb: "Connector health + live log.", icon: "🔄", accent: "#86efac" },
-  { id: "members", title: "Members & Roles", blurb: "Roster, role mapping, onboarding queue.", icon: "👥", accent: "#a78bfa" },
-  { id: "events", title: "Game Nights & Events", blurb: "Session defaults, active nights, and recommendation engine tester.", icon: "🎮", accent: "#f59e0b" },
-  { id: "forums", title: "Forum Moderation", blurb: "Reports, channel access, word filter.", icon: "💬", accent: "#ef8354" },
-  { id: "library", title: "Game Library", blurb: "Featured pick, tag/visibility overrides.", icon: "🗂", accent: "#fb7185" },
-  { id: "economy", title: "Economy", blurb: "Nuggies balances, grant/deduct, attendance awards, and shop management.", icon: "🍗", accent: "#f59e0b" },
-  { id: "audit", title: "Audit Log", blurb: "Searchable trail with CSV export.", icon: "📜", accent: "#94a3b8" }
-];
+const ADMIN_TILES: AdminTile[] = (Object.keys(DOMAIN_INFO) as SettingDomain[]).map((id) => ({
+  id,
+  title: DOMAIN_INFO[id].label,
+  blurb: DOMAIN_INFO[id].blurb,
+  icon: DOMAIN_INFO[id].icon,
+  accent: DOMAIN_INFO[id].accent
+}));
 
-function AdminHub({ onSelect }: { onSelect: (s: AdminSection) => void }) {
+type AdminHubProps = {
+  viewMode: DomainTab;
+  onViewModeChange: (m: DomainTab) => void;
+  onSelect: (s: AdminSection, opts?: { search?: string; tab?: DomainTab }) => void;
+};
+
+function AdminHub({ viewMode, onViewModeChange, onSelect }: AdminHubProps) {
   return (
     <div style={{ display: "grid", gap: 18 }}>
       <header style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -160,28 +345,204 @@ function AdminHub({ onSelect }: { onSelect: (s: AdminSection) => void }) {
             maxWidth: 640
           }}
         >
-          Operational + moderation controls for the island. Role-gated to the <strong>Parent</strong> Discord role.
+          {viewMode === "operations"
+            ? "What needs your attention today, plus the four domains to browse."
+            : "Search every setting, or browse by domain."}
         </p>
       </header>
+
+      <HubViewToggle viewMode={viewMode} onChange={onViewModeChange} />
+
+      {viewMode === "operations" ? (
+        <QuickActionsPanel onSelect={onSelect} />
+      ) : (
+        <GlobalSettingsSearch onSelect={onSelect} />
+      )}
+
+      <div style={{ display: "grid", gap: 6 }}>
+        <h2 className="island-display" style={hubSectionTitleStyle}>Browse</h2>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+            gap: 14
+          }}
+        >
+          {ADMIN_TILES.map((t) => (
+            <HubTile
+              key={t.id}
+              tile={t}
+              onClick={() => onSelect(t.id, { tab: viewMode })}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HubViewToggle({ viewMode, onChange }: { viewMode: DomainTab; onChange: (m: DomainTab) => void }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 4, padding: 4, background: islandTheme.color.panelMutedBg, borderRadius: 999, justifySelf: "start", width: "fit-content" }}>
+      {(["operations", "settings"] as DomainTab[]).map((m) => {
+        const active = m === viewMode;
+        return (
+          <button
+            key={m}
+            type="button"
+            onClick={() => onChange(m)}
+            style={{
+              background: active ? "rgba(37,99,235,0.22)" : "transparent",
+              color: active ? islandTheme.color.textPrimary : islandTheme.color.textSubtle,
+              border: "none",
+              padding: "8px 18px",
+              borderRadius: 999,
+              fontSize: 14,
+              fontWeight: 700,
+              cursor: "pointer",
+              font: "inherit"
+            }}
+          >
+            {m === "operations" ? "Operations" : "Settings"}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const QUICK_ACTIONS: Array<{ id: string; title: string; subtitle: string; icon: string; tone: "primary" | "warning" | "success" | "default"; domain: SettingDomain }> = [
+  { id: "grant", title: "Grant Nuggies", subtitle: "Award balance to a member or back-fill a missed reward", icon: "🍗", tone: "warning", domain: "engagement" },
+  { id: "attendance", title: "Award attendance", subtitle: "Pay out attendance for a finalized game night", icon: "🎯", tone: "success", domain: "engagement" },
+  { id: "onboarding", title: "Review onboarding queue", subtitle: "Approve new crew, promote pending members", icon: "👥", tone: "primary", domain: "people" },
+  { id: "reports", title: "Forum reports", subtitle: "Triage open community reports", icon: "🚩", tone: "warning", domain: "people" },
+  { id: "news", title: "Re-run news curation", subtitle: "Refresh the home page feed manually", icon: "📰", tone: "primary", domain: "content" },
+  { id: "sync", title: "Data sync health", subtitle: "Connector status + live log", icon: "🔄", tone: "default", domain: "system" }
+];
+
+function QuickActionsPanel({ onSelect }: { onSelect: (s: AdminSection, opts?: { search?: string; tab?: DomainTab }) => void }) {
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <h2 className="island-display" style={hubSectionTitleStyle}>Quick actions</h2>
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          gap: 14
+          gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          gap: 10
         }}
       >
-        {ADMIN_TILES.map((t) => (
-          <HubTile key={t.id} tile={t} onClick={() => onSelect(t.id)} />
+        {QUICK_ACTIONS.map((qa) => (
+          <QuickActionCard
+            key={qa.id}
+            icon={qa.icon}
+            title={qa.title}
+            subtitle={qa.subtitle}
+            tone={qa.tone}
+            onClick={() => onSelect(qa.domain, { tab: "operations" })}
+          />
         ))}
       </div>
     </div>
   );
 }
 
+function GlobalSettingsSearch({ onSelect }: { onSelect: (s: AdminSection, opts?: { search?: string; tab?: DomainTab }) => void }) {
+  const [query, setQuery] = useState("");
+  const results = query.trim() ? searchSettings(query) : ([] as SettingMeta[]);
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <input
+        type="text"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search every setting by label, keyword, or key…"
+        style={{
+          padding: "12px 16px",
+          borderRadius: 12,
+          border: `1px solid ${islandTheme.color.cardBorder}`,
+          background: islandTheme.color.panelMutedBg,
+          color: islandTheme.color.textPrimary,
+          fontSize: 14,
+          font: "inherit"
+        }}
+        spellCheck={false}
+      />
+      {query.trim() && (
+        <div style={{ display: "grid", gap: 6 }}>
+          {results.length === 0 ? (
+            <IslandCard style={{ padding: 14 }}>
+              <span style={{ fontSize: 13, color: islandTheme.color.textMuted }}>
+                No settings match "{query}".
+              </span>
+            </IslandCard>
+          ) : (
+            results.slice(0, 12).map((meta) => {
+              const info = DOMAIN_INFO[meta.domain];
+              return (
+                <button
+                  key={meta.key}
+                  type="button"
+                  onClick={() => onSelect(meta.domain, { tab: "settings", search: meta.label })}
+                  style={searchResultStyle(info.accent)}
+                >
+                  <span className="island-mono" style={{ ...islandTagStyle({ color: info.accent }), flexShrink: 0 }}>
+                    {info.label}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: islandTheme.color.textPrimary }}>
+                      {meta.label}
+                    </div>
+                    <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {meta.description}
+                    </div>
+                  </div>
+                  <span style={{ color: islandTheme.color.textMuted, fontSize: 14, flexShrink: 0 }}>→</span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
+      {!query.trim() && (
+        <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, paddingLeft: 4 }}>
+          {ALL_SETTINGS.length} settings indexed across {Object.keys(DOMAIN_INFO).length} domains
+        </div>
+      )}
+    </div>
+  );
+}
+
+function searchResultStyle(accent: string): CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: 12,
+    padding: "10px 14px",
+    borderRadius: 10,
+    background: islandTheme.color.panelMutedBg,
+    border: `1px solid ${islandTheme.color.cardBorder}`,
+    color: islandTheme.color.textPrimary,
+    cursor: "pointer",
+    font: "inherit",
+    transition: "border-color 140ms ease"
+  };
+}
+
+const hubSectionTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 14,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  color: islandTheme.color.textMuted
+};
+
 function HubTile({ tile, onClick }: { tile: AdminTile; onClick: () => void }) {
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onClick}
       style={{
         textAlign: "left",
@@ -239,54 +600,6 @@ function HubTile({ tile, onClick }: { tile: AdminTile; onClick: () => void }) {
         Open →
       </div>
     </button>
-  );
-}
-
-function SubpageHeader({ section, onBack }: { section: AdminSection; onBack: () => void }) {
-  const tile = ADMIN_TILES.find((t) => t.id === section);
-  if (!tile) return null;
-  return (
-    <header style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <button
-        type="button"
-        onClick={onBack}
-        style={{
-          alignSelf: "flex-start",
-          background: "transparent",
-          border: "none",
-          color: islandTheme.color.primaryGlow,
-          fontSize: 13,
-          fontWeight: 600,
-          cursor: "pointer",
-          padding: 0,
-          font: "inherit"
-        }}
-      >
-        ← Admin hub
-      </button>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 10,
-            background: `${tile.accent}33`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 20
-          }}
-        >
-          {tile.icon}
-        </div>
-        <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(22px, 3vw, 30px)", fontWeight: 800 }}>
-          {tile.title}
-        </h1>
-      </div>
-      <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-        {tile.blurb}
-      </div>
-    </header>
   );
 }
 
@@ -509,7 +822,7 @@ function NewsCardRow({
               </div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <button type="button" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)} onClick={() => setEditing(true)}>
+              <button type="button" className="island-btn" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)} onClick={() => setEditing(true)}>
                 Edit
               </button>
               <button
@@ -845,10 +1158,10 @@ function MembersSubpage() {
             <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>Joined 2 days ago</div>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button type="button" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)}>
+            <button type="button" className="island-btn" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)}>
               Promote
             </button>
-            <button type="button" style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)}>
+            <button type="button" className="island-btn" style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)}>
               Remove
             </button>
           </div>
@@ -907,7 +1220,7 @@ function MemberRow({
         <span style={{ width: 6, height: 6, borderRadius: 999, background: dot }} />
         {entry.status}
       </span>
-      <button type="button" style={smallBtn("transparent", islandTheme.color.textMuted, true)}>
+      <button type="button" className="island-btn" style={smallBtn("transparent", islandTheme.color.textMuted, true)}>
         Edit
       </button>
     </div>
@@ -949,6 +1262,7 @@ function ForumsModSubpage() {
           <button
             key={t}
             type="button"
+            className="island-btn"
             onClick={() => setTab(t)}
             style={{
               background: tab === t ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
@@ -1147,7 +1461,7 @@ function ForumCategoriesTab() {
                   /{c.slug} · {c.threadCount} threads · pos {c.position}
                 </div>
               </div>
-              <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, padding: "2px 8px", border: `1px solid ${islandTheme.color.cardBorder}`, borderRadius: 999 }}>
+              <div className="island-mono" style={islandTagStyle({ color: c.accentColor })}>
                 {c.accentColor}
               </div>
               <button type="button" onClick={() => setEditing(c)} style={smallBtn(islandTheme.color.panelMutedBg, islandTheme.color.textSubtle, true)}>
@@ -1484,7 +1798,7 @@ function LibrarySubpage() {
             >
               {row.tags}
             </span>
-            <button type="button" style={smallBtn("transparent", islandTheme.color.textMuted, true)}>
+            <button type="button" className="island-btn" style={smallBtn("transparent", islandTheme.color.textMuted, true)}>
               Edit
             </button>
           </div>
@@ -1614,6 +1928,7 @@ function NewsSourcesSubpage({
           </div>
           <button
             type="button"
+            className="island-btn"
             onClick={() => {
               const next = !generalEnabled;
               setGeneralEnabled(next);
@@ -1651,6 +1966,7 @@ function NewsSourcesSubpage({
               <button
                 key={src.key}
                 type="button"
+                className="island-btn"
                 onClick={() => toggleSource(src.key)}
                 style={{
                   display: "flex",
@@ -2082,7 +2398,7 @@ function AuditSubpage({ profileJson }: { profileJson: string }) {
     <div style={{ display: "grid", gap: 12 }}>
       <IslandCard style={{ padding: 16, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <input placeholder="Search audit log…" style={{ ...islandInputStyle, flex: 1, minWidth: 240 }} />
-        <button type="button" style={smallBtn("transparent", islandTheme.color.textSubtle, true)}>
+        <button type="button" className="island-btn" style={smallBtn("transparent", islandTheme.color.textSubtle, true)}>
           Export CSV
         </button>
       </IslandCard>
@@ -2451,6 +2767,7 @@ function AISettingsSubpage({
           </div>
           <button
             type="button"
+            className="island-btn"
             onClick={() => {
               const next = !enabled;
               setEnabled(next);
@@ -2485,6 +2802,7 @@ function AISettingsSubpage({
             <button
               key={p}
               type="button"
+              className="island-btn"
               onClick={() => handleProviderChange(p)}
               style={{
                 padding: "10px 20px",
@@ -2535,6 +2853,7 @@ function AISettingsSubpage({
                   <button
                     key={opt.value}
                     type="button"
+                    className="island-btn"
                     onClick={() => handleModelSelect(opt.value)}
                     style={{
                       textAlign: "left",

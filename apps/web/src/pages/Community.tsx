@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandCard } from "../islandUi.js";
+import { IslandCard, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
 import type { ActivityEvent, NuggiesLeaderboardEntry, PageId } from "../types.js";
@@ -134,22 +134,15 @@ function CrewCard({
         <span
           className="island-mono"
           style={{
+            ...islandTagStyle({ color: statusColor }),
             position: "absolute",
             top: 8,
             right: 8,
-            background: "rgba(0,0,0,0.6)",
-            color: statusColor,
-            fontSize: 9,
-            padding: "2px 6px",
-            borderRadius: 3,
-            fontWeight: 700,
-            display: "flex",
-            alignItems: "center",
             gap: 4
           }}
         >
           <span style={{ width: 6, height: 6, borderRadius: 999, background: statusColor }} />
-          {card.status.toUpperCase()}
+          {card.status}
         </span>
       </div>
       <div style={{ padding: "0 14px 14px", marginTop: -28, position: "relative" }}>
@@ -164,7 +157,7 @@ function CrewCard({
             alignItems: "center",
             justifyContent: "center",
             fontWeight: 800,
-            color: "white",
+            color: islandTheme.color.textInverted,
             fontSize: 18
           }}
         >
@@ -182,6 +175,7 @@ function CrewCard({
           {isAdmin ? (
             <button
               type="button"
+              className="island-btn"
               onClick={() => onNavigate("admin")}
               style={{
                 flex: 1,
@@ -206,7 +200,7 @@ function CrewCard({
                   height: 12,
                   borderRadius: 999,
                   background: "linear-gradient(135deg,#f59e0b,#d97706)",
-                  color: "#0f172a",
+                  color: islandTheme.color.textDark,
                   fontSize: 9,
                   fontWeight: 900,
                   display: "inline-flex",
@@ -221,6 +215,7 @@ function CrewCard({
           ) : null}
           <button
             type="button"
+            className="island-btn"
             style={{
               flex: 1,
               background: islandTheme.color.primary,
@@ -393,10 +388,10 @@ function ClipCard({ clip }: { clip: (typeof CLIPS)[number] }) {
             bottom: 8,
             left: 8,
             background: "rgba(0,0,0,0.7)",
-            color: "white",
+            color: islandTheme.color.textInverted,
             fontSize: 10,
             padding: "2px 6px",
-            borderRadius: 3
+            borderRadius: islandTheme.radius.control
           }}
         >
           {clip.duration}
@@ -413,7 +408,7 @@ function ClipCard({ clip }: { clip: (typeof CLIPS)[number] }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            color: "white",
+            color: islandTheme.color.textInverted,
             fontSize: 14
           }}
         >
@@ -456,7 +451,7 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
           alignItems: "center",
           justifyContent: "center",
           fontWeight: 800,
-          color: "white",
+          color: islandTheme.color.textInverted,
           fontSize: 12
         }}
       >
@@ -523,6 +518,7 @@ function ForumRow({ entry, firstRow }: { entry: (typeof FORUMS)[number]; firstRo
   return (
     <button
       type="button"
+      className="island-btn"
       style={{
         display: "grid",
         gridTemplateColumns: "36px 1fr auto",
@@ -698,6 +694,7 @@ function EventRow({ entry, firstRow }: { entry: (typeof EVENTS)[number]; firstRo
       </div>
       <button
         type="button"
+        className="island-btn"
         style={{
           background: islandTheme.color.primary,
           border: `1px solid ${islandTheme.color.primary}`,

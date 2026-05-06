@@ -13,9 +13,11 @@ import { membersRouter } from "./routes/members.js";
 import { newsCardsRouter } from "./routes/newsCards.js";
 import { nuggiesRouter } from "./routes/nuggies.js";
 import { forumsRouter } from "./routes/forums.js";
+import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
 import { settingsRouter } from "./routes/settings.js";
 import { loadSettings } from "./lib/serverSettings.js";
+import { isTaglineStale, refreshTaglines } from "./lib/taglineGenerator.js";
 import { runMigrations } from "./db/runMigrations.js";
 import { recommendationRouter } from "./routes/recommendations.js";
 import { steamRouter } from "./routes/steam.js";
@@ -56,6 +58,7 @@ app.use("/members", membersRouter);
 app.use("/settings", settingsRouter);
 app.use("/nuggies", nuggiesRouter);
 app.use("/forums", forumsRouter);
+app.use("/taglines", taglinesRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (error instanceof ZodError) {
@@ -80,6 +83,27 @@ async function bootstrap() {
   } catch (err) {
     console.error("[boot] settings load failed — starting anyway:", err);
   }
+
+  // Refresh taglines on startup if stale (> 7 days), then check daily
+  try {
+    if (await isTaglineStale()) {
+      console.log("[boot] taglines stale — refreshing...");
+      await refreshTaglines();
+    }
+  } catch (err) {
+    console.error("[boot] tagline refresh failed:", err);
+  }
+
+  setInterval(() => {
+    void isTaglineStale().then((stale) => {
+      if (stale) {
+        return refreshTaglines().catch((err) => {
+          console.error("[taglines] scheduled refresh failed:", err);
+        });
+      }
+    });
+  }, 24 * 60 * 60 * 1000);
+
   app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);
   });

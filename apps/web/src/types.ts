@@ -10,6 +10,7 @@ export type PageId =
   | "nuggies-history"
   | "nuggies-milestones"
   | "profile"
+  | "settings"
   | "admin";
 
 export type Recommendation = {
@@ -240,17 +241,6 @@ export type NuggiesInventoryItem = {
   price: number;
   equipped: boolean;
   purchasedAt: string;
-};
-
-export type NuggiesLoan = {
-  id: number;
-  status: string;
-  principal: number;
-  amountDue: number;
-  collateral: number;
-  dueAt: string;
-  isLender: boolean;
-  createdAt: string;
 };
 
 export type NuggiesLeaderboardEntry = {

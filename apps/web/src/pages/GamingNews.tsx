@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { IslandCard } from "../islandUi.js";
+import { IslandCard, IslandTag, islandTagStyle, getTagColor } from "../islandUi.js";
 import { useDayNight } from "../scene/useDayNight.js";
 import { islandTheme } from "../theme.js";
 import type { GeneralNewsItem } from "../types.js";
@@ -90,33 +90,16 @@ function FilterPillRow({ label, options, activeTags, onTagClick }: FilterPillRow
       >
         {label}
       </span>
-      {options.map((opt) => {
-        const isActive = activeTags.has(opt);
-        return (
-          <button
-            key={opt}
-            type="button"
-            onClick={() => onTagClick(opt)}
-            className="island-mono"
-            style={{
-              border: `1px solid ${isActive ? islandTheme.color.primary : islandTheme.color.border}`,
-              background: isActive ? "rgba(37, 99, 235, 0.15)" : "transparent",
-              color: isActive ? islandTheme.color.textPrimary : islandTheme.color.textSubtle,
-              fontSize: 10,
-              fontWeight: 600,
-              padding: "3px 10px",
-              borderRadius: 999,
-              cursor: "pointer",
-              font: "inherit",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              transition: `border-color ${islandTheme.motion.dur.fast} ${islandTheme.motion.ease.out}, background ${islandTheme.motion.dur.fast} ${islandTheme.motion.ease.out}`
-            }}
-          >
-            {opt}
-          </button>
-        );
-      })}
+      {options.map((opt) => (
+        <IslandTag
+          key={opt}
+          color={getTagColor(opt)}
+          active={activeTags.has(opt)}
+          onClick={() => onTagClick(opt)}
+        >
+          {opt}
+        </IslandTag>
+      ))}
     </div>
   );
 }
@@ -291,22 +274,14 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
               Active filters
             </span>
             {[...activeTags].map((tag) => (
-              <button
+              <IslandTag
                 key={tag}
-                type="button"
+                color={getTagColor(tag)}
+                active
                 onClick={() => handleTagClick(tag)}
-                className="island-mono"
-                style={{
-                  fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em",
-                  border: `1px solid ${islandTheme.color.primary}`,
-                  background: "rgba(37,99,235,0.15)",
-                  color: islandTheme.color.textPrimary,
-                  borderRadius: 999, padding: "2px 8px", cursor: "pointer", font: "inherit",
-                  display: "flex", alignItems: "center", gap: 4
-                }}
               >
                 {tag} ×
-              </button>
+              </IslandTag>
             ))}
             <button
               type="button"
@@ -346,7 +321,7 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))",
                   gap: 10
                 }}
               >
@@ -521,55 +496,41 @@ function NewsHeroCard({
         e.currentTarget.style.boxShadow = "none";
       }}
     >
-      <div style={{ padding: "24px 24px 16px", display: "grid", gap: 10, flex: 1 }}>
+      <div style={{ padding: "18px 20px 12px", display: "grid", gap: 8, flex: 1 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <span className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
             {item.sourceName}
           </span>
           {labelText && (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: labelColor,
-                background: `${labelColor}22`,
-                border: `1px solid ${labelColor}44`,
-                borderRadius: 999,
-                padding: "2px 8px",
-                textTransform: "uppercase",
-                letterSpacing: "0.06em",
-                whiteSpace: "nowrap"
-              }}
-            >
+            <span className="island-mono" style={islandTagStyle({ color: labelColor })}>
               {labelText}
             </span>
           )}
         </div>
 
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-          {displayTags.map((tag) => (
-            <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
-          ))}
-        </div>
-
         <h3
           className="island-display"
-          style={{ margin: 0, fontSize: "clamp(17px, 2.5vw, 22px)", lineHeight: 1.15, color: islandTheme.color.textPrimary }}
+          style={{ margin: 0, fontSize: "clamp(15px, 2vw, 19px)", lineHeight: 1.15, color: islandTheme.color.textPrimary }}
         >
           {item.title}
         </h3>
 
         {item.aiSubtitle && (
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, color: islandTheme.color.textSubtle, opacity: 0.85 }}>
+          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.4, color: islandTheme.color.textSubtle, opacity: 0.85 }}>
             {item.aiSubtitle}
           </p>
         )}
 
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+          {displayTags.map((tag) => (
+            <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
+          ))}
+        </div>
+
         {isSpoiler ? (
           <SpoilerBlock onReveal={(e) => { e.stopPropagation(); onRevealSpoiler(); }} />
         ) : summary ? (
-          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: islandTheme.color.textSubtle, opacity: 0.95 }}>
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: islandTheme.color.textSubtle, opacity: 0.95 }}>
             {summary}
           </p>
         ) : null}
@@ -581,7 +542,7 @@ function NewsHeroCard({
           gridTemplateColumns: "auto 1fr auto",
           gap: 8,
           alignItems: "start",
-          padding: "10px 24px",
+          padding: "8px 20px",
           borderTop: `1px solid ${islandTheme.color.cardBorder}`,
           background: islandTheme.color.panelMutedBg
         }}
@@ -645,11 +606,6 @@ function NewsCard({
   const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
   const summary = item.aiSummary ?? truncateContents(item.contents, 180);
   const displayTags = (item.aiTags ?? []).slice(0, 3);
-  const whyText =
-    item.aiWhyRecommended ??
-    ((item.matchedTags?.length ?? 0) > 0
-      ? `Crew match: ${item.matchedTags.slice(0, 2).join(", ")}`
-      : item.sourceName);
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
 
   function handleShare(e: React.MouseEvent) {
@@ -702,45 +658,46 @@ function NewsCard({
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
-      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", padding: "10px 12px 0" }}>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", padding: "8px 10px 0" }}>
         {displayTags.map((tag) => (
           <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", gap: 10, padding: "8px 12px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "68px 1fr", gap: 8, padding: "6px 10px" }}>
         {item.imageUrl ? (
           <img
             src={item.imageUrl}
             alt=""
-            style={{ width: 84, height: 63, borderRadius: 8, objectFit: "cover", display: "block", flexShrink: 0 }}
+            style={{ width: 68, height: 50, borderRadius: 6, objectFit: "cover", display: "block", flexShrink: 0 }}
           />
         ) : (
           <div
             style={{
-              width: 84,
-              height: 63,
-              borderRadius: 8,
+              width: 68,
+              height: 50,
+              borderRadius: 6,
               background: islandTheme.color.panelMutedBg,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 22,
+              fontSize: 18,
               flexShrink: 0
             }}
           >
             📰
           </div>
         )}
-        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3, justifyContent: "center" }}>
+        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2, justifyContent: "center" }}>
           <div
             style={{
-              fontSize: 13,
+              fontSize: 14,
               fontWeight: 700,
-              lineHeight: 1.3,
+              lineHeight: 1.25,
+              color: islandTheme.color.textPrimary,
               overflow: "hidden",
               display: "-webkit-box",
-              WebkitLineClamp: 3,
+              WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical"
             }}
           >
@@ -751,7 +708,7 @@ function NewsCard({
               style={{
                 fontSize: 11,
                 color: islandTheme.color.textSubtle,
-                lineHeight: 1.35,
+                lineHeight: 1.4,
                 overflow: "hidden",
                 display: "-webkit-box",
                 WebkitLineClamp: 2,
@@ -764,7 +721,7 @@ function NewsCard({
         </div>
       </div>
 
-      <div style={{ padding: "0 12px", flex: 1 }}>
+      <div style={{ padding: "0 10px", flex: 1 }}>
         {isSpoiler ? (
           <button
             type="button"
@@ -774,8 +731,8 @@ function NewsCard({
               border: "1px solid rgba(245, 158, 11, 0.3)",
               borderRadius: 6,
               color: "#f59e0b",
-              fontSize: 11,
-              padding: "3px 8px",
+              fontSize: 10,
+              padding: "2px 7px",
               cursor: "pointer",
               font: "inherit",
               textAlign: "left"
@@ -786,12 +743,12 @@ function NewsCard({
         ) : summary ? (
           <div
             style={{
-              fontSize: 12,
+              fontSize: 11,
               color: islandTheme.color.textSubtle,
               lineHeight: 1.5,
               overflow: "hidden",
               display: "-webkit-box",
-              WebkitLineClamp: 3,
+              WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical"
             }}
           >
@@ -802,13 +759,12 @@ function NewsCard({
 
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "auto 1fr auto",
-          gap: 8,
-          alignItems: "start",
-          padding: "8px 12px",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "6px 10px",
           borderTop: `1px solid ${islandTheme.color.cardBorder}`,
-          marginTop: 8
+          marginTop: 6
         }}
       >
         <button
@@ -827,26 +783,13 @@ function NewsCard({
             alignItems: "center",
             justifyContent: "center",
             font: "inherit",
-            transition: `color ${islandTheme.motion.dur.fast} ease`,
-            marginTop: 1
+            transition: `color ${islandTheme.motion.dur.fast} ease`
           }}
           onMouseEnter={(e) => { e.currentTarget.style.color = islandTheme.color.textSubtle; }}
           onMouseLeave={(e) => { e.currentTarget.style.color = islandTheme.color.textMuted; }}
         >
           <ShareIcon />
         </button>
-
-        <div
-          className="island-mono"
-          style={{
-            fontSize: 10,
-            color: islandTheme.color.textMuted,
-            lineHeight: 1.4,
-            letterSpacing: "0.02em"
-          }}
-        >
-          {whyText}
-        </div>
 
         <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} />
       </div>
@@ -858,34 +801,12 @@ function NewsCard({
 
 function TagPill({ tag, onTagClick }: { tag: string; onTagClick?: (tag: string) => void }) {
   return (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); onTagClick?.(tag); }}
-      className="island-mono"
-      style={{
-        fontSize: 9,
-        fontWeight: 700,
-        textTransform: "uppercase",
-        letterSpacing: "0.07em",
-        color: islandTheme.color.textMuted,
-        border: `1px solid ${islandTheme.color.cardBorder}`,
-        borderRadius: 999,
-        padding: "2px 7px",
-        background: islandTheme.color.panelMutedBg,
-        whiteSpace: "nowrap",
-        cursor: onTagClick ? "pointer" : "default",
-        font: "inherit",
-        transition: `border-color ${islandTheme.motion.dur.fast} ease`
-      }}
-      onMouseEnter={(e) => {
-        if (onTagClick) e.currentTarget.style.borderColor = islandTheme.color.primaryGlow;
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.borderColor = islandTheme.color.cardBorder;
-      }}
+    <IslandTag
+      color={getTagColor(tag)}
+      onClick={onTagClick ? (e) => { e.stopPropagation(); onTagClick(tag); } : undefined}
     >
       {tag}
-    </button>
+    </IslandTag>
   );
 }
 
@@ -1061,20 +982,7 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
           <span style={{ fontSize: 11, color: islandTheme.color.textMuted, opacity: 0.5 }}>·</span>
           <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>{ago}</span>
           {labelText && (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                color: labelColor,
-                background: `${labelColor}22`,
-                border: `1px solid ${labelColor}44`,
-                borderRadius: 999,
-                padding: "2px 8px",
-                textTransform: "uppercase",
-                letterSpacing: "0.06em"
-              }}
-            >
+            <span className="island-mono" style={islandTagStyle({ color: labelColor })}>
               {labelText}
             </span>
           )}
@@ -1109,7 +1017,7 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
           </div>
         )}
 
-        {item.matchedTags.length > 0 && (
+        {(item.aiWhyRecommended || item.matchedTags.length > 0) && (
           <div
             style={{
               padding: "12px 16px",
@@ -1125,12 +1033,19 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
             >
               Why it's relevant to your crew
             </div>
-            <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-              Matches crew interests:{" "}
-              <span style={{ color: islandTheme.color.textPrimary }}>
-                {item.matchedTags.slice(0, 6).join(", ")}
-              </span>
-            </p>
+            {item.aiWhyRecommended && (
+              <p style={{ margin: "0 0 6px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                {item.aiWhyRecommended}
+              </p>
+            )}
+            {item.matchedTags.length > 0 && (
+              <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                Matches crew interests:{" "}
+                <span style={{ color: islandTheme.color.textPrimary }}>
+                  {item.matchedTags.slice(0, 6).join(", ")}
+                </span>
+              </p>
+            )}
           </div>
         )}
 
@@ -1198,7 +1113,7 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
                 padding: "9px 18px",
                 borderRadius: 10,
                 background: islandTheme.color.primary,
-                color: "#fff",
+                color: islandTheme.color.textInverted,
                 fontSize: 13,
                 fontWeight: 700,
                 textDecoration: "none",

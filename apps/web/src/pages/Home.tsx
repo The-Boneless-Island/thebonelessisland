@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
-import { IslandCard } from "../islandUi.js";
+import { apiFetch } from "../api/client.js";
+import { IslandCard, IslandTag } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
 import type {
@@ -19,6 +20,7 @@ type HomePageProps = {
   generalNews: GeneralNewsItem[];
   activityEvents: ActivityEvent[];
   newsCards: NewsCardData[];
+  tagline?: string;
   onNavigate: (page: PageId) => void;
 };
 
@@ -31,14 +33,20 @@ export function HomePage({
   generalNews,
   activityEvents,
   newsCards,
+  tagline,
   onNavigate
 }: HomePageProps) {
-  const [heroPhase, setHeroPhase] = useState<HeroPhase>("visible");
+  const alreadySeen = sessionStorage.getItem("hero_seen") === "1";
+  const [heroPhase, setHeroPhase] = useState<HeroPhase>(alreadySeen ? "gone" : "visible");
 
   useEffect(() => {
+    if (alreadySeen) return;
     const t1 = setTimeout(() => setHeroPhase("fading"), 1100);
     const t2 = setTimeout(() => setHeroPhase("collapsing"), 1500);
-    const t3 = setTimeout(() => setHeroPhase("gone"), 2050);
+    const t3 = setTimeout(() => {
+      setHeroPhase("gone");
+      sessionStorage.setItem("hero_seen", "1");
+    }, 2050);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
 
@@ -60,7 +68,7 @@ export function HomePage({
           }}
         >
           <div style={{ overflow: "hidden", minHeight: 0 }}>
-            <Hero profile={profile} onlineCount={activeMembers.length} onNavigate={onNavigate} />
+            <Hero profile={profile} onlineCount={activeMembers.length} tagline={tagline} onNavigate={onNavigate} />
           </div>
         </div>
       )}
@@ -68,12 +76,13 @@ export function HomePage({
         <section
           style={{
             display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+            gridTemplateColumns: "minmax(260px, 340px) 1fr minmax(260px, 340px)",
             gap: 16,
             alignItems: "start"
           }}
         >
           <NuggiesSnapshot profile={profile} onNavigate={onNavigate} />
+          <div aria-hidden="true" />
           <FriendsOnline
             activeMembers={activeMembers}
             totalMemberCount={totalMemberCount}
@@ -92,10 +101,12 @@ export function HomePage({
 function Hero({
   profile,
   onlineCount,
+  tagline,
   onNavigate
 }: {
   profile: MeProfile | null;
   onlineCount: number;
+  tagline?: string;
   onNavigate: (page: PageId) => void;
 }) {
   const name = profile?.displayName ?? "friend";
@@ -113,33 +124,18 @@ function Hero({
         gap: 20
       }}
     >
-      <span
-        className="island-mono"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "5px 12px",
-          borderRadius: 999,
-          border: `1px solid ${islandTheme.color.cardBorder}`,
-          background: islandTheme.color.panelMutedBg,
-          fontSize: 11,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          color: islandTheme.color.textMuted
-        }}
-      >
+      <IslandTag tone="success" style={{ gap: 6 }}>
         <span
           style={{
-            width: 8,
-            height: 8,
+            width: 6,
+            height: 6,
             borderRadius: 999,
-            background: islandTheme.color.successAccent,
-            boxShadow: "0 0 0 4px rgba(34, 197, 94, 0.18)"
+            background: "#22c55e",
+            boxShadow: "0 0 0 3px rgba(34, 197, 94, 0.18)"
           }}
         />
         {onlineCount} on the island right now
-      </span>
+      </IslandTag>
 
       <h1
         className="island-display"
@@ -155,6 +151,22 @@ function Hero({
         <br />
         <span style={{ fontStyle: "italic", color: islandTheme.palette.sandWarmAccent }}>{name}</span>
       </h1>
+
+      {tagline ? (
+        <div
+          className="island-mono"
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: islandTheme.palette.sandWarmAccent,
+            letterSpacing: "0.03em",
+            opacity: 0.9,
+            textShadow: "0 2px 12px rgba(251,191,119,0.35)"
+          }}
+        >
+          {tagline}
+        </div>
+      ) : null}
 
       <p
         style={{
@@ -199,6 +211,7 @@ function HeroButton({ variant, onClick, children }: HeroButtonProps) {
   return (
     <button
       type="button"
+      className="island-btn"
       onClick={onClick}
       style={{
         ...style,
@@ -264,23 +277,7 @@ function FeaturedNewsCard({
         <div style={{ flex: "1 1 0", minWidth: 0, display: "grid", gap: 6 }}>
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
             {displayTags.map((tag) => (
-              <span
-                key={tag}
-                className="island-mono"
-                style={{
-                  fontSize: 9,
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.07em",
-                  color: islandTheme.color.textMuted,
-                  border: "1px solid rgba(255,255,255,0.12)",
-                  borderRadius: 999,
-                  padding: "2px 7px",
-                  background: "rgba(255,255,255,0.06)"
-                }}
-              >
-                {tag}
-              </span>
+              <IslandTag key={tag}>{tag}</IslandTag>
             ))}
           </div>
           <h3
@@ -297,6 +294,7 @@ function FeaturedNewsCard({
         </div>
         <button
           type="button"
+          className="island-btn"
           onClick={(e) => { e.stopPropagation(); onNavigate("games-news"); }}
           style={{
             flexShrink: 0,
@@ -321,63 +319,260 @@ function FeaturedNewsCard({
 
 // â"€â"€ Nuggies Snapshot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
+const NUGGIE_SLOTS: Array<{ type: "title" | "flair" | "badge"; emoji: string; label: string }> = [
+  { type: "title", emoji: "🏷", label: "Title" },
+  { type: "flair", emoji: "✨", label: "Flair" },
+  { type: "badge", emoji: "🎖", label: "Badge" }
+];
+
+type DailyTx = { type: string; createdAt: string };
+
+function isClaimedTodayCST(txs: DailyTx[]): boolean {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+  return txs.some((tx) => {
+    if (tx.type !== "daily") return false;
+    const d = new Date(tx.createdAt).toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+    return d === today;
+  });
+}
+
+function msUntilNextCSTMidnight(): number {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  });
+  const parts = fmt.formatToParts(new Date());
+  const map: Record<string, string> = {};
+  for (const p of parts) map[p.type] = p.value;
+  const h = Number(map.hour) || 0;
+  const m = Number(map.minute) || 0;
+  const s = Number(map.second) || 0;
+  const cstMsOfDay = h * 3_600_000 + m * 60_000 + s * 1000;
+  return Math.max(0, 86_400_000 - cstMsOfDay);
+}
+
+function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
 function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; onNavigate: (page: PageId) => void }) {
-  const balance = profile?.nuggieBalance;
+  const baseBalance = profile?.nuggieBalance;
   const optedOut = profile?.nuggiesOptedOut ?? false;
   const equipped = profile?.equippedItems ?? [];
+  const equippedCount = equipped.length;
+
+  const [balanceOverride, setBalanceOverride] = useState<number | null>(null);
+  const [claimedToday, setClaimedToday] = useState<boolean | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  const [claimFlash, setClaimFlash] = useState<{ amount: number } | null>(null);
+  const [claimError, setClaimError] = useState<string | null>(null);
+  const [msLeft, setMsLeft] = useState(() => msUntilNextCSTMidnight());
+
+  useEffect(() => {
+    if (optedOut) return;
+    let cancelled = false;
+    void apiFetch("/nuggies/me").then(async (r) => {
+      if (!r.ok || cancelled) return;
+      const d = (await r.json()) as { transactions?: DailyTx[] };
+      if (!cancelled) setClaimedToday(isClaimedTodayCST(d.transactions ?? []));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [optedOut]);
+
+  useEffect(() => {
+    if (claimedToday !== true) return;
+    setMsLeft(msUntilNextCSTMidnight());
+    const id = setInterval(() => {
+      const next = msUntilNextCSTMidnight();
+      setMsLeft(next);
+      if (next === 0) setClaimedToday(false);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [claimedToday]);
+
+  const balance = balanceOverride ?? baseBalance;
+
+  async function handleClaim() {
+    if (claiming || claimedToday) return;
+    setClaiming(true);
+    setClaimError(null);
+    try {
+      const res = await apiFetch("/nuggies/daily", { method: "POST" });
+      const body = (await res.json().catch(() => ({}))) as { newBalance?: number; amount?: number; error?: string };
+      if (res.ok && body.newBalance !== undefined) {
+        setBalanceOverride(body.newBalance);
+        setClaimedToday(true);
+        setClaimFlash({ amount: body.amount ?? 0 });
+        setTimeout(() => setClaimFlash(null), 3500);
+      } else if (res.status === 409) {
+        setClaimedToday(true);
+      } else {
+        setClaimError(body.error ?? "Claim failed");
+      }
+    } catch (e) {
+      setClaimError(e instanceof Error ? e.message : "Claim failed");
+    } finally {
+      setClaiming(false);
+    }
+  }
 
   return (
     <IslandCard
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        padding: 18,
+        gap: 8,
+        padding: 14,
         background: `linear-gradient(135deg, rgba(251,191,119,0.12) 0%, ${islandTheme.color.panelBg} 100%)`,
         border: `1px solid rgba(251,191,119,0.2)`
       }}
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h3 className="island-display" style={{ margin: 0, fontSize: 17 }}>Nuggies</h3>
-        <span style={{ fontSize: 22 }}>{"🍗"}</span>
+        <h3 className="island-display" style={{ margin: 0, fontSize: 16 }}>Nuggies</h3>
+        <span style={{ fontSize: 18 }}>🍗</span>
       </div>
-      <div
-        className="island-display"
-        style={{ fontSize: 36, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1 }}
-      >
-        {balance !== undefined && !optedOut ? `₦${balance.toLocaleString()}` : "—"}
+
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span
+          className="island-display"
+          style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1, color: "#fbbf77" }}
+        >
+          {balance !== undefined && !optedOut ? `₦${balance.toLocaleString()}` : "—"}
+        </span>
+        <span className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          available
+        </span>
       </div>
-      {equipped.length > 0 && !optedOut && (
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {equipped.map((item) => (
-            <NuggieBadge key={item.id} item={item} size="sm" />
-          ))}
-        </div>
-      )}
-      {optedOut && (
+
+      {!optedOut ? (
+        <>
+          <div
+            className="island-mono"
+            style={{
+              display: "flex",
+              gap: 6,
+              fontSize: 10,
+              color: islandTheme.color.textMuted,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em"
+            }}
+          >
+            <span>Equipped</span>
+            <span style={{ color: islandTheme.color.textPrimary }}>{equippedCount} / 3</span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+            {NUGGIE_SLOTS.map((slot) => {
+              const item = equipped.find((e) => e.itemType === slot.type);
+              return item ? (
+                <div key={slot.type} style={{ display: "flex" }}>
+                  <NuggieBadge item={item} size="sm" />
+                </div>
+              ) : (
+                <div
+                  key={slot.type}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 4,
+                    padding: "4px 6px",
+                    borderRadius: 8,
+                    border: `1px dashed ${islandTheme.color.cardBorder}`,
+                    fontSize: 10,
+                    color: islandTheme.color.textMuted
+                  }}
+                  title={`No ${slot.label.toLowerCase()} equipped`}
+                >
+                  <span style={{ opacity: 0.5 }}>{slot.emoji}</span>
+                  <span className="island-mono" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 9 }}>
+                    {slot.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
         <div style={{ fontSize: 12, color: islandTheme.color.textSubtle }}>
           Balance hidden (opted out)
         </div>
       )}
-      <button
-        type="button"
-        onClick={() => onNavigate("nuggies")}
+
+      <div
         style={{
-          alignSelf: "flex-start",
-          background: "transparent",
-          border: "none",
-          color: islandTheme.color.primaryGlow,
-          fontSize: 13,
-          fontWeight: 600,
-          cursor: "pointer",
-          padding: 0,
-          font: "inherit"
+          display: "flex",
+          gap: 8,
+          marginTop: 4,
+          paddingTop: 8,
+          borderTop: `1px solid ${islandTheme.color.cardBorder}`
         }}
       >
-        {"View Nuggies →"}
-      </button>
+        {claimFlash ? (
+          <div style={{ ...nuggieFooterBtnStyle("#22c55e"), cursor: "default", color: "#22c55e", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            +{claimFlash.amount} 🍗 claimed!
+          </div>
+        ) : !optedOut && claimedToday === true ? (
+          <div style={{ ...nuggieFooterBtnStyle("#fbbf77"), cursor: "default", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.1, padding: "4px 10px" }}>
+            <span className="island-mono" style={{ fontSize: 9, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+              Next claim
+            </span>
+            <span className="island-mono" style={{ fontSize: 12, color: "#fbbf77", fontWeight: 700 }}>
+              {formatCountdown(msLeft)}
+            </span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void handleClaim()}
+            disabled={claiming || optedOut || claimedToday === null}
+            style={{
+              ...nuggieFooterBtnStyle("#fbbf77"),
+              opacity: claiming || optedOut || claimedToday === null ? 0.6 : 1,
+              cursor: claiming ? "wait" : optedOut ? "not-allowed" : "pointer"
+            }}
+          >
+            {claiming ? "Claiming…" : "🎁 Claim daily"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => onNavigate("nuggies")}
+          style={nuggieFooterBtnStyle(islandTheme.color.primaryGlow)}
+        >
+          🛍 Shop
+        </button>
+      </div>
+      {claimError && (
+        <div style={{ fontSize: 11, color: islandTheme.color.dangerAccent, marginTop: 4 }}>
+          {claimError}
+        </div>
+      )}
     </IslandCard>
   );
+}
+
+function nuggieFooterBtnStyle(accent: string): CSSProperties {
+  return {
+    flex: 1,
+    background: "transparent",
+    border: `1px solid ${islandTheme.color.cardBorder}`,
+    color: accent,
+    fontSize: 12,
+    fontWeight: 700,
+    padding: "6px 10px",
+    borderRadius: 8,
+    cursor: "pointer",
+    font: "inherit",
+    textAlign: "center"
+  };
 }
 function FriendsOnline({
   activeMembers,
@@ -394,12 +589,12 @@ function FriendsOnline({
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        padding: 18
+        gap: 8,
+        padding: 14
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <h3 className="island-display" style={{ margin: 0, fontSize: 17 }}>
+        <h3 className="island-display" style={{ margin: 0, fontSize: 16 }}>
           Friends online
         </h3>
         <span
@@ -420,6 +615,7 @@ function FriendsOnline({
       </div>
       <button
         type="button"
+        className="island-btn"
         onClick={() => onNavigate("community")}
         style={{
           marginTop: 6,
@@ -447,10 +643,10 @@ function CrewRow({ member }: { member: GuildMember }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "32px 1fr auto",
-        gap: 10,
+        gridTemplateColumns: "28px minmax(0, 1fr) auto",
+        gap: 8,
         alignItems: "center",
-        padding: "6px 8px",
+        padding: "5px 8px",
         borderRadius: 10,
         background: islandTheme.color.panelMutedBg,
         border: `1px solid ${islandTheme.color.cardBorder}`
@@ -500,23 +696,23 @@ function CrewAvatar({ member }: { member: GuildMember }) {
       <img
         src={member.avatarUrl}
         alt=""
-        style={{ width: 32, height: 32, borderRadius: 999, objectFit: "cover" }}
+        style={{ width: 28, height: 28, borderRadius: 999, objectFit: "cover" }}
       />
     );
   }
   return (
     <div
       style={{
-        width: 32,
-        height: 32,
+        width: 28,
+        height: 28,
         borderRadius: 999,
         background: pickColorFor(member.discordUserId),
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontSize: 11,
+        fontSize: 10,
         fontWeight: 800,
-        color: "#0f172a"
+        color: islandTheme.color.textDark
       }}
     >
       {initials}
@@ -712,10 +908,11 @@ function ActivityFeed({ events, onNavigate }: { events: ActivityEvent[]; onNavig
               <button
                 key={t.id}
                 type="button"
+                className="island-btn"
                 onClick={() => setTab(t.id)}
                 style={{
                   border: "none",
-                  background: active ? "rgba(37, 99, 235, 0.22)" : "transparent",
+                  background: active ? "var(--bi-primary)33" : "transparent",
                   color: active ? islandTheme.color.textPrimary : islandTheme.color.textSubtle,
                   fontSize: 13,
                   fontWeight: 600,
@@ -744,6 +941,7 @@ function ActivityFeed({ events, onNavigate }: { events: ActivityEvent[]; onNavig
         {hasMore && (
           <button
             type="button"
+            className="island-btn"
             onClick={() => onNavigate("community")}
             style={{
               display: "block",
@@ -1049,6 +1247,7 @@ function CtaCard({ accent, eyebrow, title, body, ctaLabel, primary }: CtaCardPro
       </p>
       <button
         type="button"
+        className="island-btn"
         style={{
           background: primary ? islandTheme.color.primary : "transparent",
           border: `1px solid ${primary ? islandTheme.color.primary : islandTheme.color.cardBorder}`,
