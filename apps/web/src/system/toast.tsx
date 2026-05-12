@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { islandTheme } from "../theme.js";
 
 export type ToastTone = "success" | "error" | "info";
@@ -10,6 +10,75 @@ export type ToastItem = {
 };
 
 const TOAST_DURATION_MS = 4200;
+
+// ── Direct toast queue ────────────────────────────────────────────────────────
+// Any code can push a toast by calling pushToast(message, tone) via the
+// context. Used for events that don't fit the status-string pattern
+// (achievement unlocks, etc.).
+
+export type ToastQueue = {
+  toasts: ToastItem[];
+  pushToast: (message: string, tone?: ToastTone) => void;
+  dismiss: (id: number) => void;
+};
+
+const ToastContext = createContext<ToastQueue | null>(null);
+
+export function useToastQueue(): ToastQueue {
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const nextIdRef = useRef(1);
+  const timersRef = useRef<Map<number, number>>(new Map());
+
+  const dismiss = useCallback((toastId: number) => {
+    const timeoutId = timersRef.current.get(toastId);
+    if (typeof timeoutId === "number") {
+      window.clearTimeout(timeoutId);
+      timersRef.current.delete(toastId);
+    }
+    setToasts((current) => current.filter((item) => item.id !== toastId));
+  }, []);
+
+  const pushToast = useCallback((message: string, tone: ToastTone = "info") => {
+    const id = nextIdRef.current++;
+    setToasts((current) => [...current, { id, message, tone }]);
+    const timeoutId = window.setTimeout(() => {
+      timersRef.current.delete(id);
+      setToasts((current) => current.filter((item) => item.id !== id));
+    }, TOAST_DURATION_MS);
+    timersRef.current.set(id, timeoutId);
+  }, []);
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of timersRef.current.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      timersRef.current.clear();
+    },
+    []
+  );
+
+  return { toasts, pushToast, dismiss };
+}
+
+export function ToastQueueProvider({
+  queue,
+  children,
+}: {
+  queue: ToastQueue;
+  children: React.ReactNode;
+}) {
+  return <ToastContext.Provider value={queue}>{children}</ToastContext.Provider>;
+}
+
+export function usePushToast(): (message: string, tone?: ToastTone) => void {
+  const ctx = useContext(ToastContext);
+  if (!ctx) {
+    // Safe no-op fallback so a missing provider can't crash the tree.
+    return () => {};
+  }
+  return ctx.pushToast;
+}
 
 const SUCCESS_PREFIXES = [
   "loaded",
@@ -37,44 +106,19 @@ function classifyStatus(status: string): ToastTone | null {
   return null;
 }
 
-export function useToastsFromStatus(status: string) {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
-  const nextIdRef = useRef(1);
-  const timersRef = useRef<Map<number, number>>(new Map());
-
+/**
+ * Watch a status string. When a new value matches the success/error pattern,
+ * push a toast onto the shared queue. Stateless — the queue owns the toasts.
+ */
+export function useToastsFromStatus(
+  status: string,
+  pushToast: (message: string, tone?: ToastTone) => void
+) {
   useEffect(() => {
     const tone = classifyStatus(status);
     if (!tone) return;
-
-    const id = nextIdRef.current++;
-    setToasts((current) => [...current, { id, message: status, tone }]);
-    const timeoutId = window.setTimeout(() => {
-      timersRef.current.delete(id);
-      setToasts((current) => current.filter((item) => item.id !== id));
-    }, TOAST_DURATION_MS);
-    timersRef.current.set(id, timeoutId);
-  }, [status]);
-
-  useEffect(
-    () => () => {
-      for (const timeoutId of timersRef.current.values()) {
-        window.clearTimeout(timeoutId);
-      }
-      timersRef.current.clear();
-    },
-    []
-  );
-
-  const dismiss = useCallback((toastId: number) => {
-    const timeoutId = timersRef.current.get(toastId);
-    if (typeof timeoutId === "number") {
-      window.clearTimeout(timeoutId);
-      timersRef.current.delete(toastId);
-    }
-    setToasts((current) => current.filter((item) => item.id !== toastId));
-  }, []);
-
-  return { toasts, dismiss };
+    pushToast(status, tone);
+  }, [status, pushToast]);
 }
 
 type ToastHostProps = {

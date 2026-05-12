@@ -2,6 +2,7 @@ export const islandTheme = {
   color: {
     appBg: "var(--bi-app-bg)",
     panelBg: "var(--bi-panel-bg)",
+    menuBg: "var(--bi-menu-bg)",
     panelMutedBg: "var(--bi-panel-muted-bg)",
     textPrimary: "var(--bi-text-primary)",
     textSecondary: "var(--bi-text-secondary)",
@@ -42,7 +43,12 @@ export const islandTheme = {
     appMaxWidth: 1200,
     authMaxWidth: 900,
     proseMaxWidth: "68ch",
-    heroProseMaxWidth: "60ch"
+    heroProseMaxWidth: "60ch",
+    menuMinWidth: 240,
+    menuMaxWidth: 320,
+    menuMobileMaxWidth: 360,
+    listMaxWidth: 560,
+    formMaxWidth: 480
   },
   prose: {
     readable: { maxWidth: "68ch", lineHeight: 1.45 },
@@ -102,6 +108,7 @@ export const islandTheme = {
   glass: {
     blur: "blur(14px) saturate(125%)",
     blurStrong: "blur(20px) saturate(130%)",
+    blurMenu: "blur(28px) saturate(150%)",
     edge: "1px solid rgba(120, 180, 230, 0.18)"
   },
   font: {
@@ -114,6 +121,7 @@ export const islandTheme = {
 type ThemeColorVars = {
   "--bi-app-bg": string;
   "--bi-panel-bg": string;
+  "--bi-menu-bg": string;
   "--bi-panel-muted-bg": string;
   "--bi-text-primary": string;
   "--bi-text-secondary": string;
@@ -135,6 +143,7 @@ type ThemeColorVars = {
 export const nightThemeVars: ThemeColorVars = {
   "--bi-app-bg": "rgba(10, 24, 44, 0.62)",
   "--bi-panel-bg": "rgba(15, 32, 54, 0.74)",
+  "--bi-menu-bg": "rgba(10, 22, 40, 0.97)",
   "--bi-panel-muted-bg": "#0b1220",
   "--bi-text-primary": "#e5e7eb",
   "--bi-text-secondary": "#e2e8f0",
@@ -156,6 +165,7 @@ export const nightThemeVars: ThemeColorVars = {
 export const dayThemeVars: ThemeColorVars = {
   "--bi-app-bg": "rgba(255, 255, 255, 0.78)",
   "--bi-panel-bg": "rgba(255, 255, 255, 0.86)",
+  "--bi-menu-bg": "rgba(255, 252, 245, 0.97)",
   "--bi-panel-muted-bg": "rgba(243, 233, 208, 0.92)",
   "--bi-text-primary": "#1e293b",
   "--bi-text-secondary": "#334155",

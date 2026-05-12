@@ -43,6 +43,8 @@ export type GameNightAttendee = {
   username: string;
 };
 
+export type PresenceStatus = "online" | "idle" | "dnd" | "offline";
+
 export type GuildMember = {
   discordUserId: string;
   username: string;
@@ -51,6 +53,7 @@ export type GuildMember = {
   roleNames: string[];
   inVoice: boolean;
   richPresenceText: string | null;
+  presenceStatus: PresenceStatus | null;
 };
 
 export type MeProfile = {
@@ -149,6 +152,41 @@ export type GameNewsItem = {
   aiSummary?: string | null;
   aiLabel?: "personal" | "community" | "top_news" | null;
   aiSpoilerWarning?: boolean;
+  sourceKind?: "steam" | "rss" | string;
+  sourceLabel?: string | null;
+};
+
+export type PatchSourceCandidate = {
+  appId: number;
+  name: string;
+  headerImageUrl: string | null;
+  owners: number;
+  sourceCount: number;
+};
+
+export type PatchSourceRow = {
+  id: string;
+  sourceType: "rss" | "atom";
+  sourceUrl: string;
+  label: string | null;
+  enabled: boolean;
+  fetchedAt: string | null;
+  lastError: string | null;
+};
+
+export type PatchSourceGameGroup = {
+  appId: number;
+  gameName: string;
+  headerImageUrl: string | null;
+  sources: PatchSourceRow[];
+};
+
+export type PatchSourceTestResult = {
+  ok: boolean;
+  feedTitle?: string | null;
+  itemCount?: number;
+  sample?: { title: string; url: string; publishedAt: string | null } | null;
+  error?: string;
 };
 
 export type GeneralNewsItem = {
@@ -171,6 +209,8 @@ export type GeneralNewsItem = {
   aiLabel: "top_news" | "community" | "personal" | null;
   aiSpoilerWarning: boolean;
   aiGameTitle: string | null;
+  aiTitle?: string | null;
+  aiSources?: string[] | null;
   upvotes: number;
   downvotes: number;
 };
@@ -237,11 +277,13 @@ export type NuggiesShopItem = {
 export type NuggiesInventoryItem = {
   itemId: number;
   name: string;
+  description?: string;
   itemType: "title" | "flair" | "badge";
   itemData: { emoji: string; label?: string; color: string };
   price: number;
   equipped: boolean;
   purchasedAt: string;
+  acquisition?: "shop" | "earned";
 };
 
 export type NuggiesLeaderboardEntry = {
@@ -251,6 +293,17 @@ export type NuggiesLeaderboardEntry = {
   avatarUrl: string | null;
   balance: number;
   equippedTitle: EquippedItem | null;
+};
+
+export type NuggiesLoan = {
+  id: number;
+  status: "pending" | "active" | "repaid" | "defaulted" | "cancelled";
+  principal: number;
+  amountDue: number;
+  collateral: number;
+  dueAt: string;
+  isLender: boolean;
+  createdAt: string;
 };
 
 export type ForumAuthor = {

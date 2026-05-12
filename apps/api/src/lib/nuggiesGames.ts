@@ -112,13 +112,20 @@ export type GameContext = {
 
 // ── GameHandler ──────────────────────────────────────────────────────────────
 
+export type StepAction = "hit" | "stand" | "double";
+
 export type GameHandler<TInput = unknown> = {
   type: string;
   isStateful: boolean;
   validateInput: (raw: unknown) => TInput;
   start: (ctx: GameContext, input: TInput, bet: number, sessionId: number) => Promise<GameState>;
-  step?: (ctx: GameContext, session: ActiveGameRow, action: "hit" | "stand") => Promise<GameState>;
+  step?: (ctx: GameContext, session: ActiveGameRow, action: StepAction) => Promise<GameState>;
   autoResolve?: (ctx: GameContext, session: ActiveGameRow) => Promise<GameState>;
+  // Convert stored row state → public client view. Required for stateful games
+  // so internal data (deck contents, dealer hole card) never leaks to clients
+  // via /active polling. Stateless games typically don't persist a row past
+  // resolution, but a safe default is provided in getActiveGame.
+  viewActive?: (session: ActiveGameRow) => GameState;
 };
 
 export const gameRegistry = new Map<string, GameHandler<unknown>>();
@@ -149,7 +156,7 @@ function maxBetFor(gameType: string): number {
 function cooldownSecsFor(gameType: string): number {
   const override = getNumberSetting(`nuggies_game_cooldown_secs_${gameType}`, NaN);
   if (Number.isFinite(override)) return override;
-  return getNumberSetting("nuggies_game_cooldown_secs", 120);
+  return getNumberSetting("nuggies_game_cooldown_secs", 3);
 }
 
 function gamesEnabled(): boolean {
@@ -443,7 +450,7 @@ export async function startGame(opts: {
 export async function stepGame(opts: {
   discordUserId: string;
   sessionId: number;
-  action: "hit" | "stand";
+  action: StepAction;
 }): Promise<GameState> {
   await ensureSettingsLoaded();
   if (!gamesEnabled()) throw new GameDisabledError();
@@ -501,12 +508,19 @@ export async function getActiveGame(discordUserId: string): Promise<GameState | 
   if (r.rows.length === 0) return null;
   const row = rowToActiveGame(r.rows[0]);
 
+  // Hand off to handler for masking. Raw state contains private data (deck
+  // contents, dealer hole card, etc.) that must never leak to clients.
+  const handler = gameRegistry.get(row.gameType);
+  if (handler?.viewActive) {
+    return handler.viewActive(row);
+  }
+  // Safe default: minimal envelope, no internal state.
   return {
     sessionId: row.id,
     gameType: row.gameType,
     bet: row.bet,
     status: "active",
-    data: row.state,
+    data: {},
     expiresAt: row.expiresAt
   };
 }

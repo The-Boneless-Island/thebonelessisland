@@ -326,38 +326,10 @@ function usePalmParallax(side: "left" | "right") {
   const ref = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    let ticking = false;
-    const update = () => {
-      const el = ref.current;
-      if (!el) {
-        ticking = false;
-        return;
-      }
-      const y = window.scrollY;
-      const vh = window.innerHeight;
-      const t = Math.min(1, y / (vh * 0.9));
-      const lift = -t * 200;
-      const out = t * 160;
-      const scale = 1 - t * 0.3;
-      const flip = side === "right" ? " scaleX(-1)" : "";
-      const dx = side === "right" ? out : -out;
-      el.style.transform = `translate(${dx}px, ${lift}px) scale(${scale})${flip}`;
-      el.style.opacity = `${1 - t * 0.4}`;
-      ticking = false;
-    };
-    const onScroll = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(update);
-        ticking = true;
-      }
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", update);
-    update();
-    return () => {
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", update);
-    };
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = side === "right" ? "scaleX(-1)" : "";
+    el.style.opacity = "1";
   }, [side]);
 
   return ref;
@@ -585,11 +557,21 @@ function SceneGlobalStyles() {
   return (
     <style>
       {`
+        /* ── Cross-browser reset ── */
+        *, *::before, *::after { box-sizing: border-box; }
+
         :root {
+          --bi-topbar-h: 62px;
           ${buildVarBlock(nightThemeVars)}
         }
         :root[data-theme="day"] {
           ${buildVarBlock(dayThemeVars)}
+        }
+
+        html {
+          /* Reserve scrollbar lane so layout never shifts between scrollable/non-scrollable pages.
+             Windows browsers have ~17px opaque scrollbar; macOS uses overlay — this normalises them. */
+          scrollbar-gutter: stable;
         }
         html, body {
           margin: 0;
@@ -600,9 +582,12 @@ function SceneGlobalStyles() {
           font-family: ${font.body};
           color: var(--bi-text-primary);
           -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
           overflow-x: hidden;
           transition: color 600ms ease;
         }
+        /* Prevent media from overflowing their container */
+        img, video, canvas, svg { max-width: 100%; }
         h1, h2, h3, h4, h5, h6 {
           font-family: ${font.display};
           letter-spacing: -0.01em;
@@ -679,6 +664,53 @@ function SceneGlobalStyles() {
           outline-offset: 0;
           border-color: var(--bi-primary-glow) !important;
         }
+
+        /* ── Responsive layout utilities ── */
+
+        /* Home page top row: Nuggies | Logo | Friends Online
+           Collapses to 2-col (logo hidden) at tablet, 1-col at mobile. */
+        .bi-home-top {
+          display: grid;
+          gap: 16px;
+          align-items: start;
+          grid-template-columns: minmax(240px, 320px) 1fr minmax(240px, 320px);
+        }
+        .bi-home-top > * { min-width: 0; }
+
+        @media (max-width: 860px) {
+          .bi-home-top {
+            grid-template-columns: 1fr 1fr;
+          }
+          .bi-home-top > :nth-child(2) { display: none; }
+        }
+        @media (max-width: 540px) {
+          .bi-home-top { grid-template-columns: 1fr; }
+        }
+
+        /* Nuggies page top row: summary cards on the left, activity on the right.
+           Collapses to a single column on narrow viewports. */
+        .bi-nuggies-top {
+          display: grid;
+          gap: 12px;
+          align-items: start;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+        .bi-nuggies-top > * { min-width: 0; }
+        @media (max-width: 860px) {
+          .bi-nuggies-top { grid-template-columns: 1fr; }
+        }
+
+        /* Main app content wrapper */
+        .bi-main {
+          max-width: 1200px;
+          width: 100%;
+          margin: 1.25rem auto;
+          padding: clamp(0.9rem, 2.5vw, 1.5rem);
+          border-radius: 14px;
+        }
+
+        /* Topbar spacer — height tied to --bi-topbar-h so a single change keeps them in sync */
+        .bi-topbar-spacer { height: var(--bi-topbar-h, 62px); }
 
         @media (prefers-reduced-motion: reduce) {
           .island-palm-canopy-l,

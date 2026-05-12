@@ -1,25 +1,28 @@
 import { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "../api/client.js";
+import { useRefetchActivity } from "../system/activityContext.js";
 import { IslandButton, IslandCard } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
+import { NuggieCoin } from "../components/NuggieCoin.js";
+import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
 import { islandTheme } from "../theme.js";
 import type {
   NuggieTransaction,
   NuggiesInventoryItem,
   NuggiesShopItem,
   NuggiesLeaderboardEntry,
+  NuggiesLoan,
 } from "../types.js";
-
-const MILESTONES = [100, 500, 1_000, 5_000, 10_000];
-const MILESTONE_LABELS = ["100", "500", "1K", "5K", "Millionaire 💰"];
 
 type ItemTab = "all" | "title" | "flair" | "badge";
 
 type MeData = {
   balance: number;
+  lifetimeEarned: number;
   optedOut: boolean;
   transactions: NuggieTransaction[];
   inventory: NuggiesInventoryItem[];
+  loans: NuggiesLoan[];
 };
 
 function fmt(n: number) {
@@ -35,8 +38,8 @@ function relTime(iso: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function txIcon(type: string, amount: number) {
-  if (type === "daily") return "🍗";
+function txIcon(type: string, amount: number): React.ReactNode {
+  if (type === "daily") return <NuggieCoin size={18} />;
   if (type === "attendance") return "🎮";
   if (type.startsWith("game_")) return "🎲";
   if (type === "first_link") return "🔗";
@@ -56,7 +59,11 @@ function hasDailyToday(txs: NuggieTransaction[]) {
   });
 }
 
-export function AchievementsPage() {
+type AchievementsPageProps = {
+  onProfileChanged?: () => void;
+};
+
+export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {}) {
   const [me, setMe] = useState<MeData | null>(null);
   const [shop, setShop] = useState<NuggiesShopItem[]>([]);
   const [leaderboard, setLeaderboard] = useState<NuggiesLeaderboardEntry[]>([]);
@@ -71,6 +78,9 @@ export function AchievementsPage() {
 
   const [buying, setBuying] = useState<number | null>(null);
   const [equipPending, setEquipPending] = useState<number | null>(null);
+  const [loanPending, setLoanPending] = useState<number | null>(null);
+
+  const refetchActivity = useRefetchActivity();
 
   const load = useCallback(async () => {
     const [meRes, shopRes, lbRes] = await Promise.all([
@@ -102,9 +112,18 @@ export function AchievementsPage() {
     const res = await apiFetch("/nuggies/daily", { method: "POST" });
     const body = await res.json() as { newBalance?: number; amount?: number; error?: string };
     if (res.ok && body.newBalance !== undefined) {
-      setMe((prev) => prev ? { ...prev, balance: body.newBalance! } : prev);
+      setMe((prev) =>
+        prev
+          ? {
+              ...prev,
+              balance: body.newBalance!,
+              lifetimeEarned: prev.lifetimeEarned + (body.amount ?? 0),
+            }
+          : prev
+      );
       setClaimedToday(true);
       setClaimMsg(`+${fmt(body.amount ?? 0)} Nuggies claimed!`);
+      void refetchActivity();
     } else {
       setClaimMsg(body.error ?? "Could not claim daily");
     }
@@ -128,6 +147,7 @@ export function AchievementsPage() {
     const res = await apiFetch(`/nuggies/inventory/${itemId}/equip`, { method: "POST" });
     if (res.ok) {
       await load();
+      onProfileChanged?.();
     }
     setEquipPending(null);
   }
@@ -139,6 +159,19 @@ export function AchievementsPage() {
     if (res.ok) {
       setMe((prev) => prev ? { ...prev, optedOut: !prev.optedOut } : prev);
     }
+  }
+
+  async function loanAction(loanId: number, action: "accept" | "repay" | "cancel") {
+    setLoanPending(loanId);
+    const res = await apiFetch(`/nuggies/loan/${loanId}/${action}`, { method: "POST" });
+    if (res.ok) {
+      await load();
+      void refetchActivity();
+    } else {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      alert(body?.error ?? `Loan ${action} failed`);
+    }
+    setLoanPending(null);
   }
 
   if (loading) {
@@ -162,14 +195,134 @@ export function AchievementsPage() {
   const filteredShop = shopTab === "all" ? shop : shop.filter((i) => i.itemType === shopTab);
   const ownedIds = new Set(me.inventory.map((i) => i.itemId));
 
+  const activeLoans = me.loans?.filter((l) => l.status === "pending" || l.status === "active") ?? [];
+
+  const loansCard = activeLoans.length > 0 ? (
+    <IslandCard as="section" style={{ display: "grid", gap: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 15 }}>Loans</div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {activeLoans.map((loan) => {
+          const overdue = loan.status === "active" && new Date(loan.dueAt).getTime() < Date.now();
+          const due = new Date(loan.dueAt);
+          const dueLabel = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+          const role = loan.isLender ? "Lent" : "Borrowed";
+          const arrow = loan.isLender ? "📤" : "📥";
+          return (
+            <div
+              key={loan.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${overdue ? "rgba(239,68,68,0.45)" : islandTheme.color.border}`,
+                fontSize: 13,
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{arrow}</span>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
+                <div style={{ fontWeight: 600, color: islandTheme.color.textSecondary }}>
+                  {role} ₦{fmt(loan.principal)} · due ₦{fmt(loan.amountDue)}
+                </div>
+                <div style={{ fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+                  #{loan.id} · {loan.status} · {overdue ? "OVERDUE · " : ""}due {dueLabel}
+                  {loan.collateral > 0 ? ` · collateral ₦${fmt(loan.collateral)}` : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {loan.status === "pending" && !loan.isLender && (
+                  <IslandButton
+                    variant="primary"
+                    style={{ fontSize: 12, padding: "0.3rem 0.65rem" }}
+                    disabled={loanPending === loan.id}
+                    onClick={() => void loanAction(loan.id, "accept")}
+                  >
+                    {loanPending === loan.id ? "…" : "Accept"}
+                  </IslandButton>
+                )}
+                {loan.status === "pending" && loan.isLender && (
+                  <IslandButton
+                    variant="secondary"
+                    style={{ fontSize: 12, padding: "0.3rem 0.65rem" }}
+                    disabled={loanPending === loan.id}
+                    onClick={() => void loanAction(loan.id, "cancel")}
+                  >
+                    {loanPending === loan.id ? "…" : "Cancel"}
+                  </IslandButton>
+                )}
+                {loan.status === "active" && !loan.isLender && (
+                  <IslandButton
+                    variant="primary"
+                    style={{ fontSize: 12, padding: "0.3rem 0.65rem" }}
+                    disabled={loanPending === loan.id || me.balance < loan.amountDue}
+                    onClick={() => void loanAction(loan.id, "repay")}
+                  >
+                    {loanPending === loan.id ? "…" : "Repay"}
+                  </IslandButton>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+        Use /loan in Discord to make new offers.
+      </div>
+    </IslandCard>
+  ) : null;
+
+  const recentActivity = (
+    <IslandCard as="section" style={{ display: "grid", gap: 10 }}>
+      <div style={{ fontWeight: 700, fontSize: 15 }}>Recent Activity</div>
+      {me.transactions.length === 0 ? (
+        <div style={{ color: islandTheme.color.textMuted, fontSize: 14 }}>No transactions yet.</div>
+      ) : (
+        <div style={{ display: "grid", gap: 4, maxWidth: islandTheme.layout.listMaxWidth, width: "100%" }}>
+          {me.transactions.slice(0, 15).map((tx) => (
+            <div
+              key={tx.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "7px 10px",
+                borderRadius: 8,
+                background: islandTheme.color.panelMutedBg,
+                fontSize: 13,
+              }}
+            >
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{txIcon(tx.type, tx.amount)}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: islandTheme.color.textSecondary }}>
+                  {tx.reason}
+                </div>
+              </div>
+              <span style={{ fontWeight: 700, flexShrink: 0, color: tx.amount >= 0 ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>
+                {tx.amount >= 0 ? "+" : ""}{fmt(tx.amount)}
+              </span>
+              <span style={{ fontSize: 11, color: islandTheme.color.textMuted, flexShrink: 0 }}>
+                {relTime(tx.createdAt)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </IslandCard>
+  );
+
   return (
-    <div style={{ display: "grid", gap: 20 }}>
+    <div style={{ display: "grid", gap: 12 }}>
+      <div className="bi-nuggies-top">
+        <div style={{ display: "grid", gap: 12 }}>
       {/* Balance Hero */}
       <IslandCard style={{ display: "grid", gap: 12 }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 11, fontFamily: islandTheme.font.mono, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted, marginBottom: 4 }}>
-              🍗 Nuggies Balance
+            <div style={{ fontSize: 11, fontFamily: islandTheme.font.mono, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted, marginBottom: 4, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <NuggieCoin size={16} /> Nuggies Balance
             </div>
             <div style={{ fontSize: "clamp(2rem, 5vw, 3rem)", fontWeight: 800, lineHeight: 1, color: islandTheme.color.textPrimary }}>
               ₦{fmt(me.balance)}
@@ -177,7 +330,7 @@ export function AchievementsPage() {
             </div>
             {myRank && !me.optedOut && (
               <div style={{ fontSize: 13, color: islandTheme.color.textMuted, marginTop: 4 }}>
-                Rank #{myRank} on the leaderboard
+                #{myRank} on the ladder
               </div>
             )}
           </div>
@@ -212,12 +365,14 @@ export function AchievementsPage() {
       </IslandCard>
 
       {/* Milestones */}
-      <IslandCard as="section" style={{ display: "grid", gap: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Milestones</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <IslandCard as="section" style={{ display: "grid", gap: 12 }}>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>Rank</div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "space-between" }}>
           {MILESTONES.map((m, i) => {
-            const reached = me.balance >= m;
-            const isNext = !reached && (i === 0 || me.balance >= MILESTONES[i - 1]);
+            const reached = me.lifetimeEarned >= m;
+            const isNext = !reached && (i === 0 || me.lifetimeEarned >= MILESTONES[i - 1]);
+            const tier = RANK_TIERS[i];
+            const isApex = i === RANK_TIERS.length - 1;
             return (
               <div
                 key={m}
@@ -225,35 +380,54 @@ export function AchievementsPage() {
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
-                  gap: 4,
-                  opacity: reached ? 1 : isNext ? 0.8 : 0.35,
+                  gap: 6,
+                  opacity: reached ? 1 : isNext ? 0.92 : 0.4,
+                  flex: "1 1 64px",
+                  minWidth: 64,
                 }}
               >
                 <div
+                  className={reached && isApex ? "bi-rank-apex-pulse" : undefined}
                   style={{
-                    width: 42,
-                    height: 42,
+                    width: 52,
+                    height: 52,
                     borderRadius: 999,
                     background: reached
-                      ? "linear-gradient(135deg, #f59e0b, #facc15)"
+                      ? tier.reachedGrad
                       : isNext
-                      ? `${islandTheme.color.panelBg}`
-                      : islandTheme.color.panelMutedBg,
+                        ? islandTheme.color.panelBg
+                        : islandTheme.color.panelMutedBg,
                     border: reached
-                      ? "2px solid #f59e0b"
+                      ? `2px solid ${tier.reachedBorder}`
                       : isNext
-                      ? `2px solid ${islandTheme.color.primary}`
-                      : `1px solid ${islandTheme.color.border}`,
+                        ? `2px solid ${tier.nextBorder}`
+                        : `1px solid ${islandTheme.color.border}`,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    fontSize: reached ? 18 : 14,
-                    boxShadow: isNext ? `0 0 12px ${islandTheme.color.primaryGlow}55` : "none",
+                    fontSize: reached ? 22 : 16,
+                    color: reached ? "#0f172a" : islandTheme.color.textMuted,
+                    boxShadow: reached
+                      ? `0 0 18px ${tier.reachedGlow}, inset 0 0 0 1px rgba(255,255,255,0.18)`
+                      : isNext
+                        ? `0 0 14px ${tier.reachedGlow}`
+                        : "none",
+                    transition: "box-shadow 240ms ease, transform 240ms ease",
                   }}
                 >
-                  {reached ? "⭐" : isNext ? "◎" : "○"}
+                  {reached ? tier.emblem : isNext ? "◎" : "○"}
                 </div>
-                <div style={{ fontSize: 10, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+                <div
+                  style={{
+                    fontSize: 9,
+                    color: reached ? tier.reachedTextColor : islandTheme.color.textMuted,
+                    fontFamily: islandTheme.font.mono,
+                    letterSpacing: "0.08em",
+                    fontWeight: reached ? 700 : 500,
+                    textAlign: "center",
+                    lineHeight: 1.2,
+                  }}
+                >
                   {MILESTONE_LABELS[i]}
                 </div>
               </div>
@@ -261,20 +435,47 @@ export function AchievementsPage() {
           })}
         </div>
         {(() => {
-          const next = MILESTONES.find((m) => me.balance < m);
+          const next = MILESTONES.find((m) => me.lifetimeEarned < m);
           if (!next) return null;
-          const pct = Math.min(100, Math.round((me.balance / next) * 100));
+          const pct = Math.min(100, Math.round((me.lifetimeEarned / next) * 100));
+          const nextIdx = MILESTONES.indexOf(next);
+          const nextTier = RANK_TIERS[nextIdx];
           return (
             <div>
               <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 6 }}>
-                ₦{fmt(me.balance)} / ₦{fmt(next)} · {pct}% to next milestone
+                Lifetime ₦{fmt(me.lifetimeEarned)} / ₦{fmt(next)} · {pct}% to{" "}
+                <span style={{ color: nextTier.reachedTextColor, fontWeight: 700, fontFamily: islandTheme.font.mono, letterSpacing: "0.06em" }}>
+                  {MILESTONE_LABELS[nextIdx]}
+                </span>
               </div>
               <div style={{ height: 6, borderRadius: 999, background: islandTheme.color.panelMutedBg, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, var(--bi-primary), var(--bi-primary-glow))", borderRadius: 999, transition: "width 600ms ease" }} />
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${pct}%`,
+                    background: nextTier.reachedGrad,
+                    borderRadius: 999,
+                    transition: "width 600ms ease",
+                    boxShadow: `0 0 8px ${nextTier.reachedGlow}`,
+                  }}
+                />
               </div>
             </div>
           );
         })()}
+        <style>{`
+          @keyframes biRankApexPulse {
+            0%, 100% {
+              box-shadow: 0 0 18px rgba(244, 114, 182, 0.7), inset 0 0 0 1px rgba(255,255,255,0.18);
+            }
+            50% {
+              box-shadow: 0 0 28px rgba(244, 114, 182, 0.95), inset 0 0 0 1px rgba(255,255,255,0.30);
+            }
+          }
+          .bi-rank-apex-pulse {
+            animation: biRankApexPulse 2.6s ease-in-out infinite;
+          }
+        `}</style>
       </IslandCard>
 
       {/* My Items */}
@@ -289,30 +490,55 @@ export function AchievementsPage() {
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10 }}>
-            {filteredInv.map((item) => (
-              <ItemCard key={item.itemId}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span style={{ fontSize: 22 }}>{item.itemData.emoji}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
-                    <div style={{ fontSize: 11, color: islandTheme.color.textMuted, textTransform: "capitalize" }}>{item.itemType}</div>
+            {filteredInv.map((item) => {
+              const earned = item.acquisition === "earned";
+              return (
+                <ItemCard key={item.itemId} tooltip={item.description || undefined}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ fontSize: 22 }}>{item.itemData.emoji}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
+                      <div style={{ fontSize: 11, color: islandTheme.color.textMuted, textTransform: "capitalize", display: "flex", alignItems: "center", gap: 6 }}>
+                        <span>{item.itemType}</span>
+                        {earned && (
+                          <span
+                            className="island-mono"
+                            style={{
+                              fontSize: 9,
+                              padding: "1px 6px",
+                              borderRadius: 999,
+                              background: "rgba(163, 230, 53, 0.18)",
+                              color: "#a3e635",
+                              border: "1px solid rgba(163, 230, 53, 0.45)",
+                              letterSpacing: "0.08em",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Earned
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                <div style={{ marginTop: 8 }}>
-                  <IslandButton
-                    variant={item.equipped ? "primary" : "secondary"}
-                    style={{ width: "100%", fontSize: 12, padding: "0.35rem 0.6rem" }}
-                    onClick={() => void toggleEquip(item.itemId)}
-                    disabled={equipPending === item.itemId}
-                  >
-                    {equipPending === item.itemId ? "…" : item.equipped ? "Equipped ✓" : "Equip"}
-                  </IslandButton>
-                </div>
-              </ItemCard>
-            ))}
+                  <div style={{ marginTop: 8 }}>
+                    <IslandButton
+                      variant={item.equipped ? "primary" : "secondary"}
+                      style={{ width: "100%", fontSize: 12, padding: "0.35rem 0.6rem" }}
+                      onClick={() => void toggleEquip(item.itemId)}
+                      disabled={equipPending === item.itemId}
+                    >
+                      {equipPending === item.itemId ? "…" : item.equipped ? "Equipped ✓" : "Equip"}
+                    </IslandButton>
+                  </div>
+                </ItemCard>
+              );
+            })}
           </div>
         )}
       </IslandCard>
+        </div>
+        {recentActivity}
+      </div>
 
       {/* Shop */}
       <IslandCard as="section" style={{ display: "grid", gap: 12 }}>
@@ -355,49 +581,13 @@ export function AchievementsPage() {
         </div>
       </IslandCard>
 
-      {/* Recent Activity */}
-      <IslandCard as="section" style={{ display: "grid", gap: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 15 }}>Recent Activity</div>
-        {me.transactions.length === 0 ? (
-          <div style={{ color: islandTheme.color.textMuted, fontSize: 14 }}>No transactions yet.</div>
-        ) : (
-          <div style={{ display: "grid", gap: 4 }}>
-            {me.transactions.slice(0, 15).map((tx) => (
-              <div
-                key={tx.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "7px 10px",
-                  borderRadius: 8,
-                  background: islandTheme.color.panelMutedBg,
-                  fontSize: 13,
-                }}
-              >
-                <span style={{ fontSize: 16, flexShrink: 0 }}>{txIcon(tx.type, tx.amount)}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: islandTheme.color.textSecondary }}>
-                    {tx.reason}
-                  </div>
-                </div>
-                <span style={{ fontWeight: 700, flexShrink: 0, color: tx.amount >= 0 ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>
-                  {tx.amount >= 0 ? "+" : ""}{fmt(tx.amount)}
-                </span>
-                <span style={{ fontSize: 11, color: islandTheme.color.textMuted, flexShrink: 0 }}>
-                  {relTime(tx.createdAt)}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </IslandCard>
+      {loansCard}
 
       {/* Leaderboard Preview */}
       {leaderboard.length > 0 && (
         <IslandCard as="section" style={{ display: "grid", gap: 10 }}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Leaderboard Top 5</div>
-          <div style={{ display: "grid", gap: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Ladder · Top 5</div>
+          <div style={{ display: "grid", gap: 4, maxWidth: islandTheme.layout.listMaxWidth, width: "100%" }}>
             {leaderboard.slice(0, 5).map((entry) => (
               <div
                 key={entry.discordUserId}
@@ -447,12 +637,12 @@ export function AchievementsPage() {
           }}
         >
           {me.optedOut
-            ? "Re-join the leaderboard and resume earning Nuggies"
-            : "Hide my balance from the leaderboard"}
+            ? "Re-join the ladder and resume earning Nuggies"
+            : "Hide my balance from the ladder"}
         </button>
         {me.optedOut && (
           <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 4 }}>
-            You are opted out — you won't appear on the leaderboard and can't earn or spend Nuggies.
+            Unranked. You won't appear on the ladder and can't earn or spend Nuggies.
           </div>
         )}
       </div>
@@ -464,8 +654,8 @@ function TabBar({ value, onChange }: { value: ItemTab; onChange: (t: ItemTab) =>
   const tabs: { key: ItemTab; label: string }[] = [
     { key: "all", label: "All" },
     { key: "title", label: "Titles" },
-    { key: "flair", label: "Flairs" },
-    { key: "badge", label: "Badges" },
+    { key: "flair", label: "Status" },
+    { key: "badge", label: "Trophies" },
   ];
   return (
     <div style={{ display: "flex", gap: 4 }}>
@@ -492,10 +682,14 @@ function TabBar({ value, onChange }: { value: ItemTab; onChange: (t: ItemTab) =>
   );
 }
 
-function ItemCard({ children }: { children: React.ReactNode }) {
+function ItemCard({ children, tooltip }: { children: React.ReactNode; tooltip?: string }) {
+  const [hover, setHover] = useState(false);
   return (
     <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
+        position: "relative",
         background: islandTheme.color.panelMutedBg,
         border: `1px solid ${islandTheme.color.border}`,
         borderRadius: islandTheme.radius.card,
@@ -503,6 +697,29 @@ function ItemCard({ children }: { children: React.ReactNode }) {
       }}
     >
       {children}
+      {tooltip && hover ? (
+        <div
+          role="tooltip"
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 6px)",
+            left: 8,
+            right: 8,
+            zIndex: 50,
+            padding: "8px 10px",
+            background: islandTheme.color.panelBg,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            borderRadius: 8,
+            boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+            fontSize: 11,
+            lineHeight: 1.45,
+            color: islandTheme.color.textPrimary,
+            pointerEvents: "none",
+          }}
+        >
+          {tooltip}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -2,7 +2,9 @@ import express from "express";
 import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { getGuildId } from "../lib/serverSettings.js";
-import { requireSession } from "../lib/auth.js";
+import { requireBotSecret, requireSession } from "../lib/auth.js";
+
+const PRESENCE_STATUSES = new Set(["online", "idle", "dnd", "offline"]);
 
 type DiscordGuildMember = {
   nick?: string | null;
@@ -33,9 +35,8 @@ type VoiceSyncDiagnostics = {
 };
 
 export const membersRouter = express.Router();
-membersRouter.use(requireSession);
 
-membersRouter.get("/", async (_req, res) => {
+membersRouter.get("/", requireSession, async (_req, res) => {
   if (!getGuildId()) {
     res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
     return;
@@ -49,9 +50,11 @@ membersRouter.get("/", async (_req, res) => {
     role_names: string[];
     in_voice: boolean;
     rich_presence_text: string | null;
+    presence_status: string | null;
   }>(
     `
-      SELECT discord_user_id, username, display_name, avatar_url, role_names, in_voice, rich_presence_text
+      SELECT discord_user_id, username, display_name, avatar_url, role_names,
+             in_voice, rich_presence_text, presence_status
       FROM guild_members
       WHERE guild_id = $1 AND in_guild = TRUE
       ORDER BY username ASC
@@ -68,12 +71,44 @@ membersRouter.get("/", async (_req, res) => {
       avatarUrl: row.avatar_url,
       roleNames: row.role_names,
       inVoice: row.in_voice,
-      richPresenceText: row.rich_presence_text
+      richPresenceText: row.rich_presence_text,
+      presenceStatus: row.presence_status
     }))
   });
 });
 
-membersRouter.post("/sync", async (_req, res) => {
+// ── Bot-only: push Discord presence (online/idle/dnd/offline) ───────────────
+// Called by the bot from its PresenceUpdate gateway listener. Bot is the only
+// component with the privileged GuildPresences intent enabled.
+membersRouter.post("/presence/:discordUserId", requireBotSecret, async (req, res) => {
+  const guildId = getGuildId();
+  if (!guildId) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+  const discordUserId = String(req.params.discordUserId ?? "");
+  if (!/^\d{15,25}$/.test(discordUserId)) {
+    res.status(400).json({ error: "Invalid discord user id" });
+    return;
+  }
+  const status = req.body?.status;
+  if (typeof status !== "string" || !PRESENCE_STATUSES.has(status)) {
+    res.status(400).json({ error: "status must be one of online|idle|dnd|offline" });
+    return;
+  }
+
+  const result = await db.query(
+    `
+      UPDATE guild_members
+      SET presence_status = $1, last_synced_at = NOW()
+      WHERE guild_id = $2 AND discord_user_id = $3
+    `,
+    [status, guildId, discordUserId]
+  );
+  res.json({ ok: true, updated: result.rowCount ?? 0 });
+});
+
+membersRouter.post("/sync", requireSession, async (_req, res) => {
   if (!getGuildId() || !env.DISCORD_BOT_TOKEN) {
     res.status(400).json({ error: "DISCORD_GUILD_ID and DISCORD_BOT_TOKEN are required for member sync" });
     return;
@@ -196,7 +231,10 @@ membersRouter.post("/sync", async (_req, res) => {
     for (const member of normalized) {
       const voiceChannelId = voiceChannelByUserId.get(member.id) ?? null;
       const inVoice = Boolean(voiceChannelId);
-      const richPresenceText = inVoice ? "In a voice channel" : "Offline or not in voice";
+      // Only voice state is observable here. Don't fabricate an "offline"
+      // claim when the user is simply not in a voice channel — Discord's
+      // online/idle/dnd presence is not pulled by this sync.
+      const richPresenceText = inVoice ? "In a voice channel" : null;
       await client.query(
         `
           INSERT INTO guild_members (

@@ -160,8 +160,8 @@ nuggiesGamesRouter.post("/:sessionId/step", requireBotOrSession, async (req, res
   }
 
   const action = req.body?.action;
-  if (action !== "hit" && action !== "stand") {
-    res.status(400).json({ error: "action must be 'hit' or 'stand'" });
+  if (action !== "hit" && action !== "stand" && action !== "double") {
+    res.status(400).json({ error: "action must be 'hit', 'stand', or 'double'" });
     return;
   }
 

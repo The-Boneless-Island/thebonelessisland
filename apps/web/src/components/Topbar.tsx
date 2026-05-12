@@ -66,23 +66,25 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }
         <MegaMenu page={page} onNavigate={onNavigate} isAdmin={isAdmin} />
         <div style={{ flex: 1, minWidth: 12 }} />
         <SearchInput value={search} onChange={setSearch} />
-        <UserTrigger
-          buttonRef={triggerRef}
-          profile={profile}
-          open={menuOpen}
-          onToggle={() => setMenuOpen((v) => !v)}
-        />
-        {menuOpen ? (
-          <UserMenu
-            menuRef={menuRef}
+        <div style={{ position: "relative", display: "flex" }}>
+          <UserTrigger
+            buttonRef={triggerRef}
             profile={profile}
-            page={page}
-            isAdmin={isAdmin}
-            onClose={() => setMenuOpen(false)}
-            onNavigate={onNavigate}
-            onLogout={onLogout}
+            open={menuOpen}
+            onToggle={() => setMenuOpen((v) => !v)}
           />
-        ) : null}
+          {menuOpen ? (
+            <UserMenu
+              menuRef={menuRef}
+              profile={profile}
+              page={page}
+              isAdmin={isAdmin}
+              onClose={() => setMenuOpen(false)}
+              onNavigate={onNavigate}
+              onLogout={onLogout}
+            />
+          ) : null}
+        </div>
       </div>
     </header>
   );

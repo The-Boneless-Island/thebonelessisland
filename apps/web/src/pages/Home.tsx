@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { apiFetch } from "../api/client.js";
 import { LOGO_BG_URL } from "../assets.js";
-import { IslandCard, IslandTag } from "../islandUi.js";
+import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
+import { NuggieCoin } from "../components/NuggieCoin.js";
 import { islandTheme } from "../theme.js";
+import { useRefetchActivity } from "../system/activityContext.js";
 import type {
   ActivityCategory,
   ActivityEvent,
@@ -42,12 +44,12 @@ export function HomePage({
 
   useEffect(() => {
     if (alreadySeen) return;
-    const t1 = setTimeout(() => setHeroPhase("fading"), 1100);
-    const t2 = setTimeout(() => setHeroPhase("collapsing"), 1500);
+    const t1 = setTimeout(() => setHeroPhase("fading"), 4000);
+    const t2 = setTimeout(() => setHeroPhase("collapsing"), 4400);
     const t3 = setTimeout(() => {
       setHeroPhase("gone");
       sessionStorage.setItem("hero_seen", "1");
-    }, 2050);
+    }, 4950);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
 
@@ -74,14 +76,7 @@ export function HomePage({
         </div>
       )}
       <div style={{ display: "grid", gap: 20 }}>
-        <section
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(260px, 340px) 1fr minmax(260px, 340px)",
-            gap: 16,
-            alignItems: "start"
-          }}
-        >
+        <section className="bi-home-top">
           <NuggiesSnapshot profile={profile} onNavigate={onNavigate} />
           <HomeLogoMark />
           <FriendsOnline
@@ -427,6 +422,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   const [claimFlash, setClaimFlash] = useState<{ amount: number } | null>(null);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [msLeft, setMsLeft] = useState(() => msUntilNextDailyReset());
+  const refetchActivity = useRefetchActivity();
 
   useEffect(() => {
     if (optedOut) return;
@@ -464,6 +460,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
         setClaimedToday(true);
         setClaimFlash({ amount: body.amount ?? 0 });
         setTimeout(() => setClaimFlash(null), 3500);
+        void refetchActivity();
       } else if (res.status === 409) {
         setClaimedToday(true);
       } else {
@@ -489,7 +486,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 className="island-display" style={{ margin: 0, fontSize: 16 }}>Nuggies</h3>
-        <span style={{ fontSize: 18 }}>🍗</span>
+        <NuggieCoin size={22} />
       </div>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
@@ -569,8 +566,8 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
         }}
       >
         {claimFlash ? (
-          <div style={{ ...nuggieFooterBtnStyle("#22c55e"), cursor: "default", color: "#22c55e", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            +{claimFlash.amount} 🍗 claimed!
+          <div style={{ ...nuggieFooterBtnStyle("#22c55e"), cursor: "default", color: "#22c55e", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+            +{claimFlash.amount} <NuggieCoin size={16} /> claimed!
           </div>
         ) : !optedOut && claimedToday === true ? (
           <div style={{ ...nuggieFooterBtnStyle("#fbbf77"), cursor: "default", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.1, padding: "4px 10px" }}>
@@ -690,8 +687,32 @@ function FriendsOnline({
 }
 
 function CrewRow({ member }: { member: GuildMember }) {
-  const status = member.inVoice ? "voice" : member.richPresenceText ? "active" : "idle";
-  const presence = member.richPresenceText ?? (member.inVoice ? "in voice" : "online");
+  const status: "voice" | "online" | "idle" | "dnd" = member.inVoice
+    ? "voice"
+    : member.presenceStatus === "dnd"
+      ? "dnd"
+      : member.presenceStatus === "idle"
+        ? "idle"
+        : "online";
+  const presence =
+    member.richPresenceText ??
+    (member.inVoice
+      ? "In a voice channel"
+      : status === "dnd"
+        ? "Do not disturb"
+        : status === "idle"
+          ? "Idle"
+          : "Online");
+  const badgeColor =
+    status === "voice"
+      ? islandTheme.color.successAccent
+      : status === "dnd"
+        ? islandTheme.color.dangerAccent
+        : status === "idle"
+          ? islandTheme.color.warnAccent
+          : islandTheme.color.primaryGlow;
+  const badgeLabel =
+    status === "voice" ? "voice" : status === "dnd" ? "dnd" : status === "idle" ? "idle" : "online";
   return (
     <div
       style={{
@@ -728,15 +749,10 @@ function CrewRow({ member }: { member: GuildMember }) {
           fontSize: 10,
           textTransform: "uppercase",
           letterSpacing: "0.06em",
-          color:
-            status === "voice"
-              ? islandTheme.color.successAccent
-              : status === "active"
-                ? islandTheme.color.primaryGlow
-                : islandTheme.color.textMuted
+          color: badgeColor
         }}
       >
-        {status === "voice" ? "voice" : status === "active" ? "online" : "idle"}
+        {badgeLabel}
       </span>
     </div>
   );
@@ -903,14 +919,30 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
           </>
         )
       };
-    case "steam.synced": {
-      const synced = typeof payload.syncedGames === "number" ? payload.syncedGames : 0;
+    case "achievement.unlocked": {
+      const name = typeof payload.name === "string" ? payload.name : "an achievement";
+      const emoji = typeof payload.emoji === "string" ? payload.emoji : "🏆";
       return {
-        icon: "🔄",
+        icon: emoji,
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> resynced their library — <Target>{synced} game{synced === 1 ? "" : "s"}</Target>.
+            <strong>{actorName}</strong> unlocked <Target>{name}</Target>.
+          </>
+        )
+      };
+    }
+    case "milestone.reached": {
+      const label = typeof payload.label === "string" ? payload.label : "a new tier";
+      const emoji = typeof payload.emoji === "string" ? payload.emoji : "⭐";
+      const threshold = typeof payload.threshold === "number" ? payload.threshold : null;
+      return {
+        icon: emoji,
+        metaText: ago,
+        body: (
+          <>
+            <strong>{actorName}</strong> hit <Target>{label}</Target>
+            {threshold !== null ? ` (₦${threshold.toLocaleString()})` : ""}.
           </>
         )
       };
@@ -928,16 +960,142 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
   }
 }
 
-const ACTIVITY_FEED_LIMIT = 5;
+const ACTIVITY_INITIAL_LIMIT = 25;
+const ACTIVITY_PAGE_SIZE = 25;
+const ACTIVITY_MAX_LIMIT = 100;
 
-function ActivityFeed({ events, onNavigate }: { events: ActivityEvent[]; onNavigate: (page: PageId) => void }) {
+type ActivitySort = "newest" | "oldest" | "type";
+type ActivityDateRange = "all" | "24h" | "7d" | "30d";
+
+const ACTIVITY_DATE_WINDOWS: Record<Exclude<ActivityDateRange, "all">, number> = {
+  "24h": 24 * 60 * 60 * 1000,
+  "7d": 7 * 24 * 60 * 60 * 1000,
+  "30d": 30 * 24 * 60 * 60 * 1000
+};
+
+function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityEvent[]; onNavigate: (page: PageId) => void }) {
   const [tab, setTab] = useState<ActivityCategory>("all");
-  const visible = useMemo(
-    () => (tab === "all" ? events : events.filter((e) => e.category === tab)),
-    [events, tab]
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<ActivitySort>("newest");
+  const [dateRange, setDateRange] = useState<ActivityDateRange>("all");
+  const [events, setEvents] = useState<ActivityEvent[]>(initialEvents);
+  const [limit, setLimit] = useState(() => Math.max(initialEvents.length, ACTIVITY_INITIAL_LIMIT));
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [reachedEnd, setReachedEnd] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Adopt parent refresh only when it has at least as much data as our local
+  // copy, so paginated extras aren't wiped by a periodic refresh.
+  useEffect(() => {
+    setEvents((prev) => (initialEvents.length >= prev.length ? initialEvents : prev));
+  }, [initialEvents]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || reachedEnd) return;
+    const nextLimit = Math.min(ACTIVITY_MAX_LIMIT, limit + ACTIVITY_PAGE_SIZE);
+    if (nextLimit <= events.length && nextLimit < ACTIVITY_MAX_LIMIT) {
+      // Already have everything we'd ask for; nothing more to fetch.
+      setReachedEnd(true);
+      return;
+    }
+    setLoadingMore(true);
+    setErrorMsg(null);
+    try {
+      const res = await apiFetch(`/activity?limit=${nextLimit}`, { credentials: "include" });
+      if (!res.ok) {
+        throw new Error(`Activity load failed (${res.status})`);
+      }
+      const data = (await res.json().catch(() => null)) as { events?: ActivityEvent[] } | null;
+      const got = Array.isArray(data?.events) ? data!.events : [];
+      setEvents(got);
+      setLimit(nextLimit);
+      if (got.length < nextLimit || nextLimit >= ACTIVITY_MAX_LIMIT) {
+        setReachedEnd(true);
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Activity load failed");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [events.length, limit, loadingMore, reachedEnd]);
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          void loadMore();
+        }
+      },
+      { rootMargin: "240px 0px" }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [loadMore]);
+
+  // Pre-compute timestamp + searchable haystack per event once. Reused by
+  // every filter/sort pass so we don't parse Date or stringify payload N times.
+  const indexed = useMemo(
+    () =>
+      events.map((e) => {
+        let payloadStr = "";
+        try {
+          payloadStr = JSON.stringify(e.payload ?? {});
+        } catch {
+          // ignore non-serializable payloads
+        }
+        return {
+          e,
+          ts: new Date(e.createdAt).getTime(),
+          hay: [
+            e.actor?.displayName ?? "",
+            e.target?.displayName ?? "",
+            e.game?.name ?? "",
+            e.eventType,
+            payloadStr,
+          ]
+            .join(" ")
+            .toLowerCase(),
+        };
+      }),
+    [events]
   );
-  const sliced = visible.slice(0, ACTIVITY_FEED_LIMIT);
-  const hasMore = visible.length > ACTIVITY_FEED_LIMIT;
+
+  const counts = useMemo(() => {
+    const c: Record<ActivityCategory, number> = {
+      all: events.length,
+      friends: 0,
+      achievements: 0,
+      milestones: 0,
+      patches: 0,
+    };
+    for (const e of events) {
+      if (e.category in c) c[e.category]++;
+    }
+    return c;
+  }, [events]);
+
+  const visible = useMemo(() => {
+    const cutoff =
+      dateRange !== "all" ? Date.now() - ACTIVITY_DATE_WINDOWS[dateRange] : -Infinity;
+    const q = search.trim().toLowerCase();
+    const filtered = indexed.filter(
+      ({ e, ts, hay }) =>
+        (tab === "all" || e.category === tab) &&
+        (cutoff === -Infinity || (Number.isFinite(ts) && ts >= cutoff)) &&
+        (!q || hay.includes(q))
+    );
+    if (sortBy === "oldest") filtered.sort((a, b) => a.ts - b.ts);
+    else if (sortBy === "type") filtered.sort((a, b) => a.e.eventType.localeCompare(b.e.eventType));
+    else filtered.sort((a, b) => b.ts - a.ts);
+    return filtered.map(({ e }) => e);
+  }, [indexed, tab, search, sortBy, dateRange]);
+
+  const filtersActive =
+    tab !== "all" || dateRange !== "all" || search.trim().length > 0 || sortBy !== "newest";
+
   return (
     <section id="activity" style={{ display: "grid", gap: 14 }}>
       <SectionHead
@@ -948,19 +1106,25 @@ function ActivityFeed({ events, onNavigate }: { events: ActivityEvent[]; onNavig
       />
       <IslandCard style={{ padding: 0, overflow: "hidden" }}>
         <div
+          role="tablist"
+          aria-label="Activity categories"
           style={{
             display: "flex",
             gap: 4,
             padding: 8,
-            borderBottom: `1px solid ${islandTheme.color.cardBorder}`
+            borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
+            flexWrap: "wrap"
           }}
         >
           {ACTIVITY_TABS.map((t) => {
             const active = t.id === tab;
+            const count = counts[t.id] ?? 0;
             return (
               <button
                 key={t.id}
                 type="button"
+                role="tab"
+                aria-selected={active}
                 className="island-btn"
                 onClick={() => setTab(t.id)}
                 style={{
@@ -972,48 +1136,221 @@ function ActivityFeed({ events, onNavigate }: { events: ActivityEvent[]; onNavig
                   padding: "6px 12px",
                   borderRadius: 999,
                   cursor: "pointer",
-                  font: "inherit"
+                  font: "inherit",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6
                 }}
               >
-                {t.label}
+                <span>{t.label}</span>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "1px 7px",
+                    borderRadius: 999,
+                    background: active ? "var(--bi-primary)55" : islandTheme.color.panelMutedBg,
+                    color: active ? islandTheme.color.textPrimary : islandTheme.color.textMuted,
+                    minWidth: 18,
+                    textAlign: "center"
+                  }}
+                >
+                  {count}
+                </span>
               </button>
             );
           })}
         </div>
-        <div style={{ padding: 6 }}>
-          {sliced.length === 0 ? (
-            <div style={{ padding: "24px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-              {events.length === 0
-                ? "No island activity yet — schedule a game night or sync your library to get the dock buzzing."
-                : "Nothing in this category right now."}
-            </div>
-          ) : (
-            sliced.map((event, i) => <ActivityRow key={event.id} event={event} firstRow={i === 0} />)
-          )}
-        </div>
-        {hasMore && (
-          <button
-            type="button"
-            className="island-btn"
-            onClick={() => onNavigate("community")}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "10px 12px",
+            borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
+            flexWrap: "wrap",
+            alignItems: "center"
+          }}
+        >
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search activity…"
+            aria-label="Search activity"
             style={{
-              display: "block",
-              width: "100%",
-              padding: "12px 16px",
-              background: "transparent",
-              border: "none",
-              borderTop: `1px solid ${islandTheme.color.cardBorder}`,
-              color: islandTheme.color.primaryGlow,
+              ...islandInputStyle,
+              flex: "1 1 200px",
+              minWidth: 160,
               fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-              textAlign: "center",
+              padding: "0.4rem 0.6rem",
               font: "inherit"
             }}
+          />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as ActivitySort)}
+            aria-label="Sort activity"
+            style={{
+              ...islandInputStyle,
+              fontSize: 13,
+              padding: "0.4rem 0.55rem",
+              font: "inherit",
+              cursor: "pointer"
+            }}
           >
-            View full feed — {visible.length - ACTIVITY_FEED_LIMIT} more event{visible.length - ACTIVITY_FEED_LIMIT !== 1 ? "s" : ""} →
-          </button>
-        )}
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="type">By type</option>
+          </select>
+          <select
+            value={dateRange}
+            onChange={(e) => setDateRange(e.target.value as ActivityDateRange)}
+            aria-label="Filter by date range"
+            style={{
+              ...islandInputStyle,
+              fontSize: 13,
+              padding: "0.4rem 0.55rem",
+              font: "inherit",
+              cursor: "pointer"
+            }}
+          >
+            <option value="all">All time</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+            <option value="30d">Last 30 days</option>
+          </select>
+          <span
+            className="island-mono"
+            style={{
+              marginLeft: "auto",
+              fontSize: 11,
+              color: islandTheme.color.textMuted,
+              whiteSpace: "nowrap"
+            }}
+          >
+            {visible.length} of {events.length}
+            {filtersActive ? " (filtered)" : ""}
+          </span>
+        </div>
+
+        <div
+          style={{
+            padding: 6,
+            maxHeight: 600,
+            overflowY: "auto"
+          }}
+        >
+          {visible.length === 0 ? (
+            <div
+              style={{
+                padding: "28px 14px",
+                fontSize: 13,
+                color: islandTheme.color.textMuted,
+                textAlign: "center",
+                lineHeight: 1.55
+              }}
+            >
+              {events.length === 0
+                ? "No island activity yet — schedule a game night or sync your library to get the dock buzzing."
+                : filtersActive
+                  ? "No events match these filters. Try a different category, date range, or search term."
+                  : "Nothing in this category right now."}
+            </div>
+          ) : (
+            visible.map((event, i) => <ActivityRow key={event.id} event={event} firstRow={i === 0} />)
+          )}
+
+          <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />
+
+          {loadingMore && (
+            <div
+              role="status"
+              style={{
+                padding: "12px 14px",
+                fontSize: 12,
+                color: islandTheme.color.textMuted,
+                textAlign: "center"
+              }}
+            >
+              Loading more activity…
+            </div>
+          )}
+
+          {errorMsg && (
+            <div
+              role="alert"
+              style={{
+                padding: "10px 14px",
+                fontSize: 12,
+                color: islandTheme.color.dangerAccent,
+                textAlign: "center",
+                display: "flex",
+                gap: 8,
+                justifyContent: "center",
+                alignItems: "center",
+                flexWrap: "wrap"
+              }}
+            >
+              <span>{errorMsg}</span>
+              <button
+                type="button"
+                className="island-btn"
+                onClick={() => void loadMore()}
+                style={{
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  background: "transparent",
+                  color: islandTheme.color.textPrimary,
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "3px 10px",
+                  borderRadius: 999,
+                  cursor: "pointer",
+                  font: "inherit"
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {reachedEnd && !loadingMore && !errorMsg && events.length > 0 && (
+            <div
+              style={{
+                padding: "10px 14px",
+                fontSize: 11,
+                color: islandTheme.color.textMuted,
+                textAlign: "center",
+                fontFamily: islandTheme.font.mono
+              }}
+            >
+              End of feed · {events.length} event{events.length === 1 ? "" : "s"} loaded
+            </div>
+          )}
+        </div>
+
+        <button
+          type="button"
+          className="island-btn"
+          onClick={() => onNavigate("community")}
+          style={{
+            display: "block",
+            width: "100%",
+            padding: "12px 16px",
+            background: "transparent",
+            border: "none",
+            borderTop: `1px solid ${islandTheme.color.cardBorder}`,
+            color: islandTheme.color.primaryGlow,
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            textAlign: "center",
+            font: "inherit"
+          }}
+        >
+          Open community feed →
+        </button>
       </IslandCard>
     </section>
   );

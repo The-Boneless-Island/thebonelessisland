@@ -4,6 +4,7 @@ import {
   type GameState,
   gameInternals
 } from "../nuggiesGames.js";
+import { checkGameAchievementsByUserId } from "../nuggiesAchievements.js";
 
 type CoinflipInput = { call: "heads" | "tails" };
 
@@ -38,6 +39,9 @@ export const coinflipHandler: GameHandler<CoinflipInput> = {
 
     // Stateless game: clear the active-game slot inside the same txn.
     await gameInternals.deleteActiveGame(ctx.client, sessionId);
+
+    // Phase 4 achievements (HIGH ROLLER / LUCKY STREAK / WHALE / etc.)
+    void checkGameAchievementsByUserId(ctx.userId, { game: "coinflip", net, bet });
 
     const state: GameState = {
       sessionId,

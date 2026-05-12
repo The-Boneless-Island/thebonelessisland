@@ -47,13 +47,13 @@ export function SettingsPage({
 
   return (
     <IslandCard style={{ marginTop: 10 }}>
-      <h2 style={{ marginTop: 0 }}>Settings</h2>
+      <h2 style={{ marginTop: 0 }}>Account Settings</h2>
       <p style={{ marginTop: 0, opacity: 0.9, ...islandTheme.prose.readable }}>
         Manage your account preferences, Steam connection, and privacy options.
       </p>
 
       {/* ── Steam ── */}
-      <IslandCard as="div" style={{ marginTop: 8 }}>
+      <IslandCard as="div" style={{ marginTop: 8, maxWidth: islandTheme.layout.formMaxWidth }}>
         <h3 style={{ marginTop: 0, marginBottom: 12 }}>Steam</h3>
         {steamLinked ? (
           <div
@@ -172,7 +172,7 @@ export function SettingsPage({
       </IslandCard>
 
       {/* ── Privacy & Library ── */}
-      <IslandCard as="div" style={{ marginTop: 8 }}>
+      <IslandCard as="div" style={{ marginTop: 8, maxWidth: islandTheme.layout.formMaxWidth }}>
         <h3 style={{ marginTop: 0, marginBottom: 8 }}>Privacy &amp; Library</h3>
         <p style={{ marginTop: 0, marginBottom: 8 }}>Steam library visibility</p>
         <select
@@ -238,7 +238,7 @@ export function SettingsPage({
       </IslandCard>
 
       {/* ── Preferences ── */}
-      <IslandCard as="div" style={{ marginTop: 8 }}>
+      <IslandCard as="div" style={{ marginTop: 8, maxWidth: islandTheme.layout.formMaxWidth }}>
         <h3 style={{ marginTop: 0, marginBottom: 8 }}>Preferences</h3>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <input

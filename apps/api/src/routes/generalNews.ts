@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "../db/client.js";
-import { requireSession } from "../lib/auth.js";
+import { requireParentRole, requireSession } from "../lib/auth.js";
 import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration } from "../lib/generalNewsIngestion.js";
 
 export const generalNewsRouter = Router();
@@ -25,6 +25,8 @@ type GeneralNewsRow = {
   ai_label: string | null;
   ai_spoiler_warning: boolean;
   ai_game_title: string | null;
+  ai_title: string | null;
+  ai_sources: string[] | null;
   upvotes: number;
   downvotes: number;
 };
@@ -57,7 +59,9 @@ generalNewsRouter.get("/general", async (_req, res) => {
           gn.ai_why_recommended,
           gn.ai_label,
           gn.ai_spoiler_warning,
-          gn.ai_game_title
+          gn.ai_game_title,
+          gn.ai_title,
+          gn.ai_sources
         FROM general_news gn
         LEFT JOIN LATERAL (
           SELECT
@@ -67,6 +71,7 @@ generalNewsRouter.get("/general", async (_req, res) => {
           WHERE news_id = gn.id
         ) fb ON true
         WHERE COALESCE(gn.ai_relevance_score, 1) > 0
+          AND gn.ai_validation_failed = FALSE
         ORDER BY (COALESCE(gn.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes * 0.5) * 0.08) DESC, gn.published_at DESC
         LIMIT 50
       `
@@ -92,6 +97,8 @@ generalNewsRouter.get("/general", async (_req, res) => {
       aiLabel: row.ai_label as "top_news" | "community" | "personal" | null,
       aiSpoilerWarning: row.ai_spoiler_warning,
       aiGameTitle: row.ai_game_title,
+      aiTitle: row.ai_title,
+      aiSources: row.ai_sources,
       upvotes: row.upvotes,
       downvotes: row.downvotes
     }));
@@ -150,28 +157,129 @@ generalNewsRouter.get("/general/debug-tags", async (_req, res) => {
   }
 });
 
-/**
- * POST /news/general/recurate
- * Admin endpoint — reset curation on all rows then run a curation pass.
- * Use this after prompt changes to regenerate all summaries.
- */
-generalNewsRouter.post("/general/recurate", async (_req, res) => {
+// ── Recurate Job (background, polled by client) ───────────────────────────────
+
+type RecurateJobState = "idle" | "running" | "done" | "error";
+
+type RecurateJob = {
+  state: RecurateJobState;
+  startedAt: number | null;
+  finishedAt: number | null;
+  reset: number;     // rows reset (also = total to curate)
+  curated: number;   // rows curated so far
+  total: number;     // = reset, snapshot for display
+  error: string | null;
+};
+
+let recurateJob: RecurateJob = {
+  state: "idle",
+  startedAt: null,
+  finishedAt: null,
+  reset: 0,
+  curated: 0,
+  total: 0,
+  error: null
+};
+
+const RECURATE_MAX_PASSES = 50; // hard safety: 50 × 25 = 1250 articles cap
+const RECURATE_BATCH_PAUSE_MS = 250;
+
+async function runRecurateJob(): Promise<void> {
+  recurateJob = {
+    state: "running",
+    startedAt: Date.now(),
+    finishedAt: null,
+    reset: 0,
+    curated: 0,
+    total: 0,
+    error: null
+  };
   try {
     const reset = await resetAllCuration();
-    let totalCurated = 0;
-    for (let i = 0; i < 20; i++) {
+    recurateJob.reset = reset;
+    recurateJob.total = reset;
+
+    for (let pass = 0; pass < RECURATE_MAX_PASSES; pass++) {
       const curated = await curateUncuratedGeneralNews();
-      totalCurated += curated;
+      recurateJob.curated += curated;
       const { rows } = await db.query(
         `SELECT 1 FROM general_news WHERE ai_curated_at IS NULL LIMIT 1`
       );
       if (rows.length === 0) break;
+      // Tiny breather so a stuck/empty batch can't tight-loop the AI provider
+      if (curated === 0) break;
+      await new Promise((resolve) => setTimeout(resolve, RECURATE_BATCH_PAUSE_MS));
     }
-    res.json({ ok: true, reset, curated: totalCurated });
+    recurateJob.state = "done";
+    recurateJob.finishedAt = Date.now();
   } catch (err) {
-    console.error("[generalNews] POST /news/general/recurate error:", err);
-    res.status(500).json({ ok: false, error: "Recurate failed" });
+    recurateJob.state = "error";
+    recurateJob.finishedAt = Date.now();
+    recurateJob.error = err instanceof Error ? err.message : String(err);
+    console.error("[generalNews] recurate job error:", err);
   }
+}
+
+/**
+ * POST /news/general/recurate
+ * Admin endpoint — kicks off background re-curation. Returns 202 immediately.
+ * Poll /news/general/recurate/status for progress.
+ */
+generalNewsRouter.post("/general/recurate", (_req, res) => {
+  if (recurateJob.state === "running") {
+    res.status(409).json({ ok: false, error: "Recurate already running", job: recurateJob });
+    return;
+  }
+  // Fire and forget — runner updates module-level job state
+  runRecurateJob().catch((err) => {
+    console.error("[generalNews] runRecurateJob unhandled:", err);
+  });
+  res.status(202).json({ ok: true, job: recurateJob });
+});
+
+/**
+ * GET /news/general/recurate/status
+ * Returns current/last recurate job snapshot for client polling.
+ */
+generalNewsRouter.get("/general/recurate/status", (_req, res) => {
+  res.json({ ok: true, job: recurateJob });
+});
+
+/**
+ * GET /news/general/validation-failures
+ * Admin — counts + recent failures from the AI curation pipeline.
+ */
+generalNewsRouter.get("/general/validation-failures", requireSession, requireParentRole, async (_req, res) => {
+  const countRow = await db.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM general_news WHERE ai_validation_failed = TRUE`
+  );
+  const recentRows = await db.query<{
+    id: number;
+    title: string;
+    source_name: string;
+    ai_last_validation_errors: string[] | null;
+    ai_retry_count: number;
+    ai_curated_at: string;
+  }>(
+    `
+      SELECT id, title, source_name, ai_last_validation_errors, ai_retry_count, ai_curated_at
+      FROM general_news
+      WHERE ai_validation_failed = TRUE
+      ORDER BY ai_curated_at DESC NULLS LAST
+      LIMIT 20
+    `
+  );
+  res.json({
+    count: parseInt(countRow.rows[0]?.count ?? "0", 10),
+    recent: recentRows.rows.map((r) => ({
+      id: r.id,
+      title: r.title,
+      sourceName: r.source_name,
+      errors: r.ai_last_validation_errors ?? [],
+      retryCount: r.ai_retry_count,
+      curatedAt: r.ai_curated_at
+    }))
+  });
 });
 
 /**

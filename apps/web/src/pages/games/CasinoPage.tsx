@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { IslandCard, IslandTag, islandTagStyle } from "../../islandUi.js";
+import { NuggieCoin } from "../../components/NuggieCoin.js";
 import { islandTheme } from "../../theme.js";
 import { apiFetch } from "../../api/client.js";
 import { getActiveGameSession, type GameStateResponse } from "../../api/games.js";
@@ -28,7 +29,7 @@ const GAME_CARDS: Array<{
   },
   {
     view: "guessnumber",
-    title: "Guess Number",
+    title: "Hi-Lo",
     emoji: "🎯",
     blurb: "Pick 1–10. Hit the secret number for a big multiplier.",
     accent: "#38bdf8",
@@ -45,11 +46,13 @@ const GAME_CARDS: Array<{
 ];
 
 const DEFAULT_MAX_BET = 500;
+const DEFAULT_COOLDOWN_SECS = 3;
 
 export function CasinoPage() {
   const [view, setView] = useState<View>("lobby");
   const [balance, setBalance] = useState<number | null>(null);
   const [maxBet, setMaxBet] = useState<number>(DEFAULT_MAX_BET);
+  const [cooldownSecs, setCooldownSecs] = useState<number>(DEFAULT_COOLDOWN_SECS);
   const [active, setActive] = useState<GameStateResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -93,6 +96,11 @@ export function CasinoPage() {
         const n = parseInt(mb.value, 10);
         if (Number.isFinite(n) && n > 0) setMaxBet(n);
       }
+      const cd = data.settings?.find((s) => s.key === "nuggies_game_cooldown_secs");
+      if (cd?.value) {
+        const n = parseInt(cd.value, 10);
+        if (Number.isFinite(n) && n >= 0) setCooldownSecs(n);
+      }
     }).catch(() => {});
   }, []);
 
@@ -105,7 +113,7 @@ export function CasinoPage() {
     return (
       <div style={{ display: "grid", gap: 16 }}>
         <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(24px, 3vw, 32px)" }}>
-          Casino
+          The Arcade
         </h1>
         <div style={{ fontSize: 14, color: islandTheme.color.textMuted }}>Loading…</div>
       </div>
@@ -154,13 +162,16 @@ export function CasinoPage() {
             fontSize: 11,
             textTransform: "uppercase",
             letterSpacing: "0.1em",
-            color: islandTheme.color.textMuted
+            color: islandTheme.color.textMuted,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6
           }}
         >
-          🍗 Nuggies · Casino
+          <NuggieCoin size={14} /> Nuggies · The Arcade
         </span>
         <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(28px, 4vw, 38px)", fontWeight: 800 }}>
-          Casino
+          The Arcade
         </h1>
         <p
           style={{
@@ -177,7 +188,7 @@ export function CasinoPage() {
       </header>
 
       {/* Balance + active-game banner */}
-      <BalanceStrip balance={balance} maxBet={maxBet} />
+      <BalanceStrip balance={balance} maxBet={maxBet} cooldownSecs={cooldownSecs} />
 
       {active && (
         <ResumeBanner
@@ -205,7 +216,7 @@ export function CasinoPage() {
   );
 }
 
-function BalanceStrip({ balance, maxBet }: { balance: number | null; maxBet: number }) {
+function BalanceStrip({ balance, maxBet, cooldownSecs }: { balance: number | null; maxBet: number; cooldownSecs: number }) {
   return (
     <IslandCard
       style={{
@@ -229,7 +240,7 @@ function BalanceStrip({ balance, maxBet }: { balance: number | null; maxBet: num
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", gap: 8 }}>
         <IslandTag tone="warning">Max bet ₦{maxBet}</IslandTag>
-        <IslandTag tone="default">Cooldown 120s</IslandTag>
+        <IslandTag tone="default">Cooldown {cooldownSecs}s</IslandTag>
       </div>
     </IslandCard>
   );

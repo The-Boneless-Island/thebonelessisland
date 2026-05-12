@@ -43,6 +43,14 @@ const KNOWN_GENRES = new Set([
 
 const KNOWN_PLATFORMS = new Set(["PC", "PlayStation", "Xbox", "Nintendo", "Mobile", "VR"]);
 
+function prettyHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
 type NewsTab = "all" | "top_news" | "community" | "personal";
 
 const NEWS_TABS: Array<{ id: NewsTab; label: string; emoji: string }> = [
@@ -64,7 +72,8 @@ const LABEL_LABELS: Record<string, string> = {
   personal: "🎮 Crew pick"
 };
 
-const NEWS_PAGE_SIZE = 8;
+const FEATURED_COUNT = 4;   // 1 hero + 3 small
+const LIST_INITIAL = 10;    // list rows shown before "Load more"
 
 // ── Filter Pill Row ───────────────────────────────────────────────────────────
 
@@ -113,6 +122,19 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   const [showAll, setShowAll] = useState(false);
   const [revealedSpoilers, setRevealedSpoilers] = useState<Set<string>>(new Set());
   const [activeArticle, setActiveArticle] = useState<GeneralNewsItem | null>(null);
+  const [userVotes, setUserVotes] = useState<Record<number, 1 | -1 | 0>>({});
+
+  function handleVote(articleId: number, dir: 1 | -1) {
+    const current = userVotes[articleId] ?? 0;
+    const next: 0 | 1 | -1 = current === dir ? 0 : dir;
+    setUserVotes((prev) => ({ ...prev, [articleId]: next }));
+    fetch(`/api/news/general/${articleId}/feedback`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ rating: next }),
+      credentials: "include"
+    }).catch(() => {});
+  }
 
   function handleTagClick(tag: string) {
     setActiveTags((prev) => {
@@ -164,9 +186,10 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   }, [news, tab, activeTags, sortMode]);
 
   const hero = filtered[0] ?? null;
-  const rest = filtered.slice(1);
-  const visibleRest = showAll ? rest : rest.slice(0, NEWS_PAGE_SIZE - 1);
-  const hasMore = rest.length > NEWS_PAGE_SIZE - 1 && !showAll;
+  const featuredSmall = filtered.slice(1, FEATURED_COUNT);
+  const rest = filtered.slice(FEATURED_COUNT);
+  const visibleRest = showAll ? rest : rest.slice(0, LIST_INITIAL);
+  const hasMore = rest.length > LIST_INITIAL && !showAll;
 
   function revealSpoiler(id: string) {
     setRevealedSpoilers((prev) => new Set([...prev, id]));
@@ -174,6 +197,28 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
 
   return (
     <>
+      <style>{`
+        .news-featured-rail {
+          display: grid;
+          grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+          gap: 10px;
+        }
+        .news-featured-small {
+          display: grid;
+          gap: 10px;
+          grid-auto-rows: 1fr;
+        }
+        @media (max-width: 820px) {
+          .news-featured-rail { grid-template-columns: 1fr; }
+          .news-featured-small {
+            grid-auto-rows: auto;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+        @media (max-width: 520px) {
+          .news-featured-small { grid-template-columns: 1fr; }
+        }
+      `}</style>
       <section style={{ display: "grid", gap: 14 }}>
         {/* Tab bar */}
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
@@ -307,32 +352,50 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
           </IslandCard>
         ) : (
           <>
-            {hero && (
-              <NewsHeroCard
-                item={hero}
-                spoilerRevealed={revealedSpoilers.has(hero.externalId)}
-                onRevealSpoiler={() => revealSpoiler(hero.externalId)}
-                onOpen={() => setActiveArticle(hero)}
-                onTagClick={handleTagClick}
-              />
+            {(hero || featuredSmall.length > 0) && (
+              <div className="news-featured-rail">
+                {hero && (
+                  <NewsHeroCard
+                    item={hero}
+                    spoilerRevealed={revealedSpoilers.has(hero.externalId)}
+                    onRevealSpoiler={() => revealSpoiler(hero.externalId)}
+                    onOpen={() => setActiveArticle(hero)}
+                    onTagClick={handleTagClick}
+                    userVote={userVotes[hero.id] ?? 0}
+                    onVote={(dir) => handleVote(hero.id, dir)}
+                  />
+                )}
+                {featuredSmall.length > 0 && (
+                  <div className="news-featured-small">
+                    {featuredSmall.map((item) => (
+                      <NewsCard
+                        key={item.externalId}
+                        item={item}
+                        spoilerRevealed={revealedSpoilers.has(item.externalId)}
+                        onRevealSpoiler={() => revealSpoiler(item.externalId)}
+                        onOpen={() => setActiveArticle(item)}
+                        onTagClick={handleTagClick}
+                        userVote={userVotes[item.id] ?? 0}
+                        onVote={(dir) => handleVote(item.id, dir)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
 
             {visibleRest.length > 0 && (
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))",
-                  gap: 10
-                }}
-              >
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {visibleRest.map((item) => (
-                  <NewsCard
+                  <NewsListRow
                     key={item.externalId}
                     item={item}
                     spoilerRevealed={revealedSpoilers.has(item.externalId)}
                     onRevealSpoiler={() => revealSpoiler(item.externalId)}
                     onOpen={() => setActiveArticle(item)}
                     onTagClick={handleTagClick}
+                    userVote={userVotes[item.id] ?? 0}
+                    onVote={(dir) => handleVote(item.id, dir)}
                   />
                 ))}
               </div>
@@ -354,7 +417,7 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
                   font: "inherit"
                 }}
               >
-                {rest.length - (NEWS_PAGE_SIZE - 1)} more stories from the shore →
+                {rest.length - LIST_INITIAL} more stories from the shore →
               </button>
             )}
           </>
@@ -362,7 +425,12 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
       </section>
 
       {activeArticle && (
-        <NewsArticleModal item={activeArticle} onClose={() => setActiveArticle(null)} />
+        <NewsArticleModal
+          item={activeArticle}
+          userVote={userVotes[activeArticle.id] ?? 0}
+          onVote={(dir) => handleVote(activeArticle.id, dir)}
+          onClose={() => setActiveArticle(null)}
+        />
       )}
     </>
   );
@@ -422,22 +490,25 @@ function NewsHeroCard({
   spoilerRevealed,
   onRevealSpoiler,
   onOpen,
-  onTagClick
+  onTagClick,
+  userVote,
+  onVote
 }: {
   item: GeneralNewsItem;
   spoilerRevealed: boolean;
   onRevealSpoiler: () => void;
   onOpen: () => void;
   onTagClick?: (tag: string) => void;
+  userVote: 1 | -1 | 0;
+  onVote: (dir: 1 | -1) => void;
 }) {
   const { mode } = useDayNight();
-  const [userVote, setUserVote] = useState<1 | -1 | 0>(0);
 
   const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
   const summary = item.aiSummary ?? truncateContents(item.contents, 200);
   const labelColor = LABEL_COLORS[item.aiLabel ?? ""] ?? islandTheme.color.textMuted;
   const labelText = LABEL_LABELS[item.aiLabel ?? ""] ?? null;
-  const displayTags = (item.aiTags ?? []).slice(0, 4);
+  const displayTags = (item.aiTags ?? []).slice(0, 3);
   const whyText =
     item.aiWhyRecommended ??
     ((item.matchedTags?.length ?? 0) > 0
@@ -456,14 +527,7 @@ function NewsHeroCard({
 
   function handleVote(e: React.MouseEvent, dir: 1 | -1) {
     e.stopPropagation();
-    const next: 0 | 1 | -1 = userVote === dir ? 0 : dir;
-    setUserVote(next);
-    fetch(`/api/news/general/${item.id}/feedback`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rating: next }),
-      credentials: "include"
-    }).catch(() => {});
+    onVote(dir);
   }
 
   return (
@@ -512,7 +576,7 @@ function NewsHeroCard({
           className="island-display"
           style={{ margin: 0, fontSize: "clamp(15px, 2vw, 19px)", lineHeight: 1.15, color: islandTheme.color.textPrimary }}
         >
-          {item.title}
+          {item.aiTitle ?? item.title}
         </h3>
 
         {item.aiSubtitle && (
@@ -593,16 +657,18 @@ function NewsCard({
   spoilerRevealed,
   onRevealSpoiler,
   onOpen,
-  onTagClick
+  onTagClick,
+  userVote,
+  onVote
 }: {
   item: GeneralNewsItem;
   spoilerRevealed: boolean;
   onRevealSpoiler: () => void;
   onOpen: () => void;
   onTagClick?: (tag: string) => void;
+  userVote: 1 | -1 | 0;
+  onVote: (dir: 1 | -1) => void;
 }) {
-  const [userVote, setUserVote] = useState<1 | -1 | 0>(0);
-
   const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
   const summary = item.aiSummary ?? truncateContents(item.contents, 180);
   const displayTags = (item.aiTags ?? []).slice(0, 3);
@@ -619,14 +685,7 @@ function NewsCard({
 
   function handleVote(e: React.MouseEvent, dir: 1 | -1) {
     e.stopPropagation();
-    const next: 0 | 1 | -1 = userVote === dir ? 0 : dir;
-    setUserVote(next);
-    fetch(`/api/news/general/${item.id}/feedback`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ rating: next }),
-      credentials: "include"
-    }).catch(() => {});
+    onVote(dir);
   }
 
   return (
@@ -701,7 +760,7 @@ function NewsCard({
               WebkitBoxOrient: "vertical"
             }}
           >
-            {item.title}
+            {item.aiTitle ?? item.title}
           </div>
           {item.aiSubtitle && (
             <div
@@ -797,6 +856,170 @@ function NewsCard({
   );
 }
 
+// ── List Row ──────────────────────────────────────────────────────────────────
+
+function NewsListRow({
+  item,
+  spoilerRevealed,
+  onOpen,
+  onTagClick,
+  userVote,
+  onVote
+}: {
+  item: GeneralNewsItem;
+  spoilerRevealed: boolean;
+  onRevealSpoiler: () => void;
+  onOpen: () => void;
+  onTagClick?: (tag: string) => void;
+  userVote: 1 | -1 | 0;
+  onVote: (dir: 1 | -1) => void;
+}) {
+  const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
+  const displayTags = (item.aiTags ?? []).slice(0, 3);
+  const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
+  const ago = relativeAgo(item.publishedAt);
+
+  function handleShare(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (navigator.share) {
+      navigator.share({ title: item.title, url: item.url }).catch(() => {});
+    } else {
+      navigator.clipboard?.writeText(item.url).catch(() => {});
+    }
+  }
+
+  function handleVote(e: React.MouseEvent, dir: 1 | -1) {
+    e.stopPropagation();
+    onVote(dir);
+  }
+
+  return (
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpen(); }}
+      style={{
+        display: "grid",
+        gridTemplateColumns: "80px minmax(0, 1fr) auto auto auto",
+        alignItems: "center",
+        gap: 12,
+        padding: "8px 12px",
+        borderRadius: islandTheme.radius.control,
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${islandTheme.color.cardBorder}`,
+        cursor: "pointer",
+        transition: `border-color ${islandTheme.motion.dur.fast} ease, transform ${islandTheme.motion.dur.fast} ease`,
+        boxSizing: "border-box"
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = islandTheme.color.primaryGlow;
+        e.currentTarget.style.transform = "translateY(-1px)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = islandTheme.color.cardBorder;
+        e.currentTarget.style.transform = "translateY(0)";
+      }}
+    >
+      {item.imageUrl ? (
+        <img
+          src={item.imageUrl}
+          alt=""
+          style={{ width: 80, height: 60, borderRadius: 6, objectFit: "cover", display: "block" }}
+        />
+      ) : (
+        <div
+          style={{
+            width: 80,
+            height: 60,
+            borderRadius: 6,
+            background: islandTheme.color.panelBg,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 22
+          }}
+        >
+          📰
+        </div>
+      )}
+
+      <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+        <div
+          style={{
+            fontSize: 14,
+            fontWeight: 700,
+            lineHeight: 1.3,
+            color: islandTheme.color.textPrimary,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap"
+          }}
+        >
+          {item.aiTitle ?? item.title}
+        </div>
+        <div
+          className="island-mono"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 10,
+            color: islandTheme.color.textMuted,
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap"
+          }}
+        >
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{item.sourceName}</span>
+          {ago ? <span aria-hidden="true">·</span> : null}
+          {ago ? <span>{ago}</span> : null}
+          {isSpoiler ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span style={{ color: "#f59e0b" }} title="Spoiler — open to reveal">⚠ spoiler</span>
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 4, flexWrap: "nowrap" }}>
+        {displayTags.map((tag) => (
+          <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={handleShare}
+        aria-label="Share article"
+        title="Share article"
+        style={{
+          background: "transparent",
+          border: "none",
+          color: islandTheme.color.textMuted,
+          cursor: "pointer",
+          padding: "2px 4px",
+          borderRadius: 6,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          font: "inherit",
+          transition: `color ${islandTheme.motion.dur.fast} ease`
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = islandTheme.color.textSubtle; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = islandTheme.color.textMuted; }}
+      >
+        <ShareIcon />
+      </button>
+
+      <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} size="compact" />
+    </article>
+  );
+}
+
 // ── Shared Sub-Components ─────────────────────────────────────────────────────
 
 function TagPill({ tag, onTagClick }: { tag: string; onTagClick?: (tag: string) => void }) {
@@ -814,11 +1037,15 @@ type VoteControlsProps = {
   userVote: 1 | -1 | 0;
   netVotes: number;
   onVote: (e: React.MouseEvent, dir: 1 | -1) => void;
+  size?: "default" | "compact";
 };
 
-function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
+function VoteControls({ userVote, netVotes, onVote, size = "default" }: VoteControlsProps) {
+  const compact = size === "compact";
+  const buttonPad = compact ? "2px 3px" : "3px 4px";
+  const countSize = compact ? 10 : 11;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: compact ? 1 : 2 }}>
       <button
         type="button"
         onClick={(e) => onVote(e, 1)}
@@ -831,7 +1058,7 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
           borderRadius: 4,
           color: userVote === 1 ? islandTheme.color.successAccent : islandTheme.color.textMuted,
           cursor: "pointer",
-          padding: "3px 4px",
+          padding: buttonPad,
           display: "flex",
           alignItems: "center",
           font: "inherit",
@@ -843,7 +1070,7 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
       <span
         className="island-mono"
         style={{
-          fontSize: 11,
+          fontSize: countSize,
           fontWeight: 700,
           color: netVotes > 0 ? islandTheme.color.successAccent : netVotes < 0 ? islandTheme.color.dangerAccent : islandTheme.color.textMuted,
           minWidth: 16,
@@ -865,7 +1092,7 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
           borderRadius: 4,
           color: userVote === -1 ? islandTheme.color.dangerAccent : islandTheme.color.textMuted,
           cursor: "pointer",
-          padding: "3px 4px",
+          padding: buttonPad,
           display: "flex",
           alignItems: "center",
           font: "inherit",
@@ -880,11 +1107,27 @@ function VoteControls({ userVote, netVotes, onVote }: VoteControlsProps) {
 
 // ── Article Modal ─────────────────────────────────────────────────────────────
 
-function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: () => void }) {
+function NewsArticleModal({
+  item,
+  userVote,
+  onVote,
+  onClose
+}: {
+  item: GeneralNewsItem;
+  userVote: 1 | -1 | 0;
+  onVote: (dir: 1 | -1) => void;
+  onClose: () => void;
+}) {
   const labelColor = LABEL_COLORS[item.aiLabel ?? ""] ?? islandTheme.color.textMuted;
   const labelText = LABEL_LABELS[item.aiLabel ?? ""] ?? null;
-  const fullText = truncateContents(item.contents, 2000);
   const ago = relativeAgo(item.publishedAt);
+  const displayTags = (item.aiTags ?? []).slice(0, 3);
+  const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
+
+  function handleVote(e: React.MouseEvent, dir: 1 | -1) {
+    e.stopPropagation();
+    onVote(dir);
+  }
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -990,10 +1233,20 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
 
         <h2
           className="island-display"
-          style={{ margin: "0 0 18px", fontSize: "clamp(20px, 3vw, 26px)", lineHeight: 1.15, fontWeight: 800 }}
+          style={{ margin: "0 0 12px", fontSize: "clamp(20px, 3vw, 26px)", lineHeight: 1.15, fontWeight: 800 }}
         >
-          {item.title}
+          {item.aiTitle ?? item.title}
         </h2>
+
+        {displayTags.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+            {displayTags.map((tag) => (
+              <IslandTag key={tag} color={getTagColor(tag)}>
+                {tag}
+              </IslandTag>
+            ))}
+          </div>
+        )}
 
         {item.aiSummary && (
           <div
@@ -1006,14 +1259,23 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
             }}
           >
             <div
-              className="island-mono"
-              style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.primaryGlow, marginBottom: 6 }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+                marginBottom: 10
+              }}
             >
-              AI Summary
+              <span
+                className="island-mono"
+                style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.primaryGlow }}
+              >
+                AI Summary
+              </span>
+              <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} />
             </div>
-            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.6, color: islandTheme.color.textPrimary }}>
-              {item.aiSummary}
-            </p>
+            <FormattedSummary text={item.aiSummary} />
           </div>
         )}
 
@@ -1029,9 +1291,9 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
           >
             <div
               className="island-mono"
-              style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.successAccent, marginBottom: 6 }}
+              style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.successAccent, marginBottom: 8, fontWeight: 700 }}
             >
-              Why it's relevant to your crew
+              Why This Matters to Boneless Island
             </div>
             {item.aiWhyRecommended && (
               <p style={{ margin: "0 0 6px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
@@ -1049,17 +1311,28 @@ function NewsArticleModal({ item, onClose }: { item: GeneralNewsItem; onClose: (
           </div>
         )}
 
-        {fullText && (
-          <div style={{ marginBottom: 24 }}>
+        {item.aiSources && item.aiSources.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
             <div
               className="island-mono"
-              style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted, marginBottom: 10 }}
+              style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted, marginBottom: 8, fontWeight: 700 }}
             >
-              Article
+              Sources
             </div>
-            <p style={{ margin: 0, fontSize: 14, lineHeight: 1.7, color: islandTheme.color.textSubtle }}>
-              {fullText}
-            </p>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
+              {item.aiSources.map((url) => (
+                <li key={url}>
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: islandTheme.color.primaryGlow, textDecoration: "none" }}
+                  >
+                    {prettyHost(url)}
+                  </a>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -1205,6 +1478,64 @@ function ThumbDownIcon() {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+function FormattedSummary({ text }: { text: string }) {
+  const lines = text.split("\n");
+  const blocks: Array<{ kind: "p" | "ul"; lines: string[] }> = [];
+  let cur: { kind: "p" | "ul"; lines: string[] } | null = null;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) {
+      cur = null;
+      continue;
+    }
+    const isBullet = /^[-*•]\s+/.test(line);
+    const kind: "p" | "ul" = isBullet ? "ul" : "p";
+    if (!cur || cur.kind !== kind) {
+      cur = { kind, lines: [] };
+      blocks.push(cur);
+    }
+    cur.lines.push(isBullet ? line.replace(/^[-*•]\s+/, "") : line);
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      {blocks.map((b, i) =>
+        b.kind === "ul" ? (
+          <ul
+            key={i}
+            style={{
+              margin: 0,
+              paddingLeft: 22,
+              fontSize: 14,
+              lineHeight: 1.6,
+              color: islandTheme.color.textPrimary
+            }}
+          >
+            {b.lines.map((l, j) => (
+              <li key={j} style={{ marginBottom: 4 }}>
+                {l}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p
+            key={i}
+            style={{
+              margin: 0,
+              fontSize: 14,
+              lineHeight: 1.6,
+              color: islandTheme.color.textPrimary
+            }}
+          >
+            {b.lines.join(" ")}
+          </p>
+        )
+      )}
+    </div>
+  );
+}
 
 function truncateContents(contents: string | null, maxChars: number): string | null {
   if (!contents) return null;

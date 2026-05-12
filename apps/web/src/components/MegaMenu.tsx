@@ -38,9 +38,9 @@ const NAV_GROUPS: NavGroup[] = [
     defaultId: "nuggies",
     children: [
       { id: "nuggies", label: "Balance & Shop", description: "Your balance and the item shop" },
-      { id: "nuggies-casino", label: "Casino", description: "Coinflip, blackjack, guess number" },
+      { id: "nuggies-casino", label: "The Arcade", description: "Coinflip, blackjack, hi-lo" },
       { id: "nuggies-history", label: "History", description: "Your transaction log", badge: "soon" },
-      { id: "nuggies-milestones", label: "Milestones", description: "Badges and achievement tracking", badge: "soon" }
+      { id: "nuggies-milestones", label: "Milestones", description: "Rank ladder + achievements" }
     ]
   }
 ];
@@ -190,10 +190,11 @@ function DesktopGroupItem({
             top: "calc(100% + 6px)",
             left: 0,
             zIndex: 50,
-            minWidth: 240,
-            background: islandTheme.color.panelBg,
-            backdropFilter: "blur(20px) saturate(160%)",
-            WebkitBackdropFilter: "blur(20px) saturate(160%)",
+            minWidth: islandTheme.layout.menuMinWidth,
+            maxWidth: islandTheme.layout.menuMaxWidth,
+            background: islandTheme.color.menuBg,
+            backdropFilter: islandTheme.glass.blurMenu,
+            WebkitBackdropFilter: islandTheme.glass.blurMenu,
             border: `1px solid ${islandTheme.color.cardBorder}`,
             borderRadius: 14,
             padding: 6,
@@ -325,10 +326,10 @@ function MobileOverlay({
           top: 0,
           right: 0,
           bottom: 0,
-          width: "min(340px, 90vw)",
-          background: islandTheme.color.panelBg,
-          backdropFilter: "blur(24px) saturate(160%)",
-          WebkitBackdropFilter: "blur(24px) saturate(160%)",
+          width: `min(${islandTheme.layout.menuMobileMaxWidth}px, calc(100vw - 16px))`,
+          background: islandTheme.color.menuBg,
+          backdropFilter: islandTheme.glass.blurMenu,
+          WebkitBackdropFilter: islandTheme.glass.blurMenu,
           borderLeft: `1px solid ${islandTheme.color.cardBorder}`,
           display: "flex",
           flexDirection: "column",

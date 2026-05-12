@@ -880,13 +880,20 @@ function PatchFeatured({ item, kind, ago }: { item: GameNewsItem; kind: PatchKin
         >
           <span>{kind}</span>
           <span>·</span>
-          <span>{item.feedLabel ?? "Steam"}</span>
+          <span>{formatSourceAttribution(item)}</span>
           <span>·</span>
           <span>{ago}</span>
         </div>
       </div>
     </a>
   );
+}
+
+function formatSourceAttribution(item: GameNewsItem): string {
+  if (item.sourceKind === "rss") {
+    return `via ${item.sourceLabel ?? item.feedLabel ?? "feed"}`;
+  }
+  return item.feedLabel ?? "Steam";
 }
 
 function PatchRow({
@@ -957,7 +964,7 @@ function PatchRow({
           ) : null}
         </div>
         <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, marginTop: 2 }}>
-          {kind} · {item.feedLabel ?? "Steam"} · {ago}
+          {kind} · {formatSourceAttribution(item)} · {ago}
         </div>
         {item.aiSummary ? (
           <div style={{ fontSize: 11, color: islandTheme.color.textSubtle, marginTop: 3, lineHeight: 1.4 }}>

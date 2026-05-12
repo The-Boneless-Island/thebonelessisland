@@ -7,6 +7,7 @@ import {
   type ActiveGameRow,
   gameInternals
 } from "../nuggiesGames.js";
+import { checkBlackjackEarnedByUserId } from "../nuggiesAchievements.js";
 
 // ── Card / deck primitives ──────────────────────────────────────────────────
 
@@ -23,6 +24,11 @@ type StoredState = {
   playerHand: Card[];
   dealerHand: Card[];
   bet: number;
+  // Original bet locked at deal time. `bet` is the *effective* stake used for
+  // payout math (may double after Double Down). `originalBet` is preserved so
+  // the UI can show the user's first wager separately if needed.
+  originalBet: number;
+  doubled: boolean;
 };
 
 function buildDeck(): Card[] {
@@ -89,7 +95,11 @@ function dealerPlay(state: StoredState): StoredState {
 function evaluate(state: StoredState): Outcome {
   const playerTotal = handTotal(state.playerHand);
   const dealerTotal = handTotal(state.dealerHand);
-  if (state.playerHand.length === 2 && playerTotal === 21) return "blackjack";
+  const playerNatural = state.playerHand.length === 2 && playerTotal === 21 && !state.doubled;
+  const dealerNatural = state.dealerHand.length === 2 && dealerTotal === 21;
+  // Both naturals → push. Player natural alone → blackjack (3:2).
+  if (playerNatural && dealerNatural) return "push";
+  if (playerNatural) return "blackjack";
   if (playerTotal > 21) return "lose";
   if (dealerTotal > 21) return "win";
   if (playerTotal > dealerTotal) return "win";
@@ -128,6 +138,20 @@ async function settleHand(
 
   await gameInternals.deleteActiveGame(ctx.client, session.id);
 
+  // Earned-tier achievement check. Best-effort — runs after the game tx
+  // closes so a failure can't roll back the settlement.
+  const preDoubleTotal = state.doubled
+    ? handTotal(state.playerHand.slice(0, 2))
+    : handTotal(state.playerHand);
+  const net = payout - state.bet;
+  void checkBlackjackEarnedByUserId(ctx.userId, {
+    result,
+    doubled: state.doubled,
+    preDoubleTotal,
+    bet: state.bet,
+    net,
+  });
+
   return {
     sessionId: session.id,
     gameType: "blackjack",
@@ -163,7 +187,10 @@ function activeStateView(session: ActiveGameRow, state: StoredState, expiresAt: 
       dealerHand: state.dealerHand.length > 0 ? [state.dealerHand[0]] : [],
       dealerHidden: state.dealerHand.length - 1,
       playerTotal: handTotal(state.playerHand),
-      dealerVisibleTotal: state.dealerHand.length > 0 ? cardValue(state.dealerHand[0].rank) : 0
+      dealerVisibleTotal: state.dealerHand.length > 0 ? cardValue(state.dealerHand[0].rank) : 0,
+      canDouble: state.playerHand.length === 2 && !state.doubled,
+      doubled: state.doubled,
+      originalBet: state.originalBet
     },
     expiresAt
   };
@@ -188,7 +215,14 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
     const deck = shuffle(buildDeck());
     const playerHand: Card[] = [deck.pop()!, deck.pop()!];
     const dealerHand: Card[] = [deck.pop()!, deck.pop()!];
-    const state: StoredState = { deck, playerHand, dealerHand, bet };
+    const state: StoredState = {
+      deck,
+      playerHand,
+      dealerHand,
+      bet,
+      originalBet: bet,
+      doubled: false
+    };
 
     // Persist the dealt hand into the active-game row.
     const expiresAt = await gameInternals.updateActiveGame(
@@ -206,7 +240,8 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
       reason: `Blackjack bet placed (bet ${bet})`
     });
 
-    // Natural blackjack? Resolve immediately.
+    // Natural blackjack — resolve immediately so dealer hole-card is checked
+    // for a push. evaluate() handles dealer-natural correctly.
     if (handTotal(playerHand) === 21) {
       const fakeSession: ActiveGameRow = {
         id: sessionId,
@@ -218,7 +253,7 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
         expiresAt,
         surface: ctx.surface
       };
-      return settleHand(ctx, fakeSession, state, "blackjack");
+      return settleHand(ctx, fakeSession, state, evaluate(state));
     }
 
     return activeStateView(
@@ -256,6 +291,40 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
       return activeStateView(session, newState, newExpires);
     }
 
+    if (action === "double") {
+      // Standard rule: only on initial 2 cards, and once per hand.
+      if (state.playerHand.length !== 2 || state.doubled) {
+        throw new InvalidGameInputError("Double is only allowed on the initial 2-card hand");
+      }
+      // Debit the additional bet (matches original). Will throw
+      // InsufficientFundsError if balance is too low.
+      await gameInternals.applyLedger(ctx.client, {
+        userId: ctx.userId,
+        amount: -state.originalBet,
+        type: "game_blackjack_bet",
+        reason: `Blackjack double-down (additional ${state.originalBet})`
+      });
+
+      const card = state.deck.pop();
+      const newPlayerHand = card ? [...state.playerHand, card] : state.playerHand;
+      const doubledState: StoredState = {
+        ...state,
+        deck: state.deck,
+        playerHand: newPlayerHand,
+        bet: state.bet + state.originalBet,
+        doubled: true
+      };
+
+      // Player busted on the double card → lose.
+      if (handTotal(doubledState.playerHand) > 21) {
+        return settleHand(ctx, session, doubledState, "lose");
+      }
+
+      // Otherwise auto-stand: dealer plays out, settle.
+      const dealerResolved = dealerPlay(doubledState);
+      return settleHand(ctx, session, dealerResolved, evaluate(dealerResolved));
+    }
+
     // action === "stand"
     const dealerResolved = dealerPlay(state);
     return settleHand(ctx, session, dealerResolved, evaluate(dealerResolved));
@@ -266,5 +335,10 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
     const state = session.state as unknown as StoredState;
     const dealerResolved = dealerPlay(state);
     return settleHand(ctx, session, dealerResolved, evaluate(dealerResolved));
+  },
+
+  viewActive(session) {
+    const state = session.state as unknown as StoredState;
+    return activeStateView(session, state, session.expiresAt);
   }
 };

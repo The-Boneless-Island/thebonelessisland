@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { AIMessage, AIProvider, AIResult } from "../provider.js";
+import { AICompleteOpts, AIMessage, AIProvider, AIResult } from "../provider.js";
 
 export class OpenAIProvider implements AIProvider {
   readonly name = "openai";
@@ -11,10 +11,11 @@ export class OpenAIProvider implements AIProvider {
     this.model = model;
   }
 
-  async complete(messages: AIMessage[], opts?: { maxTokens?: number }): Promise<AIResult> {
+  async complete(messages: AIMessage[], opts?: AICompleteOpts): Promise<AIResult> {
     const response = await this.client.chat.completions.create({
       model: this.model,
       max_tokens: opts?.maxTokens ?? 1024,
+      ...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {}),
       messages: messages.map((m) => ({ role: m.role, content: m.content }))
     });
 

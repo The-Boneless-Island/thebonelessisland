@@ -1,5 +1,13 @@
 import { db } from "../db/client.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
+import {
+  checkBankRun,
+  checkClaimStreaks,
+  checkFirstBlood,
+  checkGameNightAttendance,
+  checkMilestones,
+  checkTheGrind,
+} from "./nuggiesAchievements.js";
 
 // ── Error Types ───────────────────────────────────────────────────────────────
 
@@ -46,6 +54,20 @@ export type EquippedItem = {
 // Daily-reset boundary: midnight in America/Halifax = 23:00 (11pm) ET year-round
 // (Halifax is always 1h ahead of ET; both observe DST identically).
 const RESET_TZ = "America/Halifax";
+
+// Transaction types that should NOT count toward the daily earn cap. The cap
+// targets system-issued payouts (daily, attendance, game wins, first_link).
+// User-to-user transfers + loan/market mechanics + admin grants are exempt
+// because they redistribute rather than mint Nuggies.
+const CAP_EXEMPT_TYPES = new Set<string>([
+  "admin_grant",
+  "trade_in",
+  "loan_in",
+  "loan_repay",
+  "loan_forfeit_in",
+  "market_sell",
+  "milestone_bonus",
+]);
 
 function getResetDateString(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: RESET_TZ });
@@ -121,8 +143,9 @@ export async function applyTransaction(opts: {
     );
     const currentBalance = parseInt(balRow.rows[0]?.balance ?? "0", 10);
 
-    // Daily cap check (positive earn transactions only, excluding admin grants)
-    if (opts.amount > 0 && !opts.skipDailyCapCheck && !["admin_grant"].includes(opts.type)) {
+    // Daily cap check — only on system-minted earnings. Transfers + admin
+    // grants are exempt (see CAP_EXEMPT_TYPES).
+    if (opts.amount > 0 && !opts.skipDailyCapCheck && !CAP_EXEMPT_TYPES.has(opts.type)) {
       const cap = getSetting("nuggies_daily_cap", 600);
       const earned = await getDailyEarnedToday(userId, client);
       if (earned + opts.amount > cap) throw new DailyCapError();
@@ -146,6 +169,15 @@ export async function applyTransaction(opts: {
     );
 
     await client.query("COMMIT");
+
+    // Best-effort achievement + milestone checks after the transaction
+    // commits. Run outside the tx so failures here can't roll back the
+    // ledger write. Both check functions are idempotent.
+    if (opts.amount > 0) {
+      void checkTheGrind(opts.discordUserId);
+      void checkMilestones(opts.discordUserId);
+    }
+
     return { newBalance };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -193,6 +225,10 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
     skipDailyCapCheck: true,  // daily claim is exempt from cap
   });
 
+  // FIRST BLOOD on first-ever daily claim + STREAK 7 / STREAK 30. Best-effort.
+  void checkFirstBlood(discordUserId);
+  void checkClaimStreaks(discordUserId);
+
   return { newBalance, amount };
 }
 
@@ -200,7 +236,7 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
 
 export async function checkGameCooldown(userId: bigint): Promise<void> {
   await ensureSettingsLoaded();
-  const cooldownSecs = getSetting("nuggies_game_cooldown_secs", 120);
+  const cooldownSecs = getSetting("nuggies_game_cooldown_secs", 3);
 
   const r = await db.query<{ created_at: string }>(
     `SELECT created_at FROM nuggies_transactions
@@ -272,7 +308,7 @@ export async function getDailyEarnedToday(
      FROM nuggies_transactions
      WHERE user_id = $1
        AND amount > 0
-       AND type NOT IN ('admin_grant')
+       AND type NOT IN ('admin_grant', 'trade_in', 'loan_in', 'loan_repay', 'loan_forfeit_in', 'market_sell')
        AND created_at >= $2
        AND created_at <= $3`,
     [userId, startUTC, endUTC]
@@ -288,8 +324,7 @@ export async function isOptedOut(discordUserId: string): Promise<boolean> {
   return r.rows[0]?.nuggies_opted_out ?? false;
 }
 
-export async function getEquippedItems(discordUserId: string): Promise<EquippedItem[]> {
-  const userId = await resolveUserId(discordUserId);
+export async function getEquippedItemsByUserId(userId: bigint): Promise<EquippedItem[]> {
   const r = await db.query<{
     id: string; name: string; item_type: string; item_data: Record<string, unknown>;
   }>(
@@ -305,6 +340,11 @@ export async function getEquippedItems(discordUserId: string): Promise<EquippedI
     itemType: row.item_type,
     itemData: row.item_data,
   }));
+}
+
+export async function getEquippedItems(discordUserId: string): Promise<EquippedItem[]> {
+  const userId = await resolveUserId(discordUserId);
+  return getEquippedItemsByUserId(userId);
 }
 
 // ── Atomic Trade (with fee) ───────────────────────────────────────────────────
@@ -378,9 +418,22 @@ export async function executeTrade(opts: {
   }
 }
 
-// ── Check Default Loans ───────────────────────────────────────────────────────
+// ── Check Default Loans + Expire Stale Offers ────────────────────────────────
+
+/** Pending loan offers older than this auto-cancel. */
+const PENDING_OFFER_TTL_HOURS = 24;
 
 export async function processDefaultedLoans(): Promise<void> {
+  // Auto-cancel pending offers nobody accepted within the TTL window. No
+  // collateral to seize since accept never ran.
+  await db.query(
+    `UPDATE nuggies_loans
+     SET status = 'cancelled', resolved_at = NOW()
+     WHERE status = 'pending'
+       AND created_at < NOW() - ($1 || ' hours')::INTERVAL`,
+    [String(PENDING_OFFER_TTL_HOURS)]
+  );
+
   const defaulted = await db.query<{
     id: string; lender_user_id: string; borrower_user_id: string; collateral: string;
   }>(

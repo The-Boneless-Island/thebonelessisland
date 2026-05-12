@@ -37,6 +37,11 @@ authRouter.get("/discord/login", (req, res) => {
 });
 
 authRouter.get("/discord/callback", async (req, res) => {
+  if (req.session?.userId) {
+    res.redirect(env.WEB_ORIGIN);
+    return;
+  }
+
   const { code, state } = req.query;
   if (!code || !state || state !== req.session?.oauthState) {
     res.status(400).json({ error: "Invalid OAuth callback state" });

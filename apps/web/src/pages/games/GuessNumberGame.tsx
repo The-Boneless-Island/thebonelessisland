@@ -2,6 +2,7 @@ import { useState } from "react";
 import { IslandButton, IslandCard, islandTagStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import { startGuessNumber, type GameStateResponse } from "../../api/games.js";
+import { useRefetchActivity } from "../../system/activityContext.js";
 
 type Props = {
   startBalance: number | null;
@@ -16,6 +17,7 @@ export function GuessNumberGame({ startBalance, maxBet, onResolved, onBack }: Pr
   const [phase, setPhase] = useState<"idle" | "rolling" | "settled" | "error">("idle");
   const [result, setResult] = useState<GameStateResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const refetchActivity = useRefetchActivity();
 
   const balanceAvail = startBalance ?? 0;
   const validBet = Number.isInteger(bet) && bet >= 1 && bet <= Math.min(maxBet, balanceAvail);
@@ -38,6 +40,7 @@ export function GuessNumberGame({ startBalance, maxBet, onResolved, onBack }: Pr
     setResult(res.data);
     setPhase("settled");
     if (typeof res.data.newBalance === "number") onResolved(res.data.newBalance);
+    void refetchActivity();
   }
 
   function reset() {
@@ -54,7 +57,7 @@ export function GuessNumberGame({ startBalance, maxBet, onResolved, onBack }: Pr
     <IslandCard style={{ display: "grid", gap: 14, padding: 18 }}>
       <div style={headerStyle}>
         <div>
-          <div className="island-display" style={{ fontSize: 18, fontWeight: 800 }}>Guess Number</div>
+          <div className="island-display" style={{ fontSize: 18, fontWeight: 800 }}>Hi-Lo</div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
             8× on win · pick 1–10 · max bet {maxBet}
           </div>
@@ -62,8 +65,9 @@ export function GuessNumberGame({ startBalance, maxBet, onResolved, onBack }: Pr
         <BackBtn onBack={onBack} />
       </div>
 
-      {/* Big reveal area */}
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", margin: "10px 0", height: 100 }}>
+      {/* Felt stage */}
+      <div style={feltStyle}>
+        <SeatLabel>{phase === "rolling" ? "Rolling…" : showOutcome ? "Secret" : "Awaiting roll"}</SeatLabel>
         {phase === "rolling" ? (
           <div className="casino-dice-rolling" style={dieStyle("#94a3b8")}>?</div>
         ) : showOutcome && r ? (
@@ -72,6 +76,9 @@ export function GuessNumberGame({ startBalance, maxBet, onResolved, onBack }: Pr
           </div>
         ) : (
           <div style={dieStyle("#475569")}>?</div>
+        )}
+        {phase !== "settled" && guess !== null && (
+          <div style={callTagStyle}>You guessed <strong style={{ color: "#7dd3fc" }}>{guess}</strong></div>
         )}
       </div>
 
@@ -93,56 +100,89 @@ export function GuessNumberGame({ startBalance, maxBet, onResolved, onBack }: Pr
         <div style={errorStyle}>{errorMsg}</div>
       )}
 
-      {phase !== "settled" ? (
-        <>
-          <div style={{ display: "grid", gap: 8 }}>
-            <label style={labelStyle}>Bet (Nuggies)</label>
-            <input
-              type="number"
-              min={1}
-              max={Math.min(maxBet, balanceAvail)}
-              value={bet}
-              onChange={(e) => setBet(parseInt(e.target.value, 10) || 0)}
-              disabled={phase === "rolling"}
-              style={inputStyle}
-            />
-            <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-              Balance: ₦{balanceAvail.toLocaleString()}
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gap: 8 }}>
-            <label style={labelStyle}>Pick a number</label>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6 }}>
-              {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setGuess(n)}
+      <div style={controlBarStyle}>
+        {phase !== "settled" ? (
+          <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ ...labelStyle, textAlign: "center" }}>Bet (Nuggies)</label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "center" }}>
+                <input
+                  type="number"
+                  min={1}
+                  max={Math.min(maxBet, balanceAvail)}
+                  value={bet}
+                  onChange={(e) => setBet(parseInt(e.target.value, 10) || 0)}
                   disabled={phase === "rolling"}
-                  style={numberBtnStyle(guess === n, phase === "rolling")}
-                >
-                  {n}
-                </button>
-              ))}
+                  style={{ ...inputStyle, width: 130, textAlign: "center" }}
+                />
+                {[10, 25, 50, 100].map((amount) => (
+                  <button
+                    key={amount}
+                    type="button"
+                    onClick={() => setBet(Math.min(amount, maxBet, balanceAvail))}
+                    disabled={phase === "rolling" || amount > balanceAvail || amount > maxBet}
+                    style={chipPresetStyle}
+                  >
+                    {amount}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: islandTheme.color.textMuted, textAlign: "center" }}>
+                Balance: ₦{balanceAvail.toLocaleString()}
+              </div>
             </div>
-          </div>
 
-          <IslandButton
-            variant="primary"
-            disabled={!canSubmit}
-            onClick={() => void play()}
-          >
-            {phase === "rolling" ? "Rolling…" : guess === null ? "Pick a number" : `Guess ${guess} for ₦${bet}`}
-          </IslandButton>
-        </>
-      ) : (
-        <div style={{ display: "flex", gap: 8 }}>
-          <IslandButton variant="primary" onClick={reset}>Play again</IslandButton>
-          <IslandButton variant="secondary" onClick={onBack}>Back to lobby</IslandButton>
-        </div>
-      )}
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={labelStyle}>Pick a number</label>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 8 }}>
+                {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setGuess(n)}
+                    disabled={phase === "rolling"}
+                    style={numberBtnStyle(guess === n, phase === "rolling")}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <IslandButton
+              variant="primary"
+              disabled={!canSubmit}
+              onClick={() => void play()}
+              style={{ alignSelf: "center", minWidth: 220 }}
+            >
+              {phase === "rolling" ? "Rolling…" : guess === null ? "Pick a number" : `Guess ${guess} for ₦${bet}`}
+            </IslandButton>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <IslandButton variant="primary" onClick={reset}>Play again</IslandButton>
+            <IslandButton variant="secondary" onClick={onBack}>Back to lobby</IslandButton>
+          </div>
+        )}
+      </div>
     </IslandCard>
+  );
+}
+
+function SeatLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="island-mono"
+      style={{
+        fontSize: 10,
+        color: islandTheme.color.textMuted,
+        textTransform: "uppercase",
+        letterSpacing: "0.16em",
+        textAlign: "center"
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -243,6 +283,48 @@ function outcomeStyle(won: boolean): React.CSSProperties {
     padding: "12px 14px",
     borderRadius: 10,
     background: won ? "rgba(34, 197, 94, 0.12)" : "rgba(239, 68, 68, 0.10)",
-    border: `1px solid ${won ? "rgba(34, 197, 94, 0.30)" : "rgba(239, 68, 68, 0.30)"}`
+    border: `1px solid ${won ? "rgba(34, 197, 94, 0.30)" : "rgba(239, 68, 68, 0.30)"}`,
+    textAlign: "center"
   };
 }
+
+const feltStyle: React.CSSProperties = {
+  padding: "26px 18px 30px",
+  borderRadius: 18,
+  background:
+    "radial-gradient(120% 90% at 50% 0%, rgba(20, 110, 80, 0.55) 0%, rgba(10, 60, 48, 0.85) 55%, rgba(6, 30, 26, 0.95) 100%)",
+  border: "1px solid rgba(34, 197, 94, 0.28)",
+  boxShadow:
+    "inset 0 0 80px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35)",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 14
+};
+
+const callTagStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: islandTheme.color.textMuted,
+  letterSpacing: "0.04em",
+  fontFamily: "var(--island-mono, monospace)"
+};
+
+const controlBarStyle: React.CSSProperties = {
+  padding: "14px 16px",
+  borderRadius: 14,
+  background: "rgba(8, 16, 22, 0.55)",
+  border: `1px solid ${islandTheme.color.cardBorder}`
+};
+
+const chipPresetStyle: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(250, 204, 21, 0.35)",
+  background: "rgba(250, 204, 21, 0.08)",
+  color: "#fde68a",
+  fontWeight: 800,
+  fontSize: 12,
+  fontFamily: "var(--island-mono, monospace)",
+  cursor: "pointer",
+  letterSpacing: "0.04em"
+};

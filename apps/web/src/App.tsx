@@ -9,11 +9,14 @@ import { HomePage } from "./pages/Home.js";
 import { LibraryPage } from "./pages/Library.js";
 import { LoginScreen } from "./pages/LoginScreen.js";
 import { AchievementsPage } from "./pages/Achievements.js";
+import { MilestonesPage } from "./pages/Milestones.js";
 import { CasinoPage } from "./pages/games/CasinoPage.js";
 import { ForumsPage } from "./pages/Forums.js";
 import { ProfilePage } from "./pages/Profile.js";
 import { SettingsPage } from "./pages/Settings.js";
-import { ToastHost, useToastsFromStatus } from "./system/toast.js";
+import { ToastHost, ToastQueueProvider, useToastQueue, useToastsFromStatus } from "./system/toast.js";
+import { ActivityRefetchProvider } from "./system/activityContext.js";
+import { AchievementCelebration, useCelebrationQueue } from "./system/celebration.js";
 import { islandCopy, islandTheme } from "./theme.js";
 import { Topbar } from "./components/Topbar.js";
 import {
@@ -86,7 +89,78 @@ export function App() {
   const [serverSettings, setServerSettings] = useState<ServerSetting[] | null>(null);
   const [steamOnboardingOpen, setSteamOnboardingOpen] = useState(false);
   const [tagline, setTagline] = useState<string>("");
-  const { toasts, dismiss: dismissToast } = useToastsFromStatus(status);
+  const toastQueue = useToastQueue();
+  useToastsFromStatus(status, toastQueue.pushToast);
+  const celebrationQueue = useCelebrationQueue();
+
+  // ── Achievement / milestone unlock celebration ──────────────────────────────
+  // Subscribes to the activity_events feed for the current user's
+  // achievement.unlocked + milestone.reached rows. localStorage cursor
+  // prevents re-firing on refresh. First-ever mount seeds the cursor to
+  // NOW so historical unlocks don't spam. Each fresh event is pushed onto
+  // the celebration queue; the overlay shows them one at a time.
+  useEffect(() => {
+    const myId = profileData?.discordUserId;
+    if (!myId || activityEvents.length === 0) return;
+
+    const STORAGE_KEY = "boneless.lastUnlockToastAt";
+    const storedRaw = window.localStorage.getItem(STORAGE_KEY);
+    if (storedRaw === null) {
+      // First visit — seed to now so we don't celebrate historical events.
+      window.localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+      return;
+    }
+    const lastSeenMs = new Date(storedRaw).getTime();
+    if (!Number.isFinite(lastSeenMs)) {
+      window.localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+      return;
+    }
+
+    const fresh = activityEvents
+      .filter((e) => {
+        if (e.actor?.discordUserId !== myId) return false;
+        if (e.eventType !== "achievement.unlocked" && e.eventType !== "milestone.reached") return false;
+        const t = new Date(e.createdAt).getTime();
+        return Number.isFinite(t) && t > lastSeenMs;
+      })
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    if (fresh.length === 0) return;
+
+    let maxSeen = lastSeenMs;
+    for (const e of fresh) {
+      const p = e.payload ?? {};
+      const emoji = typeof p.emoji === "string" ? p.emoji : "🎉";
+      if (e.eventType === "achievement.unlocked") {
+        const name = typeof p.name === "string" ? p.name : "Achievement";
+        const itemType = typeof p.itemType === "string" ? p.itemType : "badge";
+        celebrationQueue.enqueue({
+          id: e.id,
+          kind: "achievement",
+          emoji,
+          title: name,
+          description: `New ${itemType} unlocked — equip it from the Milestones page.`,
+        });
+      } else {
+        const label = typeof p.label === "string" ? p.label : "New rank";
+        const threshold = typeof p.threshold === "number" ? p.threshold : 0;
+        const bonus = typeof p.bonus === "number" ? p.bonus : 0;
+        celebrationQueue.enqueue({
+          id: e.id,
+          kind: "milestone",
+          emoji,
+          title: label,
+          description: threshold > 0
+            ? `Lifetime earned crossed ₦${threshold.toLocaleString()}.`
+            : "You climbed the ladder.",
+          bonus,
+        });
+      }
+      const t = new Date(e.createdAt).getTime();
+      if (t > maxSeen) maxSeen = t;
+    }
+    window.localStorage.setItem(STORAGE_KEY, new Date(maxSeen).toISOString());
+  }, [activityEvents, profileData?.discordUserId, celebrationQueue]);
 
   const filteredGuildMembers = useMemo(() => {
     const query = memberSearch.trim().toLowerCase();
@@ -834,15 +908,62 @@ export function App() {
     }
   }
 
-  async function triggerGeneralNewsRecurate() {
+  async function triggerGeneralNewsRecurate(
+    onProgress?: (snap: { state: "running" | "done" | "error"; reset: number; curated: number; total: number; error: string | null }) => void
+  ) {
     try {
-      const response = await apiFetch("/news/general/recurate", { method: "POST", credentials: "include" });
-      const data = (await response.json().catch(() => null)) as {
-        ok: boolean; reset?: number; curated?: number; error?: string;
-      } | null;
-      return data ?? { ok: false, error: "No response" };
+      const kickResp = await apiFetch("/news/general/recurate", { method: "POST", credentials: "include" });
+      // 202 = newly started, 409 = already running (we just attach to it). Anything else = error.
+      if (!kickResp.ok && kickResp.status !== 202 && kickResp.status !== 409) {
+        const body = (await kickResp.json().catch(() => null)) as { error?: string } | null;
+        return { ok: false, error: body?.error ?? `HTTP ${kickResp.status}` };
+      }
+
+      // Poll status until terminal state
+      const POLL_INTERVAL_MS = 2000;
+      const MAX_POLLS = 600; // 20 min hard cap so we never poll forever
+      for (let i = 0; i < MAX_POLLS; i++) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        const statusResp = await apiFetch("/news/general/recurate/status", { credentials: "include" });
+        if (!statusResp.ok) continue; // transient — retry on next tick
+        const data = (await statusResp.json().catch(() => null)) as {
+          ok?: boolean;
+          job?: { state: "idle" | "running" | "done" | "error"; reset: number; curated: number; total: number; error: string | null };
+        } | null;
+        const job = data?.job;
+        if (!job) continue;
+
+        if (job.state === "running") {
+          onProgress?.({ state: "running", reset: job.reset, curated: job.curated, total: job.total, error: null });
+          continue;
+        }
+        if (job.state === "done") {
+          onProgress?.({ state: "done", reset: job.reset, curated: job.curated, total: job.total, error: null });
+          return { ok: true, reset: job.reset, curated: job.curated };
+        }
+        if (job.state === "error") {
+          onProgress?.({ state: "error", reset: job.reset, curated: job.curated, total: job.total, error: job.error });
+          return { ok: false, error: job.error ?? "Recurate failed" };
+        }
+        // state === "idle" before our kickoff registered — keep polling
+      }
+      return { ok: false, error: "Timed out waiting for job (still running on server — refresh to check)" };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
+  async function fetchGeneralNewsRecurateStatus() {
+    try {
+      const resp = await apiFetch("/news/general/recurate/status", { credentials: "include" });
+      if (!resp.ok) return null;
+      const data = (await resp.json().catch(() => null)) as {
+        ok?: boolean;
+        job?: { state: "idle" | "running" | "done" | "error"; reset: number; curated: number; total: number; error: string | null };
+      } | null;
+      return data?.job ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -1199,26 +1320,37 @@ export function App() {
     }
   }
 
-  const activeMembers = guildMembers.filter((member) => member.inVoice || member.richPresenceText !== null);
+  const activeMembers = guildMembers.filter(
+    (member) =>
+      member.inVoice ||
+      member.richPresenceText !== null ||
+      (member.presenceStatus !== null && member.presenceStatus !== "offline")
+  );
 
   function saveNewsControlsPlaceholder() {
     setStatus("Saved placeholder news curation settings (UI only for now)");
   }
 
-  // Trigger palm-exit animation whenever isAuthenticated transitions to true
+  // On real login (false → true), run 780ms palm-exit animation.
+  // Skip on refresh (null → true) so already-authed sessions don't flash splash.
   useEffect(() => {
-    if (prevAuth.current !== true && isAuthenticated === true) {
+    if (prevAuth.current === false && isAuthenticated === true) {
       setLoginExiting(true);
       const t = setTimeout(() => setLoginExiting(false), 780);
+      prevAuth.current = isAuthenticated;
       return () => clearTimeout(t);
     }
     prevAuth.current = isAuthenticated;
   }, [isAuthenticated]);
 
+  if (isAuthenticated === null) {
+    return null;
+  }
+
   if (isAuthenticated !== true || loginExiting) {
     return (
       <LoginScreen
-        loading={isAuthenticated === null}
+        loading={false}
         authError={authError}
         exiting={loginExiting}
       />
@@ -1240,7 +1372,8 @@ export function App() {
   };
 
   return (
-    <>
+    <ActivityRefetchProvider refetch={() => loadActivity(true)}>
+    <ToastQueueProvider queue={toastQueue}>
       <Topbar
         page={page}
         onNavigate={setPage}
@@ -1249,7 +1382,7 @@ export function App() {
         tagline={tagline}
         onLogout={() => void logout()}
       />
-      <div style={{ height: 62 }} aria-hidden="true" />
+      <div className="bi-topbar-spacer" aria-hidden="true" />
       <SteamOnboardingModal
         open={steamOnboardingOpen}
         onClose={() => setSteamOnboardingOpen(false)}
@@ -1261,16 +1394,12 @@ export function App() {
         }}
       />
       <main
+        className="bi-main"
         style={{
-          fontFamily: "Inter, Segoe UI, sans-serif",
-          maxWidth: islandTheme.layout.appMaxWidth,
-          margin: "1.25rem auto",
           color: islandTheme.color.textPrimary,
           backgroundColor: islandTheme.color.appBg,
           backdropFilter: islandTheme.glass.blurStrong,
           WebkitBackdropFilter: islandTheme.glass.blurStrong,
-          padding: "clamp(0.9rem, 2vw, 1.2rem)",
-          borderRadius: islandTheme.radius.surface
         }}
       >
 
@@ -1345,7 +1474,7 @@ export function App() {
         <ComingSoonPage title="Leaderboard" description="Top Nuggies holders across the crew. Coming soon." />
       ) : null}
 
-      {page === "nuggies" ? <AchievementsPage /> : null}
+      {page === "nuggies" ? <AchievementsPage onProfileChanged={() => void loadProfile(true)} /> : null}
 
       {page === "nuggies-casino" ? <CasinoPage /> : null}
 
@@ -1353,9 +1482,7 @@ export function App() {
         <ComingSoonPage title="Nuggies History" description="Your full transaction log. Coming soon." />
       ) : null}
 
-      {page === "nuggies-milestones" ? (
-        <ComingSoonPage title="Milestones" description="Badge tracking and achievement milestones. Coming soon." />
-      ) : null}
+      {page === "nuggies-milestones" ? <MilestonesPage /> : null}
 
       {page === "profile" ? (
         <ProfilePage
@@ -1414,6 +1541,7 @@ export function App() {
           onTriggerGeneralNewsIngest={triggerGeneralNewsIngest}
           onTriggerGeneralNewsCurate={triggerGeneralNewsCurate}
           onTriggerGeneralNewsRecurate={triggerGeneralNewsRecurate}
+          onFetchGeneralNewsRecurateStatus={fetchGeneralNewsRecurateStatus}
         />
       ) : null}
 
@@ -1449,7 +1577,9 @@ export function App() {
       `}</style>
 
       </main>
-      <ToastHost toasts={toasts} onDismiss={dismissToast} />
-    </>
+      <ToastHost toasts={toastQueue.toasts} onDismiss={toastQueue.dismiss} />
+      <AchievementCelebration current={celebrationQueue.current} onDismiss={celebrationQueue.dismiss} />
+    </ToastQueueProvider>
+    </ActivityRefetchProvider>
   );
 }

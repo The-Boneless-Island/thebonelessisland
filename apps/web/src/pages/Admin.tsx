@@ -1,5 +1,13 @@
-import { useState, useEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { useState, useEffect, useRef, useMemo, type CSSProperties, type ReactNode } from "react";
 import { apiFetch } from "../api/client.js";
+import {
+  createPatchSource,
+  deletePatchSource,
+  getPatchSourceCandidates,
+  getPatchSources,
+  testPatchSourceUrl,
+  updatePatchSource
+} from "../api/patchSources.js";
 import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { DomainPage } from "./admin/DomainPage.js";
@@ -13,8 +21,13 @@ import type {
   ForumModLogEntry,
   ForumReport,
   GameNight,
+  GuildMember,
   NewsCard,
   NuggiesShopItem,
+  PatchSourceCandidate,
+  PatchSourceGameGroup,
+  PatchSourceRow,
+  PatchSourceTestResult,
   Recommendation,
   ServerSetting
 } from "../types.js";
@@ -50,7 +63,24 @@ type AdminPageProps = {
   onTriggerNewsCuration: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
   onTriggerGeneralNewsIngest: () => Promise<{ ok: boolean; fetched?: number; curated?: number; error?: string }>;
   onTriggerGeneralNewsCurate: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
-  onTriggerGeneralNewsRecurate: () => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onTriggerGeneralNewsRecurate: (
+    onProgress?: (snap: RecurateProgressSnap) => void
+  ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onFetchGeneralNewsRecurateStatus: () => Promise<{
+    state: "idle" | "running" | "done" | "error";
+    reset: number;
+    curated: number;
+    total: number;
+    error: string | null;
+  } | null>;
+};
+
+export type RecurateProgressSnap = {
+  state: "running" | "done" | "error";
+  reset: number;
+  curated: number;
+  total: number;
+  error: string | null;
 };
 
 export function AdminPage(props: AdminPageProps) {
@@ -143,6 +173,7 @@ function buildOperationsAreas(domain: SettingDomain, props: AdminPageProps): Ope
               onIngest={props.onTriggerGeneralNewsIngest}
               onCurate={props.onTriggerGeneralNewsCurate}
               onRecurate={props.onTriggerGeneralNewsRecurate}
+              onFetchRecurateStatus={props.onFetchGeneralNewsRecurateStatus}
               onCurateGameNews={props.onTriggerNewsCuration}
               newsCards={props.newsCards}
               onCreateNewsCard={props.onCreateNewsCard}
@@ -150,6 +181,12 @@ function buildOperationsAreas(domain: SettingDomain, props: AdminPageProps): Ope
               onArchiveNewsCard={props.onArchiveNewsCard}
             />
           )
+        },
+        {
+          id: "patch-sources",
+          label: "Patch Sources",
+          icon: "🔗",
+          render: () => <PatchSourcesSubpage />
         },
         {
           id: "events",
@@ -846,6 +883,7 @@ function NewsSubpage({
   onIngest,
   onCurate,
   onRecurate,
+  onFetchRecurateStatus,
   onCurateGameNews,
   newsCards,
   onCreateNewsCard,
@@ -856,7 +894,16 @@ function NewsSubpage({
   onUpdate: (key: string, value: string) => void;
   onIngest: () => Promise<{ ok: boolean; fetched?: number; curated?: number; error?: string }>;
   onCurate: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
-  onRecurate: () => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onRecurate: (
+    onProgress?: (snap: RecurateProgressSnap) => void
+  ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onFetchRecurateStatus: () => Promise<{
+    state: "idle" | "running" | "done" | "error";
+    reset: number;
+    curated: number;
+    total: number;
+    error: string | null;
+  } | null>;
   onCurateGameNews: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
   newsCards: NewsCard[];
   onCreateNewsCard: (input: NewsCardInput) => void;
@@ -868,16 +915,21 @@ function NewsSubpage({
 
   const handleGameCurate = async () => {
     setGameCurateState("running");
-    setGameCurateMsg("");
+    setGameCurateMsg("Running AI curation pass…");
     const result = await onCurateGameNews();
     if (result.ok) {
       setGameCurateState("done");
-      setGameCurateMsg(`Curated ${result.curated ?? 0} article${result.curated === 1 ? "" : "s"}`);
+      setGameCurateMsg(
+        result.curated && result.curated > 0
+          ? `Curated ${result.curated} article${result.curated === 1 ? "" : "s"}`
+          : "No un-curated articles to process"
+      );
+      setTimeout(() => setGameCurateState("idle"), 8000);
     } else {
       setGameCurateState("error");
       setGameCurateMsg(result.error ?? "Curation failed");
+      setTimeout(() => setGameCurateState("idle"), 20000);
     }
-    setTimeout(() => setGameCurateState("idle"), 5000);
   };
 
   return (
@@ -890,6 +942,7 @@ function NewsSubpage({
           onIngest={onIngest}
           onCurate={onCurate}
           onRecurate={onRecurate}
+          onFetchRecurateStatus={onFetchRecurateStatus}
         />
       </div>
       <div style={{ display: "grid", gap: 12 }}>
@@ -899,7 +952,7 @@ function NewsSubpage({
             Re-score and summarize un-curated game news items using the active AI provider.
             Runs automatically on the next news fetch — use this to force an immediate pass.
           </p>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <IslandButton
               variant="secondary"
               onClick={handleGameCurate}
@@ -908,12 +961,32 @@ function NewsSubpage({
               {gameCurateState === "running" ? "Curating…" : "Re-curate Game News"}
             </IslandButton>
             {gameCurateMsg ? (
-              <span style={{ fontSize: 12, color: gameCurateState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
+              <span
+                role="status"
+                aria-live="polite"
+                style={{
+                  fontSize: 12,
+                  color:
+                    gameCurateState === "error"
+                      ? islandTheme.color.dangerAccent
+                      : gameCurateState === "done"
+                        ? islandTheme.color.successAccent
+                        : islandTheme.color.textSubtle
+                }}
+              >
                 {gameCurateMsg}
               </span>
             ) : null}
           </div>
         </IslandCard>
+      </div>
+      <div style={{ display: "grid", gap: 12 }}>
+        <MergedSectionLabel title="AI Validation Failures" />
+        <ValidationFailuresStats />
+      </div>
+      <div style={{ display: "grid", gap: 12 }}>
+        <MergedSectionLabel title="Steam Profile Context" />
+        <SteamProfileContextStats />
       </div>
       <div style={{ display: "grid", gap: 12 }}>
         <MergedSectionLabel title="Drift Log" />
@@ -924,6 +997,171 @@ function NewsSubpage({
           onArchiveNewsCard={onArchiveNewsCard}
         />
       </div>
+    </div>
+  );
+}
+
+type SteamContextStats = {
+  total_linked: number;
+  groups_synced_users: number;
+  achievements_synced_users: number;
+  total_groups: number;
+  total_progress_rows: number;
+  last_groups_synced_at: string | null;
+  last_achievements_synced_at: string | null;
+};
+
+function SteamProfileContextStats() {
+  const [stats, setStats] = useState<SteamContextStats | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/steam/profile-context-stats")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) as SteamContextStats;
+      })
+      .then((data) => {
+        if (!cancelled) setStats(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <IslandCard style={{ padding: 16 }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.dangerText }}>{error}</span>
+      </IslandCard>
+    );
+  }
+  if (!stats) {
+    return (
+      <IslandCard style={{ padding: 16 }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>Loading…</span>
+      </IslandCard>
+    );
+  }
+
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "never");
+  return (
+    <IslandCard style={{ padding: 16 }}>
+      <p style={{ margin: "0 0 10px 0", fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+        Steam community groups + per-game achievement progress feed the AI curator. Syncs run on Steam library refresh with a 24h cooldown.
+      </p>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <ContextStatRow label="Members with groups synced" value={`${stats.groups_synced_users}/${stats.total_linked}`} sub={`${stats.total_groups} groups total · last sync ${fmt(stats.last_groups_synced_at)}`} />
+        <ContextStatRow label="Members with achievements synced" value={`${stats.achievements_synced_users}/${stats.total_linked}`} sub={`${stats.total_progress_rows} progress rows · last sync ${fmt(stats.last_achievements_synced_at)}`} />
+      </div>
+    </IslandCard>
+  );
+}
+
+type ValidationFailureRow = {
+  id: number;
+  title: string;
+  sourceName: string;
+  errors: string[];
+  retryCount: number;
+  curatedAt: string;
+};
+
+type ValidationFailuresPayload = {
+  count: number;
+  recent: ValidationFailureRow[];
+};
+
+function ValidationFailuresStats() {
+  const [data, setData] = useState<ValidationFailuresPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/news/general/validation-failures")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) as ValidationFailuresPayload;
+      })
+      .then((payload) => {
+        if (!cancelled) setData(payload);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <IslandCard style={{ padding: 16 }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.dangerText }}>{error}</span>
+      </IslandCard>
+    );
+  }
+  if (!data) {
+    return (
+      <IslandCard style={{ padding: 16 }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>Loading…</span>
+      </IslandCard>
+    );
+  }
+
+  const hasFailures = data.count > 0;
+
+  return (
+    <IslandCard style={{ padding: 16 }}>
+      <p style={{ margin: "0 0 10px 0", fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+        Articles where the AI failed to produce all 4 required sections after retries are hidden from the public feed. Use Re-curate to clear retry counters and try again.
+      </p>
+      <div
+        style={{
+          fontSize: 18,
+          fontWeight: 700,
+          marginBottom: 8,
+          color: hasFailures ? islandTheme.color.dangerText : islandTheme.color.successAccent
+        }}
+      >
+        {hasFailures ? `${data.count} article${data.count === 1 ? "" : "s"} failed validation` : "All articles passed"}
+      </div>
+      {hasFailures && data.recent.length > 0 ? (
+        <details>
+          <summary style={{ cursor: "pointer", fontSize: 12, color: islandTheme.color.textMuted, fontWeight: 600 }}>
+            Recent failures ({data.recent.length})
+          </summary>
+          <ul style={{ margin: "8px 0 0 0", paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
+            {data.recent.map((row) => (
+              <li key={row.id}>
+                <span style={{ color: islandTheme.color.textPrimary }}>{row.title}</span>{" "}
+                <span style={{ color: islandTheme.color.textMuted }}>
+                  · {row.sourceName} · {row.errors.join(", ") || "?"} · {row.retryCount} retr{row.retryCount === 1 ? "y" : "ies"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </IslandCard>
+  );
+}
+
+function ContextStatRow({ label, value, sub }: { label: string; value: string; sub: string }) {
+  return (
+    <div>
+      <div
+        className="island-mono"
+        style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}
+      >
+        {label}
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2 }}>{value}</div>
+      <div style={{ fontSize: 11, color: islandTheme.color.textSubtle, marginTop: 2 }}>{sub}</div>
     </div>
   );
 }
@@ -1808,6 +2046,444 @@ function LibrarySubpage() {
   );
 }
 
+// ── Patch Sources Subpage ────────────────────────────────────────────────────
+
+function PatchSourcesSubpage() {
+  const [candidates, setCandidates] = useState<PatchSourceCandidate[]>([]);
+  const [sourcesByApp, setSourcesByApp] = useState<Map<number, PatchSourceRow[]>>(new Map());
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [openAddFor, setOpenAddFor] = useState<number | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    setError(null);
+    try {
+      const [cand, groups] = await Promise.all([getPatchSourceCandidates(), getPatchSources()]);
+      setCandidates(cand);
+      const map = new Map<number, PatchSourceRow[]>();
+      for (const g of groups) map.set(g.appId, g.sources);
+      setSourcesByApp(map);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load patch sources");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return candidates;
+    return candidates.filter((c) => c.name.toLowerCase().includes(q));
+  }, [candidates, search]);
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <IslandCard style={{ padding: 16 }}>
+        <SubsectionTitle>Extra patch sources (escape hatch)</SubsectionTitle>
+        <p style={{ fontSize: 13, color: islandTheme.color.textSubtle, margin: "0 0 12px 0", lineHeight: 1.5 }}>
+          Steam Community Announcements are pulled automatically for every game in the crew library — that
+          covers ~95% of patch coverage. Use this section only for games <em>not</em> on Steam (League, Diablo
+          IV via battle.net, Riot launcher titles) or for fan-curated feeds when official patch notes aren't on Steam.
+        </p>
+        <div
+          style={{
+            background: islandTheme.color.panelMutedBg,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            borderRadius: 8,
+            padding: 10,
+            fontSize: 12,
+            color: islandTheme.color.textSubtle,
+            lineHeight: 1.6,
+            marginBottom: 12
+          }}
+        >
+          <div style={{ fontWeight: 700, color: islandTheme.color.textPrimary, marginBottom: 4 }}>Common patterns</div>
+          <div>
+            Subreddit: <code className="island-mono">https://www.reddit.com/r/&lt;subreddit&gt;/.rss</code>
+          </div>
+          <div>Official feeds: most publishers expose <code className="island-mono">/news/rss</code>, <code className="island-mono">/feed</code>, or <code className="island-mono">/atom.xml</code></div>
+          <div>
+            GitHub releases: <code className="island-mono">https://github.com/&lt;org&gt;/&lt;repo&gt;/releases.atom</code>
+          </div>
+        </div>
+        <input
+          type="search"
+          placeholder="Filter games…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ ...islandInputStyle, width: "100%" }}
+        />
+      </IslandCard>
+
+      {error ? (
+        <IslandCard style={{ padding: 12, borderColor: islandTheme.color.danger }}>
+          <span style={{ color: islandTheme.color.dangerText, fontSize: 13 }}>{error}</span>
+        </IslandCard>
+      ) : null}
+
+      {loading ? (
+        <IslandCard style={{ padding: 16 }}>
+          <span style={{ color: islandTheme.color.textMuted, fontSize: 13 }}>Loading top 50 crew games…</span>
+        </IslandCard>
+      ) : filtered.length === 0 ? (
+        <IslandCard style={{ padding: 16 }}>
+          <span style={{ color: islandTheme.color.textMuted, fontSize: 13 }}>
+            {candidates.length === 0
+              ? "No crew-owned games yet. Sync a Steam library first."
+              : "No games match that filter."}
+          </span>
+        </IslandCard>
+      ) : (
+        filtered.map((cand) => (
+          <PatchSourceGameCard
+            key={cand.appId}
+            candidate={cand}
+            sources={sourcesByApp.get(cand.appId) ?? []}
+            isAddOpen={openAddFor === cand.appId}
+            onOpenAdd={() => setOpenAddFor(cand.appId)}
+            onCloseAdd={() => setOpenAddFor(null)}
+            onChanged={refresh}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+function PatchSourceGameCard({
+  candidate,
+  sources,
+  isAddOpen,
+  onOpenAdd,
+  onCloseAdd,
+  onChanged
+}: {
+  candidate: PatchSourceCandidate;
+  sources: PatchSourceRow[];
+  isAddOpen: boolean;
+  onOpenAdd: () => void;
+  onCloseAdd: () => void;
+  onChanged: () => void;
+}) {
+  return (
+    <IslandCard style={{ padding: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+        {candidate.headerImageUrl ? (
+          <div
+            style={{
+              width: 80,
+              height: 38,
+              borderRadius: 6,
+              background: `center / cover no-repeat url(${JSON.stringify(candidate.headerImageUrl)})`,
+              flexShrink: 0
+            }}
+          />
+        ) : null}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{candidate.name}</div>
+          <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+            {candidate.owners} owner{candidate.owners === 1 ? "" : "s"} · {sources.length} source
+            {sources.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        {!isAddOpen ? (
+          <button type="button" className="island-btn" style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)} onClick={onOpenAdd}>
+            + Source
+          </button>
+        ) : null}
+      </div>
+
+      {sources.length > 0 ? (
+        <div style={{ display: "grid", gap: 6 }}>
+          {sources.map((src) => (
+            <PatchSourceRowEditor key={src.id} row={src} onChanged={onChanged} />
+          ))}
+        </div>
+      ) : null}
+
+      {isAddOpen ? (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${islandTheme.color.cardBorder}` }}>
+          <PatchSourceAddForm
+            appId={candidate.appId}
+            onCancel={onCloseAdd}
+            onSaved={() => {
+              onCloseAdd();
+              onChanged();
+            }}
+          />
+        </div>
+      ) : null}
+    </IslandCard>
+  );
+}
+
+function PatchSourceRowEditor({ row, onChanged }: { row: PatchSourceRow; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [sourceUrl, setSourceUrl] = useState(row.sourceUrl);
+  const [label, setLabel] = useState(row.label ?? "");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function save() {
+    setBusy(true);
+    setMsg(null);
+    const result = await updatePatchSource(row.id, {
+      sourceUrl,
+      label: label.trim() ? label.trim() : null
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setMsg(result.error);
+      return;
+    }
+    setEditing(false);
+    onChanged();
+  }
+
+  async function toggleEnabled() {
+    setBusy(true);
+    setMsg(null);
+    const result = await updatePatchSource(row.id, { enabled: !row.enabled });
+    setBusy(false);
+    if (!result.ok) {
+      setMsg(result.error);
+      return;
+    }
+    onChanged();
+  }
+
+  async function remove() {
+    if (!window.confirm(`Delete this source? ${row.label ?? row.sourceUrl}`)) return;
+    setBusy(true);
+    await deletePatchSource(row.id);
+    setBusy(false);
+    onChanged();
+  }
+
+  return (
+    <div
+      style={{
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${islandTheme.color.cardBorder}`,
+        borderRadius: 8,
+        padding: 10,
+        opacity: row.enabled ? 1 : 0.55
+      }}
+    >
+      {editing ? (
+        <div style={{ display: "grid", gap: 6 }}>
+          <input
+            type="url"
+            value={sourceUrl}
+            onChange={(e) => setSourceUrl(e.target.value)}
+            style={{ ...islandInputStyle, width: "100%" }}
+          />
+          <input
+            type="text"
+            placeholder="Label (e.g. r/leagueoflegends)"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            style={{ ...islandInputStyle, width: "100%" }}
+          />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button type="button" className="island-btn" disabled={busy} style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)} onClick={save}>
+              Save
+            </button>
+            <button type="button" className="island-btn" disabled={busy} style={smallBtn("transparent", islandTheme.color.textMuted, true)} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+          </div>
+          {msg ? <span style={{ fontSize: 11, color: islandTheme.color.dangerText }}>{msg}</span> : null}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center" }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, fontWeight: 700 }}>
+              {row.label ?? row.sourceUrl}
+              <span
+                className="island-mono"
+                style={{ marginLeft: 8, fontSize: 10, color: islandTheme.color.textMuted, textTransform: "uppercase" }}
+              >
+                {row.sourceType}
+              </span>
+            </div>
+            {row.label ? (
+              <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {row.sourceUrl}
+              </div>
+            ) : null}
+            {row.lastError ? (
+              <div style={{ fontSize: 11, color: islandTheme.color.dangerText, marginTop: 4 }}>
+                ⚠ {row.lastError}
+              </div>
+            ) : null}
+            {row.fetchedAt ? (
+              <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textSubtle, marginTop: 2 }}>
+                Last fetch: {new Date(row.fetchedAt).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button
+              type="button"
+              className="island-btn"
+              disabled={busy}
+              style={smallBtn("transparent", row.enabled ? islandTheme.color.successAccent : islandTheme.color.textMuted, true)}
+              onClick={toggleEnabled}
+              title={row.enabled ? "Disable" : "Enable"}
+            >
+              {row.enabled ? "On" : "Off"}
+            </button>
+            <button type="button" className="island-btn" disabled={busy} style={smallBtn("transparent", islandTheme.color.textMuted, true)} onClick={() => setEditing(true)}>
+              Edit
+            </button>
+            <button type="button" className="island-btn" disabled={busy} style={smallBtn("transparent", islandTheme.color.dangerText, true, islandTheme.color.danger)} onClick={remove}>
+              Delete
+            </button>
+          </div>
+          {msg ? <span style={{ gridColumn: "1 / -1", fontSize: 11, color: islandTheme.color.dangerText }}>{msg}</span> : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PatchSourceAddForm({
+  appId,
+  onCancel,
+  onSaved
+}: {
+  appId: number;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [sourceType, setSourceType] = useState<"rss" | "atom">("rss");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<PatchSourceTestResult | null>(null);
+
+  async function runTest() {
+    if (!sourceUrl) return;
+    setBusy(true);
+    setError(null);
+    setTestResult(null);
+    const result = await testPatchSourceUrl(sourceUrl);
+    setTestResult(result);
+    setBusy(false);
+  }
+
+  async function save() {
+    if (!sourceUrl) return;
+    setBusy(true);
+    setError(null);
+    const result = await createPatchSource({
+      appId,
+      sourceType,
+      sourceUrl,
+      label: label.trim() ? label.trim() : null
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    onSaved();
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <Field label="Type">
+        <select
+          value={sourceType}
+          onChange={(e) => setSourceType(e.target.value as "rss" | "atom")}
+          style={{ ...islandInputStyle, width: 120 }}
+        >
+          <option value="rss">RSS</option>
+          <option value="atom">Atom</option>
+        </select>
+      </Field>
+      <Field label="Feed URL">
+        <input
+          type="url"
+          placeholder="https://www.reddit.com/r/leagueoflegends/.rss"
+          value={sourceUrl}
+          onChange={(e) => setSourceUrl(e.target.value)}
+          style={{ ...islandInputStyle, width: "100%" }}
+        />
+      </Field>
+      <Field label="Label (optional)">
+        <input
+          type="text"
+          placeholder="r/leagueoflegends"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          style={{ ...islandInputStyle, width: "100%" }}
+        />
+      </Field>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          className="island-btn"
+          disabled={busy || !sourceUrl}
+          style={smallBtn("transparent", islandTheme.color.textMuted, true)}
+          onClick={runTest}
+        >
+          Test
+        </button>
+        <button
+          type="button"
+          className="island-btn"
+          disabled={busy || !sourceUrl}
+          style={smallBtn(islandTheme.color.primary, islandTheme.color.primaryText)}
+          onClick={save}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          className="island-btn"
+          disabled={busy}
+          style={smallBtn("transparent", islandTheme.color.textMuted, true)}
+          onClick={onCancel}
+        >
+          Cancel
+        </button>
+      </div>
+      {testResult ? (
+        <div
+          style={{
+            fontSize: 12,
+            color: testResult.ok ? islandTheme.color.successAccent : islandTheme.color.dangerText,
+            padding: 8,
+            background: islandTheme.color.panelMutedBg,
+            borderRadius: 6,
+            border: `1px solid ${islandTheme.color.cardBorder}`
+          }}
+        >
+          {testResult.ok ? (
+            <>
+              <div>✓ Feed OK ({testResult.itemCount ?? 0} items)</div>
+              {testResult.feedTitle ? <div>Feed: {testResult.feedTitle}</div> : null}
+              {testResult.sample ? <div>Latest: {testResult.sample.title}</div> : null}
+            </>
+          ) : (
+            <>✗ {testResult.error}</>
+          )}
+        </div>
+      ) : null}
+      {error ? <span style={{ fontSize: 12, color: islandTheme.color.dangerText }}>{error}</span> : null}
+    </div>
+  );
+}
+
 // ── Server Configuration ──────────────────────────────────────────────────────
 
 const SERVER_CONFIG_META: Record<string, { hint: string; sensitive?: boolean; restart?: boolean }> = {
@@ -1839,13 +2515,23 @@ function NewsSourcesSubpage({
   onUpdate,
   onIngest,
   onCurate,
-  onRecurate
+  onRecurate,
+  onFetchRecurateStatus
 }: {
   settings: ServerSetting[] | null;
   onUpdate: (key: string, value: string) => void;
   onIngest: () => Promise<{ ok: boolean; fetched?: number; curated?: number; error?: string }>;
   onCurate: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
-  onRecurate: () => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onRecurate: (
+    onProgress?: (snap: RecurateProgressSnap) => void
+  ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onFetchRecurateStatus: () => Promise<{
+    state: "idle" | "running" | "done" | "error";
+    reset: number;
+    curated: number;
+    total: number;
+    error: string | null;
+  } | null>;
 }) {
   const getSetting = (key: string) => settings?.find((s) => s.key === key)?.value ?? "";
 
@@ -1864,8 +2550,57 @@ function NewsSourcesSubpage({
   const [curateMsg, setCurateMsg] = useState("");
   const [recurateState, setRecurateState] = useState<"idle" | "running" | "done" | "error">("idle");
   const [recurateMsg, setRecurateMsg] = useState("");
+  const [recurateProgress, setRecurateProgress] = useState<{ curated: number; total: number } | null>(null);
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const initializedRef = useRef(false);
+
+  function progressMsg(curated: number, total: number): string {
+    if (total <= 0) return `Regenerating… ${curated} processed`;
+    const pct = Math.min(100, Math.round((curated / total) * 100));
+    return `Regenerating… ${curated} / ${total} (${pct}%)`;
+  }
+
+  function handleRecurateSnap(snap: RecurateProgressSnap) {
+    if (snap.state === "running") {
+      setRecurateState("running");
+      setRecurateProgress({ curated: snap.curated, total: snap.total });
+      setRecurateMsg(progressMsg(snap.curated, snap.total));
+    } else if (snap.state === "done") {
+      setRecurateState("done");
+      setRecurateProgress({ curated: snap.curated, total: snap.total });
+      setRecurateMsg(`Done — regenerated ${snap.curated} of ${snap.total} summaries`);
+    } else {
+      setRecurateState("error");
+      setRecurateMsg(snap.error ?? "Recurate failed");
+    }
+  }
+
+  // On mount: re-attach to an in-flight recurate job (survives page navigation / refresh)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const job = await onFetchRecurateStatus();
+      if (cancelled || !job || job.state !== "running") return;
+      setRecurateState("running");
+      setRecurateProgress({ curated: job.curated, total: job.total });
+      setRecurateMsg(progressMsg(job.curated, job.total));
+
+      const result = await onRecurate((snap) => {
+        if (cancelled) return;
+        handleRecurateSnap(snap);
+      });
+      if (cancelled) return;
+      if (!result.ok && recurateState !== "error") {
+        setRecurateState("error");
+        setRecurateMsg(result.error ?? "Recurate failed");
+      }
+      setTimeout(() => {
+        if (!cancelled) setRecurateState("idle");
+      }, 12000);
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (settings && !initializedRef.current) {
@@ -2085,28 +2820,44 @@ function NewsSourcesSubpage({
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
             Pull from all enabled RSS feeds and GNews API, upsert new articles, then run AI curation.
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <IslandButton
               variant="secondary"
               onClick={async () => {
                 setIngestState("running");
-                setIngestMsg("");
+                setIngestMsg("Fetching feeds and running AI curation — may take up to a minute…");
                 const result = await onIngest();
                 if (result.ok) {
                   setIngestState("done");
-                  setIngestMsg(`Fetched ${result.fetched ?? 0} new · curated ${result.curated ?? 0}`);
+                  setIngestMsg(
+                    `Fetched ${result.fetched ?? 0} new · curated ${result.curated ?? 0}` +
+                      (result.fetched === 0 ? " (no new articles since last run)" : "")
+                  );
+                  setTimeout(() => setIngestState("idle"), 8000);
                 } else {
                   setIngestState("error");
-                  setIngestMsg(result.error ?? "Failed");
+                  setIngestMsg(result.error ?? "Ingestion failed");
+                  setTimeout(() => setIngestState("idle"), 20000);
                 }
-                setTimeout(() => setIngestState("idle"), 6000);
               }}
               disabled={ingestState === "running"}
             >
               {ingestState === "running" ? "Fetching…" : "Fetch & Curate"}
             </IslandButton>
             {ingestMsg && (
-              <span style={{ fontSize: 12, color: ingestState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
+              <span
+                role="status"
+                aria-live="polite"
+                style={{
+                  fontSize: 12,
+                  color:
+                    ingestState === "error"
+                      ? islandTheme.color.dangerAccent
+                      : ingestState === "done"
+                        ? islandTheme.color.successAccent
+                        : islandTheme.color.textSubtle
+                }}
+              >
                 {ingestMsg}
               </span>
             )}
@@ -2116,30 +2867,47 @@ function NewsSourcesSubpage({
         <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
           <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Curate Existing Articles</div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-            Re-run AI scoring and summaries on articles that haven't been curated yet.
+            Re-run AI scoring and summaries on articles that haven't been curated yet. Processes one batch (up to 25 articles) per run.
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <IslandButton
               variant="secondary"
               onClick={async () => {
                 setCurateState("running");
-                setCurateMsg("");
+                setCurateMsg("Running AI curation pass…");
                 const result = await onCurate();
                 if (result.ok) {
                   setCurateState("done");
-                  setCurateMsg(`Curated ${result.curated ?? 0} article${result.curated === 1 ? "" : "s"}`);
+                  setCurateMsg(
+                    result.curated && result.curated > 0
+                      ? `Curated ${result.curated} article${result.curated === 1 ? "" : "s"}`
+                      : "No un-curated articles to process"
+                  );
+                  setTimeout(() => setCurateState("idle"), 8000);
                 } else {
                   setCurateState("error");
-                  setCurateMsg(result.error ?? "Failed");
+                  setCurateMsg(result.error ?? "Curation failed");
+                  setTimeout(() => setCurateState("idle"), 20000);
                 }
-                setTimeout(() => setCurateState("idle"), 6000);
               }}
               disabled={curateState === "running"}
             >
               {curateState === "running" ? "Curating…" : "Curate Articles"}
             </IslandButton>
             {curateMsg && (
-              <span style={{ fontSize: 12, color: curateState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
+              <span
+                role="status"
+                aria-live="polite"
+                style={{
+                  fontSize: 12,
+                  color:
+                    curateState === "error"
+                      ? islandTheme.color.dangerAccent
+                      : curateState === "done"
+                        ? islandTheme.color.successAccent
+                        : islandTheme.color.textSubtle
+                }}
+              >
                 {curateMsg}
               </span>
             )}
@@ -2149,34 +2917,70 @@ function NewsSourcesSubpage({
         <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
           <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Regenerate All Summaries</div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-            Reset curation on all articles and re-run AI with the updated prompt. Use after prompt changes to get longer, richer summaries. Processes {10} articles per run.
+            Reset curation on all articles and re-run AI with the updated prompt. Use after prompt changes to get longer, richer summaries. Runs in the background — safe to leave the page; progress will resume when you return.
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <IslandButton
               variant="danger"
               onClick={async () => {
                 setRecurateState("running");
-                setRecurateMsg("");
-                const result = await onRecurate();
-                if (result.ok) {
-                  setRecurateState("done");
-                  setRecurateMsg(`Reset ${result.reset ?? 0} · curated ${result.curated ?? 0} this pass`);
-                } else {
+                setRecurateProgress(null);
+                setRecurateMsg("Starting…");
+                const result = await onRecurate(handleRecurateSnap);
+                if (!result.ok && recurateState !== "error") {
                   setRecurateState("error");
-                  setRecurateMsg(result.error ?? "Failed");
+                  setRecurateMsg(result.error ?? "Recurate failed");
                 }
-                setTimeout(() => setRecurateState("idle"), 8000);
+                setTimeout(() => setRecurateState("idle"), 12000);
               }}
               disabled={recurateState === "running"}
             >
-              {recurateState === "running" ? "Regenerating…" : "Regenerate All Summaries"}
+              {recurateState === "running"
+                ? recurateProgress && recurateProgress.total > 0
+                  ? `Regenerating… ${Math.min(100, Math.round((recurateProgress.curated / recurateProgress.total) * 100))}%`
+                  : "Regenerating…"
+                : "Regenerate All Summaries"}
             </IslandButton>
             {recurateMsg && (
-              <span style={{ fontSize: 12, color: recurateState === "error" ? islandTheme.color.dangerAccent : islandTheme.color.successAccent }}>
+              <span
+                role="status"
+                aria-live="polite"
+                style={{
+                  fontSize: 12,
+                  color:
+                    recurateState === "error"
+                      ? islandTheme.color.dangerAccent
+                      : recurateState === "done"
+                        ? islandTheme.color.successAccent
+                        : islandTheme.color.textSubtle
+                }}
+              >
                 {recurateMsg}
               </span>
             )}
           </div>
+          {recurateState === "running" && recurateProgress && recurateProgress.total > 0 && (
+            <div
+              style={{
+                marginTop: 8,
+                height: 4,
+                borderRadius: 2,
+                background: islandTheme.color.panelMutedBg,
+                overflow: "hidden",
+                maxWidth: 320
+              }}
+              aria-hidden="true"
+            >
+              <div
+                style={{
+                  width: `${Math.min(100, Math.round((recurateProgress.curated / recurateProgress.total) * 100))}%`,
+                  height: "100%",
+                  background: islandTheme.color.dangerAccent,
+                  transition: "width 400ms ease"
+                }}
+              />
+            </div>
+          )}
         </div>
       </IslandCard>
     </div>
@@ -3036,12 +3840,245 @@ type EconomyOverview = {
   topHolders: { discordUserId: string; username: string; balance: number }[];
 };
 
+function MemberMultiSelect({
+  members,
+  selectedIds,
+  onToggle,
+  onClear,
+  search,
+  onSearchChange,
+  open,
+  onOpenChange
+}: {
+  members: GuildMember[];
+  selectedIds: string[];
+  onToggle: (id: string) => void;
+  onClear: () => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (event: MouseEvent) => {
+      if (containerRef.current?.contains(event.target as Node)) return;
+      onOpenChange(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onOpenChange(false);
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open, onOpenChange]);
+
+  const query = search.trim().toLowerCase();
+  const filtered = query
+    ? members.filter(
+        (m) =>
+          m.displayName.toLowerCase().includes(query) ||
+          m.username.toLowerCase().includes(query) ||
+          m.discordUserId.includes(query)
+      )
+    : members;
+
+  const selectedMembers = members.filter((m) => selectedIds.includes(m.discordUserId));
+
+  return (
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        onClick={() => onOpenChange(!open)}
+        style={{
+          ...islandInputStyle,
+          width: "100%",
+          textAlign: "left",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexWrap: "wrap",
+          minHeight: 36,
+          padding: selectedMembers.length > 0 ? "6px 10px" : "8px 12px"
+        }}
+      >
+        {selectedMembers.length === 0 ? (
+          <span style={{ color: islandTheme.color.textMuted }}>Select members…</span>
+        ) : (
+          selectedMembers.map((m) => (
+            <span
+              key={m.discordUserId}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 6px 2px 8px",
+                borderRadius: 999,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                fontSize: 12
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggle(m.discordUserId);
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              {m.displayName}
+              <span style={{ color: islandTheme.color.textMuted, fontSize: 11 }}>×</span>
+            </span>
+          ))
+        )}
+        <span style={{ marginLeft: "auto", color: islandTheme.color.textMuted, fontSize: 11 }}>
+          {open ? "▲" : "▼"}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            right: 0,
+            zIndex: 40,
+            background: islandTheme.color.menuBg,
+            backdropFilter: islandTheme.glass.blurMenu,
+            WebkitBackdropFilter: islandTheme.glass.blurMenu,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            borderRadius: 10,
+            boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+            maxHeight: 320,
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden"
+          }}
+        >
+          <div style={{ padding: 8, borderBottom: `1px solid ${islandTheme.color.cardBorder}`, display: "flex", gap: 6 }}>
+            <input
+              autoFocus
+              placeholder="Search by name or ID…"
+              value={search}
+              onChange={(e) => onSearchChange(e.target.value)}
+              style={{ ...islandInputStyle, flex: 1 }}
+            />
+            {selectedIds.length > 0 && (
+              <button
+                type="button"
+                onClick={onClear}
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  borderRadius: 6,
+                  color: islandTheme.color.textMuted,
+                  fontSize: 11,
+                  padding: "0 10px",
+                  cursor: "pointer",
+                  font: "inherit",
+                  whiteSpace: "nowrap"
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: 4 }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+                No members match.
+              </div>
+            ) : (
+              filtered.map((m) => {
+                const checked = selectedIds.includes(m.discordUserId);
+                return (
+                  <button
+                    key={m.discordUserId}
+                    type="button"
+                    onClick={() => onToggle(m.discordUserId)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      width: "100%",
+                      padding: "6px 8px",
+                      borderRadius: 6,
+                      border: "none",
+                      background: checked ? "rgba(56,189,248,0.10)" : "transparent",
+                      color: islandTheme.color.textPrimary,
+                      cursor: "pointer",
+                      font: "inherit",
+                      fontSize: 13,
+                      textAlign: "left"
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: 3,
+                        border: `1px solid ${checked ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder}`,
+                        background: checked ? islandTheme.color.primaryGlow : "transparent",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: islandTheme.color.textInverted,
+                        fontSize: 10,
+                        fontWeight: 800,
+                        flexShrink: 0
+                      }}
+                    >
+                      {checked ? "✓" : ""}
+                    </span>
+                    {m.avatarUrl ? (
+                      <img src={m.avatarUrl} alt="" width={20} height={20} style={{ borderRadius: 999, flexShrink: 0 }} />
+                    ) : (
+                      <span style={{ width: 20, height: 20, borderRadius: 999, background: islandTheme.color.panelMutedBg, flexShrink: 0 }} />
+                    )}
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {m.displayName}
+                      <span style={{ color: islandTheme.color.textMuted, fontSize: 11, marginLeft: 6 }}>@{m.username}</span>
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div
+            style={{
+              padding: "6px 10px",
+              borderTop: `1px solid ${islandTheme.color.cardBorder}`,
+              fontSize: 11,
+              color: islandTheme.color.textMuted,
+              display: "flex",
+              justifyContent: "space-between"
+            }}
+          >
+            <span>{selectedIds.length} selected</span>
+            <span>{filtered.length} of {members.length}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EconomySubpage() {
   const [overview, setOverview] = useState<EconomyOverview | null>(null);
   const [shopItems, setShopItems] = useState<NuggiesShopItem[]>([]);
   const [gameNights, setGameNights] = useState<GameNight[]>([]);
 
-  const [grantTarget, setGrantTarget] = useState("");
+  const [members, setMembers] = useState<GuildMember[]>([]);
+  const [grantTargets, setGrantTargets] = useState<string[]>([]);
+  const [grantSearch, setGrantSearch] = useState("");
+  const [grantPickerOpen, setGrantPickerOpen] = useState(false);
   const [grantAmount, setGrantAmount] = useState("");
   const [grantReason, setGrantReason] = useState("");
   const [grantMsg, setGrantMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -3060,10 +4097,11 @@ function EconomySubpage() {
   const [itemMsg, setItemMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const load = async () => {
-    const [ovRes, shopRes, nightsRes] = await Promise.all([
+    const [ovRes, shopRes, nightsRes, membersRes] = await Promise.all([
       apiFetch("/nuggies/admin/overview"),
       apiFetch("/nuggies/shop"),
       apiFetch("/game-nights"),
+      apiFetch("/members"),
     ]);
     if (ovRes.ok) setOverview(await ovRes.json() as EconomyOverview);
     if (shopRes.ok) {
@@ -3074,6 +4112,10 @@ function EconomySubpage() {
       const d = await nightsRes.json() as { gameNights: GameNight[] };
       setGameNights((d.gameNights ?? []).filter((n) => n.selectedGameName != null));
     }
+    if (membersRes.ok) {
+      const d = await membersRes.json() as { members: GuildMember[] };
+      setMembers(d.members ?? []);
+    }
   };
 
   useEffect(() => { void load(); }, []);
@@ -3082,24 +4124,53 @@ function EconomySubpage() {
 
   const handleGrant = async () => {
     const amount = parseInt(grantAmount, 10);
-    if (!grantTarget.trim() || !amount || !grantReason.trim()) return;
+    if (grantTargets.length === 0 || !amount || !grantReason.trim()) return;
     setGranting(true);
     setGrantMsg(null);
-    const res = await apiFetch("/nuggies/admin/grant", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ toDiscordUserId: grantTarget.trim(), amount, reason: grantReason.trim() }),
-    });
-    const body = await res.json() as { newBalance?: number; error?: string };
-    if (res.ok) {
-      setGrantMsg({ ok: true, text: `Done. New balance: ${(body.newBalance ?? 0).toLocaleString()} Nuggies` });
-      setGrantTarget(""); setGrantAmount(""); setGrantReason("");
+
+    // Send one request per recipient. Server-side grant endpoint is per-user.
+    // Sequential to keep ledger ordering deterministic and to avoid hammering
+    // the API; the volume here is small (admin action).
+    const results = await Promise.all(
+      grantTargets.map(async (id) => {
+        const res = await apiFetch("/nuggies/admin/grant", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ toDiscordUserId: id, amount, reason: grantReason.trim() }),
+        });
+        const body = await res.json().catch(() => ({})) as { newBalance?: number; error?: string };
+        return { id, ok: res.ok, error: body.error };
+      })
+    );
+
+    const successCount = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok);
+
+    if (failed.length === 0) {
+      setGrantMsg({
+        ok: true,
+        text: `Applied to ${successCount} ${successCount === 1 ? "user" : "users"}.`
+      });
+      setGrantTargets([]);
+      setGrantAmount("");
+      setGrantReason("");
       void load();
     } else {
-      setGrantMsg({ ok: false, text: body.error ?? "Failed" });
+      setGrantMsg({
+        ok: false,
+        text: `${successCount} ok, ${failed.length} failed${failed[0]?.error ? `: ${failed[0].error}` : ""}`
+      });
     }
     setGranting(false);
   };
+
+  function toggleGrantTarget(discordUserId: string) {
+    setGrantTargets((prev) =>
+      prev.includes(discordUserId)
+        ? prev.filter((id) => id !== discordUserId)
+        : [...prev, discordUserId]
+    );
+  }
 
   const handleAwardAttendance = async () => {
     if (!selectedNight) return;
@@ -3180,15 +4251,24 @@ function EconomySubpage() {
       <IslandCard style={{ padding: "16px 18px" }}>
         <SubsectionTitle>Grant / Deduct</SubsectionTitle>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Positive = grant, negative = deduct. Bypasses daily cap and opt-out checks.
+          Positive = grant, negative = deduct. Bypasses daily cap and opt-out checks. Applied to every selected user.
         </p>
         <div style={{ display: "grid", gap: 8 }}>
-          <input placeholder="Discord User ID" value={grantTarget} onChange={(e) => setGrantTarget(e.target.value)} style={{ ...islandInputStyle }} />
+          <MemberMultiSelect
+            members={members}
+            selectedIds={grantTargets}
+            onToggle={toggleGrantTarget}
+            onClear={() => setGrantTargets([])}
+            search={grantSearch}
+            onSearchChange={setGrantSearch}
+            open={grantPickerOpen}
+            onOpenChange={setGrantPickerOpen}
+          />
           <input placeholder="Amount (e.g. 200 or -50)" type="number" value={grantAmount} onChange={(e) => setGrantAmount(e.target.value)} style={{ ...islandInputStyle }} />
           <input placeholder="Reason" value={grantReason} onChange={(e) => setGrantReason(e.target.value)} style={{ ...islandInputStyle }} />
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <IslandButton variant="primary" onClick={() => void handleGrant()} disabled={granting || !grantTarget || !grantAmount || !grantReason}>
-              {granting ? "Applying…" : "Apply"}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <IslandButton variant="primary" onClick={() => void handleGrant()} disabled={granting || grantTargets.length === 0 || !grantAmount || !grantReason}>
+              {granting ? "Applying…" : `Apply${grantTargets.length > 1 ? ` to ${grantTargets.length}` : ""}`}
             </IslandButton>
             {grantMsg && <span style={{ fontSize: 13, color: grantMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{grantMsg.text}</span>}
           </div>

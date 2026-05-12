@@ -97,7 +97,7 @@ INSERT INTO server_settings (key, value, label, description, is_secret) VALUES
   ('nuggies_enabled',            'true',  'Nuggies: enabled',               'Master on/off switch for all Nuggies features',          false),
   ('nuggies_daily_amount',       '75',    'Nuggies: daily claim',            'Nuggies awarded per /daily claim',                       false),
   ('nuggies_daily_cap',          '600',   'Nuggies: daily earn cap',         'Max earnable per CST calendar day (all sources)',        false),
-  ('nuggies_game_cooldown_secs', '120',   'Nuggies: game cooldown (s)',      'Min seconds between gambling commands per user',         false),
+  ('nuggies_game_cooldown_secs', '3',     'Nuggies: game cooldown (s)',      'Min seconds between gambling commands per user',         false),
   ('nuggies_max_bet',            '500',   'Nuggies: max bet',                'Max bet in any gambling game',                          false),
   ('nuggies_attendance_amount',  '200',   'Nuggies: attendance reward',      'Awarded per finalized game night (admin-triggered)',     false),
   ('nuggies_first_link_amount',  '150',   'Nuggies: first Steam link bonus', 'One-time bonus for linking Steam account',              false),

@@ -1,9 +1,9 @@
 import express from "express";
 import { db } from "../db/client.js";
-import { requireSession } from "../lib/auth.js";
+import { requireBotOrSession } from "../lib/auth.js";
 
 export const activityRouter = express.Router();
-activityRouter.use(requireSession);
+activityRouter.use(requireBotOrSession);
 
 type ActivityRow = {
   id: string;
@@ -27,11 +27,13 @@ type ActivityRow = {
 type ActivityCategory = "all" | "friends" | "achievements" | "milestones" | "patches";
 
 function categorize(eventType: string): ActivityCategory {
-  if (eventType.startsWith("game_night.")) return "friends";
-  if (eventType.startsWith("steam.")) return "milestones";
-  if (eventType.startsWith("achievement.") || eventType.startsWith("game_night.game_picked")) {
+  // Note: order matters — most-specific prefixes first.
+  if (eventType === "game_night.game_picked" || eventType.startsWith("achievement.")) {
     return "achievements";
   }
+  if (eventType.startsWith("milestone.")) return "milestones";
+  if (eventType.startsWith("game_night.")) return "friends";
+  if (eventType.startsWith("steam.")) return "milestones";
   if (eventType.startsWith("news.")) return "patches";
   return "milestones";
 }

@@ -7,7 +7,9 @@ import { activityRouter } from "./routes/activity.js";
 import { aiChatRouter } from "./routes/aiChat.js";
 import { authRouter } from "./routes/auth.js";
 import { gameNewsRouter } from "./routes/gameNews.js";
+import { gameNewsSourcesRouter } from "./routes/gameNewsSources.js";
 import { generalNewsRouter } from "./routes/generalNews.js";
+import { internalRouter } from "./routes/internal.js";
 import { gameNightRouter } from "./routes/gameNights.js";
 import { membersRouter } from "./routes/members.js";
 import { newsCardsRouter } from "./routes/newsCards.js";
@@ -15,6 +17,7 @@ import { nuggiesRouter } from "./routes/nuggies.js";
 import { nuggiesGamesRouter } from "./routes/nuggiesGames.js";
 import { registerAllGames } from "./lib/games/index.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
+import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
 import { forumsRouter } from "./routes/forums.js";
 import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
@@ -54,6 +57,7 @@ app.use("/steam", steamRouter);
 app.use("/recommendations", recommendationRouter);
 app.use("/game-nights", gameNightRouter);
 app.use("/games", gameNewsRouter);
+app.use("/game-news-sources", gameNewsSourcesRouter);
 app.use("/news", generalNewsRouter);
 app.use("/activity", activityRouter);
 app.use("/news-cards", newsCardsRouter);
@@ -63,6 +67,7 @@ app.use("/nuggies/games", nuggiesGamesRouter);
 app.use("/nuggies", nuggiesRouter);
 app.use("/forums", forumsRouter);
 app.use("/taglines", taglinesRouter);
+app.use("/internal", internalRouter);
 
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   if (error instanceof ZodError) {
@@ -115,6 +120,17 @@ async function bootstrap() {
       console.error("[nuggies-games] sweep failed:", err);
     });
   }, 30_000);
+
+  // Loan sweep: defaults active loans past due (seizes collateral) and
+  // cancels stale pending offers (24h TTL). Runs at boot + every 5 min.
+  processDefaultedLoans().catch((err) => {
+    console.error("[nuggies-loans] initial sweep failed:", err);
+  });
+  setInterval(() => {
+    processDefaultedLoans().catch((err) => {
+      console.error("[nuggies-loans] sweep failed:", err);
+    });
+  }, 5 * 60 * 1000);
 
   app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);

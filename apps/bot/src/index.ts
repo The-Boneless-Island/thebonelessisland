@@ -49,6 +49,71 @@ async function api(
   return { ok: res.ok, status: res.status, data };
 }
 
+/** Internal endpoints don't require x-discord-user-id; just the bot secret. */
+async function internalApi(
+  method: string,
+  path: string
+): Promise<{ ok: boolean; status: number; data: unknown }> {
+  const res = await fetch(`${apiBase}${path}`, {
+    method,
+    headers: {
+      "content-type": "application/json",
+      "x-island-bot-secret": botApiSharedSecret,
+    },
+  });
+  const data = await res.json().catch(() => null);
+  return { ok: res.ok, status: res.status, data };
+}
+
+// ── Autocomplete ──────────────────────────────────────────────────────────────
+
+type AutocompleteChoice = { name: string; value: string | number };
+
+/**
+ * Maps (command, subcommand, focused option) → internal autocomplete endpoint,
+ * fetches up to 25 contextually-correct suggestions, and returns them in the
+ * shape Discord expects. Discord enforces a 3s deadline; bail to `[]` on any
+ * error so the dropdown just goes empty instead of crashing the interaction.
+ */
+async function fetchAutocomplete(
+  commandName: string,
+  subcommand: string | null,
+  optionName: string,
+  focusedValue: string,
+  discordUserId: string
+): Promise<AutocompleteChoice[]> {
+  const q = encodeURIComponent(focusedValue ?? "");
+  const uid = encodeURIComponent(discordUserId);
+  let path: string | null = null;
+
+  if (commandName === "buy" && optionName === "item") {
+    path = `/internal/autocomplete/shop?discordUserId=${uid}&q=${q}`;
+  } else if (commandName === "equip" && optionName === "item") {
+    path = `/internal/autocomplete/inventory?discordUserId=${uid}&q=${q}`;
+  } else if (commandName === "market" && subcommand === "list" && optionName === "item") {
+    path = `/internal/autocomplete/inventory?discordUserId=${uid}&q=${q}&exclude_listed=true`;
+  } else if (commandName === "market" && subcommand === "buy" && optionName === "id") {
+    path = `/internal/autocomplete/market-listings?discordUserId=${uid}&q=${q}&seller=others`;
+  } else if (commandName === "market" && subcommand === "cancel" && optionName === "id") {
+    path = `/internal/autocomplete/market-listings?discordUserId=${uid}&q=${q}&seller=mine`;
+  } else if (commandName === "loan" && subcommand === "accept" && optionName === "id") {
+    path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=borrower&status=pending`;
+  } else if (commandName === "loan" && subcommand === "repay" && optionName === "id") {
+    path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=borrower&status=active`;
+  } else if (commandName === "loan" && subcommand === "cancel" && optionName === "id") {
+    path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=lender&status=pending`;
+  } else if (commandName === "nightrecommend" && optionName === "nightid") {
+    path = `/internal/autocomplete/game-nights?q=${q}`;
+  }
+
+  if (!path) return [];
+
+  const { ok, data } = await internalApi("GET", path);
+  if (!ok) return [];
+  const d = data as { choices?: AutocompleteChoice[] } | null;
+  return d?.choices ?? [];
+}
+
 // ── Game-state rendering helpers (data comes from server) ───────────────────
 
 type Card = { rank: string; suit: string };
@@ -125,6 +190,92 @@ function nuggie(n: number): string {
   return `**₦${n.toLocaleString()}**`;
 }
 
+// ── Phase 1 read-only helpers ───────────────────────────────────────────────
+
+// Mirror of MILESTONE_TIERS in apps/api/src/lib/nuggiesAchievements.ts.
+// Keep in sync if thresholds change.
+const MILESTONES = [500, 2_000, 5_000, 15_000, 40_000, 100_000, 250_000, 750_000];
+const MILESTONE_LABELS = [
+  "TUTORIAL ISLAND",
+  "SIDEKICK",
+  "REGULAR",
+  "RISING STAR",
+  "A-LISTER",
+  "KING OF THE HILL",
+  "BIG BOSS",
+  "MR. WORLDWIDE",
+];
+
+function progressBar(current: number, target: number, width = 20): string {
+  if (target <= 0) return "▓".repeat(width);
+  const ratio = Math.max(0, Math.min(1, current / target));
+  const filled = Math.round(ratio * width);
+  return "▓".repeat(filled) + "░".repeat(width - filled);
+}
+
+function relativeAgo(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const delta = Math.max(0, Date.now() - t);
+  const m = Math.round(delta / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  if (d < 14) return `${d}d ago`;
+  const w = Math.round(d / 7);
+  if (w < 8) return `${w}w ago`;
+  return `${Math.round(d / 30)}mo ago`;
+}
+
+type ActivityEvent = {
+  id: string;
+  eventType: string;
+  category: "all" | "friends" | "achievements" | "milestones" | "patches";
+  createdAt: string;
+  actor: { displayName: string } | null;
+  target: { displayName: string } | null;
+  game: { name: string } | null;
+  payload: Record<string, unknown>;
+};
+
+function describeActivity(e: ActivityEvent): string {
+  const actor = e.actor?.displayName ?? "A crew member";
+  const ago = relativeAgo(e.createdAt);
+  const game = e.game?.name;
+  const payload = e.payload ?? {};
+  switch (e.eventType) {
+    case "game_night.created": {
+      const title = typeof payload.title === "string" ? payload.title : "a new session";
+      return `🌴 **${actor}** scheduled **${title}** · ${ago}`;
+    }
+    case "game_night.rsvp_joined":
+      return `🪵 **${actor}** RSVP'd to the next game night · ${ago}`;
+    case "game_night.rsvp_left":
+      return `🌫 **${actor}** stepped off the dock · ${ago}`;
+    case "game_night.game_picked":
+      return `🎯 **${actor}** locked in **${game ?? "a game"}** · ${ago}`;
+    case "steam.linked":
+      return `🔗 **${actor}** wired up their Steam library · ${ago}`;
+    case "steam.unlinked":
+      return `🪢 **${actor}** unhooked their Steam library · ${ago}`;
+    case "achievement.unlocked": {
+      const name = typeof payload.name === "string" ? payload.name : "an achievement";
+      const emoji = typeof payload.emoji === "string" ? payload.emoji : "🏆";
+      return `${emoji} **${actor}** unlocked **${name}** · ${ago}`;
+    }
+    case "milestone.reached": {
+      const label = typeof payload.label === "string" ? payload.label : "a new tier";
+      const emoji = typeof payload.emoji === "string" ? payload.emoji : "⭐";
+      const threshold = typeof payload.threshold === "number" ? `₦${payload.threshold.toLocaleString()}` : "";
+      return `${emoji} **${actor}** hit **${label}**${threshold ? ` (${threshold})` : ""} · ${ago}`;
+    }
+    default:
+      return `✨ **${actor}** · ${e.eventType} · ${ago}`;
+  }
+}
+
 // ── Command Definitions ───────────────────────────────────────────────────────
 
 const commands = [
@@ -140,7 +291,7 @@ const commands = [
     .setName("nightrecommend")
     .setDescription("Suggest games for a specific game night")
     .addIntegerOption((o) =>
-      o.setName("nightid").setDescription("Game night ID from the website").setRequired(true)
+      o.setName("nightid").setDescription("Game night ID from the website").setRequired(true).setAutocomplete(true)
     )
     .addStringOption((o) =>
       o.setName("memberids").setDescription("Optional: comma-separated Discord member IDs").setRequired(false)
@@ -172,12 +323,12 @@ const commands = [
   new SlashCommandBuilder()
     .setName("buy")
     .setDescription("Buy an item from the shop")
-    .addStringOption((o) => o.setName("item").setDescription("Item name").setRequired(true)),
+    .addStringOption((o) => o.setName("item").setDescription("Item name").setRequired(true).setAutocomplete(true)),
 
   new SlashCommandBuilder()
     .setName("equip")
     .setDescription("Equip or unequip an item you own")
-    .addStringOption((o) => o.setName("item").setDescription("Item name").setRequired(true)),
+    .addStringOption((o) => o.setName("item").setDescription("Item name").setRequired(true).setAutocomplete(true)),
 
   // Games
   new SlashCommandBuilder()
@@ -221,17 +372,17 @@ const commands = [
     .addSubcommand((s) =>
       s.setName("accept")
         .setDescription("Accept a pending loan offer")
-        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true))
+        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true).setAutocomplete(true))
     )
     .addSubcommand((s) =>
       s.setName("repay")
         .setDescription("Repay an active loan")
-        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true))
+        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true).setAutocomplete(true))
     )
     .addSubcommand((s) =>
       s.setName("cancel")
         .setDescription("Cancel a pending loan offer (lender only)")
-        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true))
+        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true).setAutocomplete(true))
     )
     .addSubcommand((s) =>
       s.setName("list")
@@ -245,13 +396,13 @@ const commands = [
     .addSubcommand((s) =>
       s.setName("list")
         .setDescription("List one of your items for sale")
-        .addStringOption((o) => o.setName("item").setDescription("Item name to sell").setRequired(true))
+        .addStringOption((o) => o.setName("item").setDescription("Item name to sell").setRequired(true).setAutocomplete(true))
         .addIntegerOption((o) => o.setName("price").setDescription("Asking price in Nuggies").setRequired(true).setMinValue(1))
     )
     .addSubcommand((s) =>
       s.setName("buy")
         .setDescription("Buy a marketplace listing")
-        .addIntegerOption((o) => o.setName("id").setDescription("Listing ID").setRequired(true))
+        .addIntegerOption((o) => o.setName("id").setDescription("Listing ID").setRequired(true).setAutocomplete(true))
     )
     .addSubcommand((s) =>
       s.setName("browse")
@@ -260,7 +411,57 @@ const commands = [
     .addSubcommand((s) =>
       s.setName("cancel")
         .setDescription("Cancel your own listing")
-        .addIntegerOption((o) => o.setName("id").setDescription("Listing ID").setRequired(true))
+        .addIntegerOption((o) => o.setName("id").setDescription("Listing ID").setRequired(true).setAutocomplete(true))
+    ),
+
+  // ── Read-only parity commands ────────────────────────────────────────────
+
+  new SlashCommandBuilder()
+    .setName("leaderboard")
+    .setDescription("The ladder — top Nuggies holders on the island"),
+
+  new SlashCommandBuilder()
+    .setName("profile")
+    .setDescription("View an islander's Nuggies profile")
+    .addUserOption((o) =>
+      o.setName("user").setDescription("Member to view (default: you)").setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
+    .setName("inventory")
+    .setDescription("View your Nuggies inventory")
+    .addStringOption((o) =>
+      o
+        .setName("type")
+        .setDescription("Filter by item type")
+        .setRequired(false)
+        .addChoices(
+          { name: "All", value: "all" },
+          { name: "Titles", value: "title" },
+          { name: "Flairs", value: "flair" },
+          { name: "Badges", value: "badge" }
+        )
+    ),
+
+  new SlashCommandBuilder()
+    .setName("milestones")
+    .setDescription("Your rank progress on the ladder"),
+
+  new SlashCommandBuilder()
+    .setName("activity")
+    .setDescription("Recent activity from the island")
+    .addStringOption((o) =>
+      o
+        .setName("scope")
+        .setDescription("Filter by category")
+        .setRequired(false)
+        .addChoices(
+          { name: "All", value: "all" },
+          { name: "Friends", value: "friends" },
+          { name: "Achievements", value: "achievements" },
+          { name: "Milestones", value: "milestones" },
+          { name: "Patches", value: "patches" }
+        )
     ),
 
   // Opt out/in
@@ -295,8 +496,173 @@ async function registerCommands() {
 // ── Client ────────────────────────────────────────────────────────────────────
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    // Privileged — enable both in Discord Dev Portal under the bot's
+    // "Privileged Gateway Intents" section.
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildPresences
+  ]
 });
+
+// ── Presence sync ───────────────────────────────────────────────────────────
+// Push every Discord presence change (online/idle/dnd/offline) to the API so
+// the web UI's Friends Online card reflects real Discord status. We dedupe by
+// last-pushed status per user — Discord fires PresenceUpdate on activity
+// changes too (game start/stop), and we only care about the status field.
+
+const lastPushedStatus = new Map<string, string>();
+
+async function pushPresence(discordUserId: string, status: string): Promise<void> {
+  if (!botApiSharedSecret) return;
+  if (lastPushedStatus.get(discordUserId) === status) return;
+  lastPushedStatus.set(discordUserId, status);
+  try {
+    await fetch(`${apiBase}/members/presence/${discordUserId}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-island-bot-secret": botApiSharedSecret
+      },
+      body: JSON.stringify({ status })
+    });
+  } catch {
+    // Best-effort. Next presence event will retry.
+    lastPushedStatus.delete(discordUserId);
+  }
+}
+
+client.on(Events.PresenceUpdate, (_oldPresence, newPresence) => {
+  const userId = newPresence?.userId;
+  const status = newPresence?.status;
+  if (!userId || !status) return;
+  if (newPresence.guild?.id && newPresence.guild.id !== guildId) return;
+  void pushPresence(userId, status);
+});
+
+// ── Milestone announcer (outbox poller) ─────────────────────────────────────
+//
+// Polls /internal/bot/announcements/pending every 30s. For each
+// 'milestone.reached' row: posts to the configured channel + assigns the
+// new tier role + removes lower tier roles. Marks each row processed
+// regardless of post/role outcome to avoid loop-on-failure.
+
+const settingsCache = new Map<string, { value: string; cachedAt: number }>();
+const SETTINGS_TTL_MS = 60_000;
+
+async function getCachedSetting(key: string): Promise<string> {
+  const cached = settingsCache.get(key);
+  if (cached && Date.now() - cached.cachedAt < SETTINGS_TTL_MS) {
+    return cached.value;
+  }
+  const { ok, data } = await internalApi("GET", `/internal/settings/${encodeURIComponent(key)}`);
+  const value = ok && data && typeof data === "object" && "value" in data ? String((data as { value: string }).value ?? "") : "";
+  settingsCache.set(key, { value, cachedAt: Date.now() });
+  return value;
+}
+
+// Ordinal scheme — keys decoupled from tier display names so renames don't
+// touch this list. Index aligned with MILESTONE_TIERS in apps/api.
+const TIER_ROLE_KEYS_IN_LADDER_ORDER = [
+  "milestone_role_rank_01",
+  "milestone_role_rank_02",
+  "milestone_role_rank_03",
+  "milestone_role_rank_04",
+  "milestone_role_rank_05",
+  "milestone_role_rank_06",
+  "milestone_role_rank_07",
+  "milestone_role_rank_08",
+];
+
+type MilestonePayload = {
+  discordUserId: string;
+  label: string;
+  threshold: number;
+  emblem: string;
+  bonus: number;
+  roleSettingKey: string;
+};
+
+async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<void> {
+  const enabled = await getCachedSetting("milestone_announcements_enabled");
+  const channelId = await getCachedSetting("milestone_channel_id");
+
+  // 1. Public channel announcement (if enabled + configured)
+  if (enabled === "true" && channelId) {
+    try {
+      const channel = await client.channels.fetch(channelId);
+      if (channel && channel.isSendable()) {
+        await channel.send(
+          `🌊 <@${payload.discordUserId}> reached **${payload.label}** ${payload.emblem} — ₦${payload.bonus.toLocaleString()} bonus paid!`
+        );
+      }
+    } catch (err) {
+      console.error(`[milestones] channel post failed for ${payload.discordUserId}@${payload.label}`, err);
+    }
+  }
+
+  // 2. Role assignment + lower-tier role cleanup
+  if (!guildId) return;
+  try {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) return;
+    const member = await guild.members.fetch(payload.discordUserId).catch(() => null);
+    if (!member) return;
+
+    const newRoleId = await getCachedSetting(payload.roleSettingKey);
+    if (newRoleId) {
+      await member.roles.add(newRoleId).catch((err) => {
+        console.error(`[milestones] roles.add ${newRoleId} failed for ${payload.discordUserId}`, err);
+      });
+    }
+
+    // Remove every tier role BELOW this one (so a member only has their highest).
+    const reachedIdx = TIER_ROLE_KEYS_IN_LADDER_ORDER.indexOf(payload.roleSettingKey);
+    if (reachedIdx > 0) {
+      for (let i = 0; i < reachedIdx; i++) {
+        const lowerKey = TIER_ROLE_KEYS_IN_LADDER_ORDER[i];
+        const lowerRoleId = await getCachedSetting(lowerKey);
+        if (lowerRoleId && member.roles.cache.has(lowerRoleId)) {
+          await member.roles.remove(lowerRoleId).catch((err) => {
+            console.error(`[milestones] roles.remove ${lowerRoleId} failed for ${payload.discordUserId}`, err);
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`[milestones] role sync failed for ${payload.discordUserId}@${payload.label}`, err);
+  }
+}
+
+let processInFlight = false;
+
+async function processPendingAnnouncements(): Promise<void> {
+  if (processInFlight) return;
+  if (!botApiSharedSecret) return;
+  processInFlight = true;
+  try {
+    const { ok, data } = await internalApi("GET", "/internal/bot/announcements/pending");
+    if (!ok || !data || typeof data !== "object" || !("announcements" in data)) return;
+    const rows = (data as { announcements: Array<{ id: number; kind: string; payload: Record<string, unknown> }> }).announcements ?? [];
+    for (const row of rows) {
+      try {
+        if (row.kind === "milestone.reached") {
+          await processMilestoneAnnouncement(row.payload as MilestonePayload);
+        }
+      } catch (err) {
+        console.error(`[announcements] handler failed for row ${row.id}`, err);
+      } finally {
+        // Always mark processed so a misconfigured row can't loop forever.
+        await internalApi("POST", `/internal/bot/announcements/${row.id}/processed`);
+      }
+    }
+  } catch (err) {
+    console.error("[announcements] poll failed", err);
+  } finally {
+    processInFlight = false;
+  }
+}
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot ready as ${readyClient.user.tag}`);
@@ -305,11 +671,57 @@ client.once(Events.ClientReady, async (readyClient) => {
   } catch (error) {
     console.error("Command registration failed", error);
   }
+
+  // Kick off the announcement poll loop. First run immediate, then every 30s.
+  void processPendingAnnouncements();
+  setInterval(() => void processPendingAnnouncements(), 30_000);
+
+  // Initial presence sweep — push current cached status for every guild
+  // member. Without this, members not in the bot's gateway PRESENCE_UPDATE
+  // backlog (e.g. permanently offline users) would stay null in the DB.
+  if (guildId) {
+    try {
+      const guild = await readyClient.guilds.fetch(guildId).catch(() => null);
+      if (guild) {
+        const members = await guild.members.fetch().catch(() => null);
+        if (members) {
+          let pushed = 0;
+          for (const [, member] of members) {
+            const status = member.presence?.status ?? "offline";
+            void pushPresence(member.id, status);
+            pushed += 1;
+          }
+          console.log(`[presence] initial sweep queued ${pushed} member(s)`);
+        }
+      }
+    } catch (error) {
+      console.error("Initial presence sweep failed", error);
+    }
+  }
 });
 
 // ── Interaction Handler ───────────────────────────────────────────────────────
 
 client.on(Events.InteractionCreate, async (interaction) => {
+  if (interaction.isAutocomplete()) {
+    try {
+      const focused = interaction.options.getFocused(true);
+      const sub = interaction.options.getSubcommand(false);
+      const choices = await fetchAutocomplete(
+        interaction.commandName,
+        sub,
+        focused.name,
+        String(focused.value ?? ""),
+        interaction.user.id
+      );
+      await interaction.respond(choices.slice(0, 25));
+    } catch (err) {
+      console.error("[autocomplete] error", err);
+      try { await interaction.respond([]); } catch { /* ignore */ }
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const userId = interaction.user.id;
@@ -882,6 +1294,218 @@ client.on(Events.InteractionCreate, async (interaction) => {
           await interaction.editReply(`✅ Listing \`${listingId}\` cancelled.`);
           break;
         }
+        break;
+      }
+
+      // ── /leaderboard ──────────────────────────────────────────────────────
+
+      case "leaderboard": {
+        await interaction.deferReply();
+        const { ok, data } = await api("GET", "/nuggies/leaderboard", userId);
+        const d = data as {
+          leaderboard?: Array<{
+            rank: number;
+            discordUserId: string;
+            username: string;
+            balance: number;
+            equippedTitle?: { name: string; itemData?: { emoji?: string } } | null;
+          }>;
+        } | null;
+        const entries = d?.leaderboard ?? [];
+        if (!ok || entries.length === 0) {
+          await interaction.editReply("No leaderboard data right now.");
+          return;
+        }
+        const top = entries.slice(0, 10);
+        const myRank = entries.find((e) => e.discordUserId === userId);
+        const lines = top.map((e) => {
+          const medal = e.rank === 1 ? "🥇" : e.rank === 2 ? "🥈" : e.rank === 3 ? "🥉" : `\`#${String(e.rank).padStart(2, " ")}\``;
+          const title = e.equippedTitle?.name ? ` _${e.equippedTitle.itemData?.emoji ?? ""} ${e.equippedTitle.name}_` : "";
+          return `${medal} **${e.username}**${title} — ₦${e.balance.toLocaleString()}`;
+        });
+        const embed = new EmbedBuilder()
+          .setTitle("🏆 Nuggies · Ladder")
+          .setDescription(lines.join("\n"))
+          .setColor(0xfbbf24);
+        if (myRank && myRank.rank > 10) {
+          embed.setFooter({
+            text: `Your rank: #${myRank.rank} · ₦${myRank.balance.toLocaleString()}`,
+          });
+        } else if (myRank) {
+          embed.setFooter({ text: `Your balance: ₦${myRank.balance.toLocaleString()}` });
+        }
+        await interaction.editReply({ embeds: [embed] });
+        break;
+      }
+
+      // ── /profile ──────────────────────────────────────────────────────────
+
+      case "profile": {
+        await interaction.deferReply();
+        const targetUser = interaction.options.getUser("user");
+        const targetId = targetUser?.id ?? userId;
+        const targetName = targetUser?.username ?? username;
+        const avatarUrl = (targetUser ?? interaction.user).displayAvatarURL({ size: 128 });
+
+        const { ok, data } = await api("GET", `/nuggies/user/${targetId}`, userId);
+        const d = data as {
+          balance?: number;
+          lifetimeEarned?: number;
+          equippedItems?: Array<{ name: string; itemType: string; itemData: { emoji?: string; label?: string } }>;
+        } | null;
+        if (!ok || d?.balance === undefined) {
+          await interaction.editReply("Couldn't load that profile.");
+          return;
+        }
+
+        const balance = d.balance;
+        const lifetimeEarned = d.lifetimeEarned ?? balance;
+        const equipped = d.equippedItems ?? [];
+        const nextMilestone = MILESTONES.find((m) => lifetimeEarned < m);
+        const equippedLines = equipped.length
+          ? equipped.map((it) => `• ${it.itemData?.emoji ?? "✨"} **${it.name}** _(${it.itemType})_`).join("\n")
+          : "_None equipped_";
+
+        const embed = new EmbedBuilder()
+          .setTitle(`${targetName}'s Profile`)
+          .setThumbnail(avatarUrl)
+          .setColor(0xfbbf24)
+          .addFields(
+            { name: "Balance", value: `₦${balance.toLocaleString()}`, inline: true },
+            { name: "Lifetime earned", value: `₦${lifetimeEarned.toLocaleString()}`, inline: true },
+            {
+              name: "Next milestone",
+              value: nextMilestone
+                ? `₦${nextMilestone.toLocaleString()} · ${Math.round((lifetimeEarned / nextMilestone) * 100)}%`
+                : "Apex tier 🦑",
+              inline: true,
+            },
+            { name: "Equipped", value: equippedLines, inline: false }
+          );
+        await interaction.editReply({ embeds: [embed] });
+        break;
+      }
+
+      // ── /inventory ────────────────────────────────────────────────────────
+
+      case "inventory": {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const filter = interaction.options.getString("type") ?? "all";
+        const { ok, data } = await api("GET", "/nuggies/me", userId);
+        const d = data as {
+          inventory?: Array<{
+            itemId: number;
+            name: string;
+            itemType: string;
+            itemData: { emoji?: string; label?: string };
+            equipped: boolean;
+          }>;
+        } | null;
+        if (!ok) {
+          await interaction.editReply("Couldn't load inventory.");
+          return;
+        }
+        let items = d?.inventory ?? [];
+        if (filter !== "all") items = items.filter((i) => i.itemType === filter);
+        if (items.length === 0) {
+          await interaction.editReply(
+            filter === "all"
+              ? "Your locker's empty. Try `/shop` to spend some Nuggies."
+              : `No ${filter}s in your locker yet.`
+          );
+          return;
+        }
+        const grouped = new Map<string, typeof items>();
+        for (const it of items) {
+          const list = grouped.get(it.itemType) ?? [];
+          list.push(it);
+          grouped.set(it.itemType, list);
+        }
+        const embed = new EmbedBuilder()
+          .setTitle(`${username}'s Inventory`)
+          .setColor(0x22d3ee);
+        for (const [type, list] of grouped) {
+          const lines = list
+            .map((it) => `${it.itemData?.emoji ?? "✨"} **${it.name}**${it.equipped ? " · *equipped*" : ""}`)
+            .join("\n");
+          embed.addFields({
+            name: `${type.charAt(0).toUpperCase()}${type.slice(1)}s · ${list.length}`,
+            value: lines,
+            inline: false,
+          });
+        }
+        await interaction.editReply({ embeds: [embed] });
+        break;
+      }
+
+      // ── /milestones ───────────────────────────────────────────────────────
+
+      case "milestones": {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const { ok, data } = await api("GET", "/nuggies/me", userId);
+        const d = data as { balance?: number; lifetimeEarned?: number } | null;
+        if (!ok || d?.balance === undefined) {
+          await interaction.editReply("Couldn't load milestones.");
+          return;
+        }
+        const balance = d.balance;
+        const lifetimeEarned = d.lifetimeEarned ?? balance;
+        const nextMilestone = MILESTONES.find((m) => lifetimeEarned < m);
+        const ladder = MILESTONES.map((m, i) => {
+          const reached = lifetimeEarned >= m;
+          const isNext = !reached && (i === 0 || lifetimeEarned >= MILESTONES[i - 1]);
+          const marker = reached ? "⭐" : isNext ? "◎" : "○";
+          return `${marker} **${MILESTONE_LABELS[i]}** ${reached ? "_reached_" : ""}`;
+        }).join("\n");
+        const embed = new EmbedBuilder()
+          .setTitle("🏝️ Rank · Progress")
+          .setDescription(ladder)
+          .setColor(0xfbbf24)
+          .addFields(
+            {
+              name: nextMilestone ? `Next: ₦${nextMilestone.toLocaleString()}` : "All milestones reached",
+              value: nextMilestone
+                ? `\`${progressBar(lifetimeEarned, nextMilestone)}\` ${Math.round((lifetimeEarned / nextMilestone) * 100)}%\n₦${lifetimeEarned.toLocaleString()} / ₦${nextMilestone.toLocaleString()}`
+                : `Lifetime earned: ₦${lifetimeEarned.toLocaleString()}`,
+              inline: false,
+            },
+            {
+              name: "Stats",
+              value: `Lifetime ₦${lifetimeEarned.toLocaleString()} · Balance ₦${balance.toLocaleString()}`,
+              inline: false,
+            }
+          );
+        await interaction.editReply({ embeds: [embed] });
+        break;
+      }
+
+      // ── /activity ─────────────────────────────────────────────────────────
+
+      case "activity": {
+        await interaction.deferReply();
+        const scope = interaction.options.getString("scope") ?? "all";
+        const { ok, data } = await api("GET", "/activity?limit=25", userId);
+        const d = data as { events?: ActivityEvent[] } | null;
+        if (!ok) {
+          await interaction.editReply("Couldn't load activity feed.");
+          return;
+        }
+        let events = d?.events ?? [];
+        if (scope !== "all") events = events.filter((e) => e.category === scope);
+        events = events.slice(0, 10);
+        if (events.length === 0) {
+          await interaction.editReply(
+            scope === "all"
+              ? "No island activity yet — schedule a game night or sync your library to get the dock buzzing."
+              : `Nothing in **${scope}** right now.`
+          );
+          return;
+        }
+        const embed = new EmbedBuilder()
+          .setTitle(scope === "all" ? "🌴 Island Activity" : `🌴 Activity · ${scope}`)
+          .setDescription(events.map(describeActivity).join("\n"))
+          .setColor(0x22d3ee);
+        await interaction.editReply({ embeds: [embed] });
         break;
       }
 

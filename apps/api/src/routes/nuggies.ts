@@ -14,8 +14,9 @@ import {
   getBalance,
   getEquippedItems,
   getRecentTransactions,
-  processDefaultedLoans,
+  getEquippedItemsByUserId,
 } from "../lib/nuggiesLedger.js";
+import { checkBankRun, checkGameNightAttendance, checkNerfed } from "../lib/nuggiesAchievements.js";
 
 export const nuggiesRouter = Router();
 
@@ -47,7 +48,7 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const [balRow, optRow, txRows, invRows, loanRows] = await Promise.all([
+  const [balRow, optRow, txRows, invRows, loanRows, lifetimeRow] = await Promise.all([
     db.query<{ balance: string }>(
       "SELECT balance FROM nuggies_balances WHERE user_id = $1",
       [userId]
@@ -62,12 +63,12 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
        ORDER BY created_at DESC LIMIT 20`,
       [userId]
     ),
-    db.query<{ item_id: string; equipped: boolean; name: string; item_type: string; item_data: Record<string, unknown>; price: string; purchased_at: string }>(
-      `SELECT i.item_id, i.equipped, i.purchased_at, s.name, s.item_type, s.item_data, s.price
+    db.query<{ item_id: string; equipped: boolean; name: string; description: string; item_type: string; item_data: Record<string, unknown>; price: string; purchased_at: string; acquisition: string }>(
+      `SELECT i.item_id, i.equipped, i.purchased_at, s.name, s.description, s.item_type, s.item_data, s.price, s.acquisition
        FROM nuggies_inventory i
        INNER JOIN nuggies_shop_items s ON s.id = i.item_id
        WHERE i.user_id = $1
-       ORDER BY i.purchased_at DESC`,
+       ORDER BY (s.acquisition = 'earned') DESC, i.purchased_at DESC`,
       [userId]
     ),
     db.query<{ id: string; status: string; principal: string; amount_due: string; collateral: string; due_at: string; lender_user_id: string; borrower_user_id: string }>(
@@ -78,10 +79,17 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
        ORDER BY created_at DESC`,
       [userId]
     ),
+    db.query<{ total: string }>(
+      `SELECT COALESCE(SUM(amount), 0)::text AS total
+       FROM nuggies_transactions
+       WHERE user_id = $1 AND amount > 0`,
+      [userId]
+    ),
   ]);
 
   res.json({
     balance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
+    lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
     optedOut: optRow.rows[0]?.nuggies_opted_out ?? false,
     transactions: txRows.rows.map((r) => ({
       id: parseInt(r.id, 10),
@@ -94,11 +102,13 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
     inventory: invRows.rows.map((r) => ({
       itemId: parseInt(r.item_id, 10),
       name: r.name,
+      description: r.description,
       itemType: r.item_type,
       itemData: r.item_data,
       price: parseInt(r.price, 10),
       equipped: r.equipped,
       purchasedAt: r.purchased_at,
+      acquisition: r.acquisition,
     })),
     loans: loanRows.rows.map((r) => ({
       id: parseInt(r.id, 10),
@@ -118,50 +128,126 @@ nuggiesRouter.get("/user/:discordUserId", requireBotOrSession, async (req, res) 
   const userId = await resolveInternalId(String(req.params.discordUserId));
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const [balRow, equippedItems] = await Promise.all([
+  const [balRow, equippedItems, lifetimeRow] = await Promise.all([
     db.query<{ balance: string }>(
       "SELECT balance FROM nuggies_balances WHERE user_id = $1",
       [userId]
     ),
-    getEquippedItems(String(req.params.discordUserId)),
+    getEquippedItemsByUserId(userId),
+    db.query<{ total: string }>(
+      `SELECT COALESCE(SUM(amount), 0)::text AS total
+       FROM nuggies_transactions
+       WHERE user_id = $1 AND amount > 0`,
+      [userId]
+    ),
   ]);
 
   res.json({
     balance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
+    lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
     equippedItems,
   });
 });
 
+// ── GET /nuggies/achievements ─────────────────────────────────────────────────
+// Returns the full earned-tier catalog plus per-caller unlock state. Used by
+// the Milestones & Achievements page so the UI can show locked + unlocked
+// titles side-by-side without filtering /shop (which omits earned items).
+
+nuggiesRouter.get("/achievements", requireBotOrSession, async (_req, res) => {
+  const userId = await resolveInternalId(String(res.locals.userId));
+
+  const r = await db.query<{
+    id: string;
+    name: string;
+    description: string;
+    item_type: string;
+    item_data: Record<string, unknown>;
+    unlocked_at: string | null;
+    equipped: boolean | null;
+  }>(
+    `SELECT
+       s.id, s.name, s.description, s.item_type, s.item_data,
+       i.purchased_at AS unlocked_at,
+       i.equipped
+     FROM nuggies_shop_items s
+     LEFT JOIN nuggies_inventory i
+       ON i.item_id = s.id AND i.user_id = $1
+     WHERE s.acquisition = 'earned' AND s.is_active = TRUE
+     ORDER BY s.id`,
+    [userId ?? null]
+  );
+
+  res.json({
+    achievements: r.rows.map((row) => ({
+      id: parseInt(row.id, 10),
+      name: row.name,
+      description: row.description,
+      itemType: row.item_type,
+      itemData: row.item_data,
+      unlocked: Boolean(row.unlocked_at),
+      unlockedAt: row.unlocked_at,
+      equipped: Boolean(row.equipped),
+    })),
+  });
+});
+
 // ── GET /nuggies/leaderboard ──────────────────────────────────────────────────
+// Single query: ranks the top 25 opted-in users with their equipped title (if
+// any). Lateral subquery picks one title per user so we don't N+1 across rows.
 
 nuggiesRouter.get("/leaderboard", requireBotOrSession, async (_req, res) => {
-  const r = await db.query<{ discord_user_id: string; username: string; avatar_url: string | null; balance: string }>(
-    `SELECT u.discord_user_id, dp.username, dp.avatar_url, nb.balance
+  const r = await db.query<{
+    discord_user_id: string;
+    username: string;
+    avatar_url: string | null;
+    balance: string;
+    title_id: string | null;
+    title_name: string | null;
+    title_item_type: string | null;
+    title_item_data: Record<string, unknown> | null;
+  }>(
+    `SELECT
+       u.discord_user_id,
+       dp.username,
+       dp.avatar_url,
+       nb.balance,
+       t.id          AS title_id,
+       t.name        AS title_name,
+       t.item_type   AS title_item_type,
+       t.item_data   AS title_item_data
      FROM nuggies_balances nb
      INNER JOIN users u ON u.id = nb.user_id
      INNER JOIN discord_profiles dp ON dp.user_id = nb.user_id
+     LEFT JOIN LATERAL (
+       SELECT s.id, s.name, s.item_type, s.item_data
+       FROM nuggies_inventory i
+       INNER JOIN nuggies_shop_items s ON s.id = i.item_id
+       WHERE i.user_id = u.id AND i.equipped = TRUE AND s.item_type = 'title'
+       LIMIT 1
+     ) t ON TRUE
      WHERE u.nuggies_opted_out = FALSE
      ORDER BY nb.balance DESC
      LIMIT 25`
   );
 
-  // Attach equipped title for each
-  const rows = await Promise.all(
-    r.rows.map(async (row, i) => {
-      const equipped = await getEquippedItems(row.discord_user_id);
-      const title = equipped.find((e) => e.itemType === "title") ?? null;
-      return {
-        rank: i + 1,
-        discordUserId: row.discord_user_id,
-        username: row.username,
-        avatarUrl: row.avatar_url,
-        balance: parseInt(row.balance, 10),
-        equippedTitle: title,
-      };
-    })
-  );
-
-  res.json({ leaderboard: rows });
+  res.json({
+    leaderboard: r.rows.map((row, i) => ({
+      rank: i + 1,
+      discordUserId: row.discord_user_id,
+      username: row.username,
+      avatarUrl: row.avatar_url,
+      balance: parseInt(row.balance, 10),
+      equippedTitle: row.title_id
+        ? {
+            id: parseInt(row.title_id, 10),
+            name: row.title_name,
+            itemType: row.title_item_type,
+            itemData: row.title_item_data ?? {},
+          }
+        : null,
+    })),
+  });
 });
 
 // ── POST /nuggies/daily ───────────────────────────────────────────────────────
@@ -208,7 +294,7 @@ nuggiesRouter.get("/shop", requireBotOrSession, async (_req, res) => {
   const r = await db.query<{ id: string; name: string; description: string; price: string; item_type: string; item_data: Record<string, unknown> }>(
     `SELECT id, name, description, price, item_type, item_data
      FROM nuggies_shop_items
-     WHERE is_active = TRUE
+     WHERE is_active = TRUE AND acquisition = 'shop'
      ORDER BY item_type, price`
   );
 
@@ -251,12 +337,13 @@ nuggiesRouter.post("/shop/:itemId/buy", requireBotOrSession, async (req, res) =>
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const item = await db.query<{ id: string; name: string; price: string; is_active: boolean }>(
-    "SELECT id, name, price, is_active FROM nuggies_shop_items WHERE id = $1",
+  const item = await db.query<{ id: string; name: string; price: string; is_active: boolean; acquisition: string }>(
+    "SELECT id, name, price, is_active, acquisition FROM nuggies_shop_items WHERE id = $1",
     [itemId]
   );
   if (!item.rows[0]) { res.status(404).json({ error: "Item not found" }); return; }
   if (!item.rows[0].is_active) { res.status(400).json({ error: "Item not available" }); return; }
+  if (item.rows[0].acquisition !== "shop") { res.status(400).json({ error: "Item is not purchasable" }); return; }
 
   const alreadyOwned = await db.query(
     "SELECT 1 FROM nuggies_inventory WHERE user_id = $1 AND item_id = $2",
@@ -294,12 +381,12 @@ nuggiesRouter.get("/inventory", requireBotOrSession, async (_req, res) => {
   const userId = await resolveInternalId(String(res.locals.userId));
   if (!userId) { res.json({ inventory: [] }); return; }
 
-  const r = await db.query<{ item_id: string; equipped: boolean; purchased_at: string; name: string; item_type: string; item_data: Record<string, unknown>; price: string }>(
-    `SELECT i.item_id, i.equipped, i.purchased_at, s.name, s.item_type, s.item_data, s.price
+  const r = await db.query<{ item_id: string; equipped: boolean; purchased_at: string; name: string; description: string; item_type: string; item_data: Record<string, unknown>; price: string; acquisition: string }>(
+    `SELECT i.item_id, i.equipped, i.purchased_at, s.name, s.description, s.item_type, s.item_data, s.price, s.acquisition
      FROM nuggies_inventory i
      INNER JOIN nuggies_shop_items s ON s.id = i.item_id
      WHERE i.user_id = $1
-     ORDER BY i.purchased_at DESC`,
+     ORDER BY (s.acquisition = 'earned') DESC, i.purchased_at DESC`,
     [userId]
   );
 
@@ -307,11 +394,13 @@ nuggiesRouter.get("/inventory", requireBotOrSession, async (_req, res) => {
     inventory: r.rows.map((row) => ({
       itemId: parseInt(row.item_id, 10),
       name: row.name,
+      description: row.description,
       itemType: row.item_type,
       itemData: row.item_data,
       price: parseInt(row.price, 10),
       equipped: row.equipped,
       purchasedAt: row.purchased_at,
+      acquisition: row.acquisition,
     })),
   });
 });
@@ -445,6 +534,32 @@ nuggiesRouter.post("/loan/offer", requireBotOrSession, async (req, res) => {
   const lenderId = await resolveInternalId(discordUserId);
   const borrowerId = await resolveInternalId(toDiscordUserId);
   if (!lenderId || !borrowerId) { res.status(404).json({ error: "User not found" }); return; }
+  if (String(lenderId) === String(borrowerId)) {
+    res.status(400).json({ error: "Cannot loan Nuggies to yourself" });
+    return;
+  }
+
+  // Pre-check lender liquidity. Sum existing pending+active loans they've
+  // already committed to so spamming offers can't outrun their balance.
+  const lenderState = await db.query<{ balance: string; committed: string }>(
+    `SELECT
+       COALESCE(nb.balance, 0)::text AS balance,
+       COALESCE((
+         SELECT SUM(principal) FROM nuggies_loans
+         WHERE lender_user_id = $1 AND status = 'pending'
+       ), 0)::text AS committed
+     FROM (SELECT 1) _
+     LEFT JOIN nuggies_balances nb ON nb.user_id = $1`,
+    [lenderId]
+  );
+  const lenderBalance = parseInt(lenderState.rows[0]?.balance ?? "0", 10);
+  const lenderCommitted = parseInt(lenderState.rows[0]?.committed ?? "0", 10);
+  if (lenderBalance - lenderCommitted < amount) {
+    res.status(400).json({
+      error: `Insufficient Nuggies. Balance ₦${lenderBalance.toLocaleString()}, ₦${lenderCommitted.toLocaleString()} already committed to pending offers.`,
+    });
+    return;
+  }
 
   const r = await db.query<{ id: string }>(
     `INSERT INTO nuggies_loans
@@ -557,7 +672,7 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const loan = await db.query<{ lender_user_id: string; borrower_user_id: string; amount_due: string; collateral: string; status: string }>(
+  const loan = await db.query<{ lender_user_id: string; borrower_user_id: string; amount_due: string; collateral: string; status: string; due_at: string }>(
     "SELECT * FROM nuggies_loans WHERE id = $1",
     [loanId]
   );
@@ -571,6 +686,7 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
   const amountDue = parseInt(loan.rows[0].amount_due, 10);
   const collateral = parseInt(loan.rows[0].collateral, 10);
   const lenderId = loan.rows[0].lender_user_id;
+  const dueAtIso = loan.rows[0].due_at;
 
   const client = await db.connect();
   try {
@@ -629,6 +745,10 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
     );
 
     await client.query("COMMIT");
+
+    // BANK RUN — repaid before due. Best-effort, post-commit.
+    void checkBankRun(discordUserId, dueAtIso);
+
     res.json({ ok: true, amountPaid: amountDue, collateralReturned: collateral });
   } catch (err) {
     await client.query("ROLLBACK");
@@ -668,7 +788,8 @@ nuggiesRouter.get("/loans", requireBotOrSession, async (_req, res) => {
   const userId = await resolveInternalId(String(res.locals.userId));
   if (!userId) { res.json({ loans: [] }); return; }
 
-  await processDefaultedLoans();
+  // Default sweep runs on a 5-min cron in server.ts boot — no need to do it
+  // synchronously here on every request.
 
   const r = await db.query<{ id: string; status: string; principal: string; amount_due: string; collateral: string; due_at: string; lender_user_id: string; borrower_user_id: string; created_at: string }>(
     `SELECT id, status, principal, amount_due, collateral, due_at, lender_user_id, borrower_user_id, created_at
@@ -747,6 +868,16 @@ nuggiesRouter.post("/market/list", requireBotOrSession, async (req, res) => {
     [userId, itemId]
   );
   if (!owned.rows[0]) { res.status(400).json({ error: "Item not in inventory" }); return; }
+
+  // Block earned-tier items from secondary market — they're proof-of-play.
+  const itemMeta = await db.query<{ acquisition: string }>(
+    "SELECT acquisition FROM nuggies_shop_items WHERE id = $1",
+    [itemId]
+  );
+  if (itemMeta.rows[0]?.acquisition === "earned") {
+    res.status(400).json({ error: "Earned items cannot be listed for sale" });
+    return;
+  }
 
   // Unequip if equipped
   await db.query(
@@ -915,6 +1046,10 @@ nuggiesRouter.post("/admin/grant", requireBotOrSession, requireParentRole, async
       skipOptedOutCheck: true,
       skipDailyCapCheck: true,
     });
+
+    // NERFED earned title — fires on any admin grant or deduct.
+    void checkNerfed(toDiscordUserId);
+
     res.json({ ok: true, newBalance });
   } catch (err) {
     if (err instanceof InsufficientFundsError) { res.status(400).json({ error: "Would result in negative balance" }); return; }
@@ -966,6 +1101,8 @@ nuggiesRouter.post("/admin/award-attendance/:gameNightId", requireBotOrSession, 
            AND user_id = (SELECT id FROM users WHERE discord_user_id = $2)`,
         [gameNightId, attendee.discord_user_id]
       );
+      // GAME NIGHT REGULAR (5) / VETERAN (25). Best-effort, post-grant.
+      void checkGameNightAttendance(attendee.discord_user_id);
       awarded++;
     } catch (err) {
       errors.push(attendee.discord_user_id);

@@ -4,6 +4,7 @@ import {
   type GameState,
   gameInternals
 } from "../nuggiesGames.js";
+import { checkGameAchievementsByUserId } from "../nuggiesAchievements.js";
 
 type GuessNumberInput = { guess: number };
 
@@ -41,6 +42,8 @@ export const guessNumberHandler: GameHandler<GuessNumberInput> = {
     });
 
     await gameInternals.deleteActiveGame(ctx.client, sessionId);
+
+    void checkGameAchievementsByUserId(ctx.userId, { game: "guessnumber", net, bet });
 
     const state: GameState = {
       sessionId,

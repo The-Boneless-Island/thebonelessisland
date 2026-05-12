@@ -3,7 +3,7 @@ import { z } from "zod";
 import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
-import { requireSession } from "../lib/auth.js";
+import { requireParentRole, requireSession } from "../lib/auth.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
 import { ingestNewsForApps } from "../lib/gameNewsIngestion.js";
 import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
@@ -324,6 +324,217 @@ steamRouter.post("/unlink", async (_req, res) => {
 });
 
 const OWNED_GAMES_COOLDOWN_MS = 30 * 60 * 1000;
+const GROUPS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const ACHIEVEMENTS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+const ACHIEVEMENT_TOP_N = 15;
+
+type SteamGroup = { gid: string; name?: string };
+
+async function fetchSteamGroups(steamId64: string): Promise<{ ok: boolean; groups: SteamGroup[]; reason?: string }> {
+  if (!env.STEAM_WEB_API_KEY) {
+    return { ok: false, groups: [], reason: "Missing STEAM_WEB_API_KEY" };
+  }
+  const url = `https://api.steampowered.com/ISteamUser/GetUserGroupList/v1/?key=${env.STEAM_WEB_API_KEY}&steamid=${steamId64}`;
+  const response = await fetch(url).catch(() => null);
+  if (!response?.ok) {
+    return { ok: false, groups: [], reason: `GetUserGroupList returned ${response?.status ?? "no response"}` };
+  }
+  const data = (await response.json().catch(() => null)) as {
+    response?: { success?: boolean; groups?: Array<{ gid: string }> };
+  } | null;
+  if (!data?.response?.success) {
+    return { ok: false, groups: [], reason: "Steam returned success=false (private profile?)" };
+  }
+  const groups = (data.response.groups ?? [])
+    .map((g) => ({ gid: String(g.gid) }))
+    .filter((g) => g.gid.length > 0);
+  return { ok: true, groups };
+}
+
+type AchievementsResult =
+  | { ok: true; unlocked: number; total: number; completionPct: number }
+  | { ok: false; hasStatsApi: boolean; reason: string };
+
+async function fetchAchievementsForApp(steamId64: string, appId: number): Promise<AchievementsResult> {
+  if (!env.STEAM_WEB_API_KEY) {
+    return { ok: false, hasStatsApi: true, reason: "Missing STEAM_WEB_API_KEY" };
+  }
+  const url =
+    `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/` +
+    `?key=${env.STEAM_WEB_API_KEY}&steamid=${steamId64}&appid=${appId}`;
+  const response = await fetch(url).catch(() => null);
+  if (!response) {
+    return { ok: false, hasStatsApi: true, reason: "no response" };
+  }
+  // Steam returns 400 for "no stats" games — treat as permanent skip.
+  if (response.status === 400) {
+    return { ok: false, hasStatsApi: false, reason: "App has no stats API" };
+  }
+  if (response.status === 403) {
+    return { ok: false, hasStatsApi: true, reason: "Profile private" };
+  }
+  if (!response.ok) {
+    return { ok: false, hasStatsApi: true, reason: `Steam returned ${response.status}` };
+  }
+  const data = (await response.json().catch(() => null)) as {
+    playerstats?: { success?: boolean; error?: string; achievements?: Array<{ achieved: number }> };
+  } | null;
+  if (!data?.playerstats?.success) {
+    const reason = data?.playerstats?.error ?? "Steam returned success=false";
+    const hasStatsApi = !/no stats/i.test(reason);
+    return { ok: false, hasStatsApi, reason };
+  }
+  const achievements = data.playerstats.achievements ?? [];
+  const total = achievements.length;
+  const unlocked = achievements.filter((a) => a.achieved === 1).length;
+  const completionPct = total > 0 ? Math.round((unlocked / total) * 10000) / 100 : 0;
+  return { ok: true, unlocked, total, completionPct };
+}
+
+type ProfileContextSyncResult = {
+  groupsSynced: number;
+  groupsSkipped: boolean;
+  achievementsSynced: number;
+  achievementsSkippedNoStats: number;
+  achievementsCooldownActive: boolean;
+};
+
+async function runProfileContextSync(userId: string, steamId64: string): Promise<ProfileContextSyncResult> {
+  const cooldownRow = await db.query<{ groups_synced_at: string | null; achievements_synced_at: string | null }>(
+    `SELECT groups_synced_at, achievements_synced_at FROM steam_links WHERE user_id = $1`,
+    [userId]
+  );
+  const now = Date.now();
+  const lastGroups = cooldownRow.rows[0]?.groups_synced_at ? new Date(cooldownRow.rows[0].groups_synced_at).getTime() : 0;
+  const lastAch = cooldownRow.rows[0]?.achievements_synced_at ? new Date(cooldownRow.rows[0].achievements_synced_at).getTime() : 0;
+  const groupsDue = now - lastGroups >= GROUPS_COOLDOWN_MS;
+  const achDue = now - lastAch >= ACHIEVEMENTS_COOLDOWN_MS;
+
+  const result: ProfileContextSyncResult = {
+    groupsSynced: 0,
+    groupsSkipped: !groupsDue,
+    achievementsSynced: 0,
+    achievementsSkippedNoStats: 0,
+    achievementsCooldownActive: !achDue
+  };
+
+  if (groupsDue) {
+    const groupsResult = await fetchSteamGroups(steamId64);
+    if (groupsResult.ok) {
+      // Replace-style sync: delete rows for this user, re-insert current set.
+      await db.query(`DELETE FROM user_steam_groups WHERE user_id = $1`, [userId]);
+      for (const g of groupsResult.groups) {
+        await db.query(
+          `INSERT INTO user_steam_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+          [userId, g.gid]
+        );
+      }
+      result.groupsSynced = groupsResult.groups.length;
+    }
+    await db.query(`UPDATE steam_links SET groups_synced_at = NOW() WHERE user_id = $1`, [userId]);
+  }
+
+  if (achDue) {
+    const topGames = await db.query<{ app_id: number }>(
+      `
+        SELECT ug.app_id
+        FROM user_games ug
+        LEFT JOIN user_game_progress p ON p.user_id = ug.user_id AND p.app_id = ug.app_id
+        WHERE ug.user_id = $1
+          AND ug.playtime_minutes > 0
+          AND COALESCE(p.has_stats_api, TRUE) = TRUE
+        ORDER BY ug.playtime_minutes DESC
+        LIMIT $2
+      `,
+      [userId, ACHIEVEMENT_TOP_N]
+    );
+    for (const row of topGames.rows) {
+      const r = await fetchAchievementsForApp(steamId64, row.app_id);
+      if (r.ok) {
+        await db.query(
+          `
+            INSERT INTO user_game_progress (user_id, app_id, achievements_unlocked, achievements_total, completion_pct, has_stats_api, last_synced_at)
+            VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+            ON CONFLICT (user_id, app_id) DO UPDATE SET
+              achievements_unlocked = EXCLUDED.achievements_unlocked,
+              achievements_total = EXCLUDED.achievements_total,
+              completion_pct = EXCLUDED.completion_pct,
+              has_stats_api = TRUE,
+              last_synced_at = NOW()
+          `,
+          [userId, row.app_id, r.unlocked, r.total, r.completionPct]
+        );
+        result.achievementsSynced++;
+      } else if (!r.hasStatsApi) {
+        await db.query(
+          `
+            INSERT INTO user_game_progress (user_id, app_id, has_stats_api, last_synced_at)
+            VALUES ($1, $2, FALSE, NOW())
+            ON CONFLICT (user_id, app_id) DO UPDATE SET
+              has_stats_api = FALSE,
+              last_synced_at = NOW()
+          `,
+          [userId, row.app_id]
+        );
+        result.achievementsSkippedNoStats++;
+      }
+      // Throttle: Steam tolerates ~1 req/sec sustained.
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    await db.query(`UPDATE steam_links SET achievements_synced_at = NOW() WHERE user_id = $1`, [userId]);
+  }
+
+  return result;
+}
+
+steamRouter.get("/profile-context-stats", requireParentRole, async (_req, res) => {
+  const result = await db.query<{
+    total_linked: number;
+    groups_synced_users: number;
+    achievements_synced_users: number;
+    total_groups: number;
+    total_progress_rows: number;
+    last_groups_synced_at: string | null;
+    last_achievements_synced_at: string | null;
+  }>(
+    `
+      SELECT
+        (SELECT COUNT(*) FROM steam_links)::int AS total_linked,
+        (SELECT COUNT(*) FROM steam_links WHERE groups_synced_at IS NOT NULL)::int AS groups_synced_users,
+        (SELECT COUNT(*) FROM steam_links WHERE achievements_synced_at IS NOT NULL)::int AS achievements_synced_users,
+        (SELECT COUNT(*) FROM user_steam_groups)::int AS total_groups,
+        (SELECT COUNT(*) FROM user_game_progress WHERE has_stats_api = TRUE)::int AS total_progress_rows,
+        (SELECT MAX(groups_synced_at) FROM steam_links) AS last_groups_synced_at,
+        (SELECT MAX(achievements_synced_at) FROM steam_links) AS last_achievements_synced_at
+    `
+  );
+  res.json(result.rows[0]);
+});
+
+steamRouter.post("/sync-profile-context", async (_req, res) => {
+  const discordUserId = String(res.locals.userId);
+  const link = await db.query<{ user_id: string; steam_id64: string }>(
+    `
+      SELECT sl.user_id, sl.steam_id64
+      FROM steam_links sl
+      INNER JOIN users u ON u.id = sl.user_id
+      WHERE u.discord_user_id = $1
+    `,
+    [discordUserId]
+  );
+  if (!link.rows[0]) {
+    res.status(400).json({ error: "No Steam account linked" });
+    return;
+  }
+  try {
+    const result = await runProfileContextSync(link.rows[0].user_id, link.rows[0].steam_id64);
+    res.json(result);
+  } catch (error) {
+    console.error("Profile context sync failed", error);
+    res.status(502).json({ error: "Unable to sync Steam profile context right now" });
+  }
+});
+
 
 steamRouter.post("/sync-owned-games", async (_req, res) => {
   const discordUserId = String(res.locals.userId);
@@ -422,15 +633,15 @@ steamRouter.post("/sync-owned-games", async (_req, res) => {
       return { ok: false, status: null, reason: msg } as SyncWishlistResult;
     });
 
-    void recordEvent({
-      eventType: "steam.synced",
-      actorDiscordUserId: discordUserId,
-      payload: {
-        syncedGames: games.length,
-        wishlistItems: wishlistResult.ok ? wishlistResult.syncedItems : 0,
-        wishlistOk: wishlistResult.ok
-      }
+    // Fire-and-forget profile-context backfill (groups + achievements). Runs
+    // own 24h cooldown internally, so safe to invoke on every owned-games sync.
+    void runProfileContextSync(link.rows[0].user_id, link.rows[0].steam_id64).catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Profile-context sync threw during sync-owned-games:", msg);
     });
+
+    // Steam library sync runs automatically on a background interval — not
+    // a user action worth surfacing in the activity feed.
 
     res.json({
       syncedGames: games.length,

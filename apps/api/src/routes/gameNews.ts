@@ -92,7 +92,7 @@ async function resolveScopeAppIds(discordUserId: string): Promise<{
   // Rank by owner count but cap each developer at 2 games to prevent
   // dominant studios (e.g. Valve) from filling all ingestion slots.
   const devCapSetting = getAISetting("news_dev_cap");
-  const devCap = Math.max(1, parseInt(devCapSetting ?? "2", 10) || 2);
+  const devCap = Math.max(1, parseInt(devCapSetting ?? "5", 10) || 5);
 
   const ranked = await db.query<{ app_id: number }>(
     `
@@ -121,7 +121,7 @@ async function resolveScopeAppIds(discordUserId: string): Promise<{
       SELECT app_id FROM ranked
       WHERE dev_rank <= $3
       ORDER BY owners DESC, app_id ASC
-      LIMIT 24
+      LIMIT 50
     `,
     [Array.from(byAppId.keys()), getGuildId(), devCap]
   );
@@ -148,6 +148,8 @@ type NewsRow = {
   ai_summary: string | null;
   ai_label: string | null;
   ai_spoiler_warning: boolean;
+  source_kind: string | null;
+  source_label: string | null;
 };
 
 gameNewsRouter.get("/news", async (_req, res) => {
@@ -161,39 +163,72 @@ gameNewsRouter.get("/news", async (_req, res) => {
     return;
   }
 
-  await ingestNewsForApps(scope.topAppIds, { maxApps: 8 });
-
-  // Fire-and-forget: curate any un-curated items in the background
-  curateUncuratedNews(scope.topAppIds).catch((err) => {
-    console.error("[gameNews] background curation error:", err);
-  });
+  // Fire-and-forget: ingest fresh Steam news, then curate. 30 apps × Steam fetch
+  // takes ~30s — would time out the request if awaited. Page returns current
+  // rows immediately; next reload sees the fresh batch.
+  ingestNewsForApps(scope.topAppIds, { maxApps: 30 })
+    .then(() => curateUncuratedNews(scope.topAppIds))
+    .catch((err) => {
+      console.error("[gameNews] background ingest/curate error:", err);
+    });
 
   const result = await db.query<NewsRow>(
     `
+      WITH eligible AS (
+        SELECT
+          n.app_id,
+          n.gid,
+          n.title,
+          n.url,
+          n.contents,
+          n.feed_label,
+          n.feed_name,
+          n.feed_type,
+          n.is_external_url,
+          n.author,
+          n.tags,
+          n.published_at,
+          n.ai_relevance_score,
+          n.ai_summary,
+          n.ai_label,
+          n.ai_spoiler_warning,
+          n.source_kind,
+          n.source_label,
+          ROW_NUMBER() OVER (
+            PARTITION BY n.app_id
+            ORDER BY n.published_at DESC, COALESCE(n.ai_relevance_score, 0) DESC
+          ) AS per_game_rank
+        FROM game_news n
+        WHERE n.app_id = ANY($1::int[])
+          AND COALESCE(n.ai_relevance_score, 1) > 0
+          AND (n.source_kind = 'rss' OR n.feed_name = 'steam_community_announcements')
+          AND n.published_at > NOW() - INTERVAL '60 days'
+      )
       SELECT
-        n.app_id,
+        e.app_id,
         g.name AS game_name,
         g.header_image_url,
-        n.gid,
-        n.title,
-        n.url,
-        n.contents,
-        n.feed_label,
-        n.feed_name,
-        n.feed_type,
-        n.is_external_url,
-        n.author,
-        n.tags,
-        n.published_at,
-        n.ai_relevance_score,
-        n.ai_summary,
-        n.ai_label,
-        n.ai_spoiler_warning
-      FROM game_news n
-      INNER JOIN games g ON g.app_id = n.app_id
-      WHERE n.app_id = ANY($1::int[])
-        AND COALESCE(n.ai_relevance_score, 1) > 0
-      ORDER BY n.ai_relevance_score DESC NULLS LAST, n.published_at DESC
+        e.gid,
+        e.title,
+        e.url,
+        e.contents,
+        e.feed_label,
+        e.feed_name,
+        e.feed_type,
+        e.is_external_url,
+        e.author,
+        e.tags,
+        e.published_at,
+        e.ai_relevance_score,
+        e.ai_summary,
+        e.ai_label,
+        e.ai_spoiler_warning,
+        e.source_kind,
+        e.source_label
+      FROM eligible e
+      INNER JOIN games g ON g.app_id = e.app_id
+      WHERE e.per_game_rank <= 3
+      ORDER BY e.ai_relevance_score DESC NULLS LAST, e.published_at DESC
       LIMIT 60
     `,
     [allAppIds]
@@ -225,7 +260,9 @@ gameNewsRouter.get("/news", async (_req, res) => {
         aiRelevanceScore: row.ai_relevance_score,
         aiSummary: row.ai_summary,
         aiLabel: row.ai_label as "personal" | "community" | "top_news" | null,
-        aiSpoilerWarning: row.ai_spoiler_warning
+        aiSpoilerWarning: row.ai_spoiler_warning,
+        sourceKind: row.source_kind ?? "steam",
+        sourceLabel: row.source_label
       };
     })
   });
@@ -248,7 +285,7 @@ gameNewsRouter.post("/news/curate", requireParentRole, async (_req, res) => {
       INNER JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id AND gm.guild_id = $1 AND gm.in_guild = TRUE
       GROUP BY g.app_id
       ORDER BY COUNT(DISTINCT u.id) DESC
-      LIMIT 24
+      LIMIT 50
     `,
     [guildId]
   );

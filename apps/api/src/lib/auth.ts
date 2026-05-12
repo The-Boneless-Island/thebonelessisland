@@ -25,6 +25,16 @@ export function requireBotOrSession(req: Request, res: Response, next: NextFunct
   next();
 }
 
+/** Bot-only: rejects everything except a valid bot shared-secret request. */
+export function requireBotSecret(req: Request, res: Response, next: NextFunction) {
+  const botSecret = req.get("x-island-bot-secret");
+  if (!botSecret || !env.BOT_API_SHARED_SECRET || botSecret !== env.BOT_API_SHARED_SECRET) {
+    res.status(401).json({ error: "Bot secret required" });
+    return;
+  }
+  next();
+}
+
 export function requireSession(req: Request, res: Response, next: NextFunction) {
   const userId = req.session?.userId;
   if (!userId) {

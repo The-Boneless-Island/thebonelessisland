@@ -23,13 +23,25 @@ type GeneralCurationResult = {
   relevanceScore: number;
   label: "top_news" | "community" | "personal";
   spoilerWarning: boolean;
+  title: string;        // rewritten headline (v3)
   summary: string;
+  whyMatters: string;   // mandatory Why This Matters to Boneless Island (v3)
+  sources: string[];    // sibling URLs from the batch (v3)
   subtitle: string;
   tags: string[];
   gameTitle: string | null;
-  whyRecommended: string | null;
   duplicate?: boolean;
 };
+
+type ValidationError =
+  | "missing_title"
+  | "summary_too_short"
+  | "missing_why_matters"
+  | "missing_sources"
+  | "invalid_source_urls";
+
+const MAX_RETRIES_PER_ARTICLE = 2;
+const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
 
 // ── RSS Feed Catalogue ─────────────────────────────────────────────────────────
 
@@ -133,7 +145,14 @@ function sanitizeTags(tags: string[], crewNames: Set<string> = new Set()): strin
 // Per-feed recent item cap — avoid flooding on first run
 const ITEMS_PER_FEED = 20;
 // Max articles to AI-curate per curation pass — larger = more cross-source story coverage
-const CURATION_BATCH_SIZE = 25;
+// 12 articles × ~1300 output tokens each = ~16k. Fits 16384 maxTokens cap with
+// headroom. v2 prompt (3-5 paragraph summaries) was overflowing at 25/batch.
+const CURATION_BATCH_SIZE = 12;
+// Wider candidate pool so cluster-aware batching can group siblings together.
+const CURATION_POOL_SIZE = CURATION_BATCH_SIZE * 3;
+// Cluster-candidate window: articles within this window are eligible for
+// content-overlap merging. AI still judges actual content overlap.
+const CLUSTER_WINDOW = "14 days";
 
 let ingestionInFlight = false;
 let lastIngestedAt = 0;
@@ -191,6 +210,60 @@ function matchTagsToArticle(
   const tagMatches = crewTags.filter((tag) => haystack.includes(tag));
   const gameMatches = gameNames.filter((name) => haystack.includes(name));
   return [...new Set([...tagMatches, ...gameMatches])];
+}
+
+// Deterministic key used to pre-group candidate sibling articles before AI sees
+// them. The AI still decides whether two articles in the same group are truly
+// the same story — this only ensures siblings land in the same batch.
+function extractClusterKey(row: RawGeneral): string {
+  const gameMatches = (row.matched_tags ?? []).filter(
+    (t) => typeof t === "string" && (/[A-Z]/.test(t) || t.length >= 4)
+  );
+  const bestGame = gameMatches.sort((a, b) => b.length - a.length)[0];
+  if (bestGame) {
+    return bestGame.toLowerCase();
+  }
+  const phrases = row.title.match(/[A-Z][a-zA-Z0-9']+(?:\s+[A-Z][a-zA-Z0-9']+){1,4}/g) ?? [];
+  const bestPhrase = phrases.sort((a, b) => b.length - a.length)[0];
+  if (bestPhrase) {
+    return bestPhrase.toLowerCase();
+  }
+  return `__loner__:${row.external_id}`;
+}
+
+// Group rows by cluster key then pack into batches of <= batchSize, keeping
+// each cluster intact when possible. Big clusters (>= batchSize) get their own
+// batch(es); small clusters share. Sibling articles thus always land together,
+// giving the AI the chance to merge them.
+function groupAndPack(rows: RawGeneral[], batchSize: number): RawGeneral[][] {
+  const groups = new Map<string, RawGeneral[]>();
+  for (const r of rows) {
+    const key = extractClusterKey(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  const sortedGroups = Array.from(groups.entries()).sort((a, b) => b[1].length - a[1].length);
+  const batches: RawGeneral[][] = [];
+  let current: RawGeneral[] = [];
+  for (const [, members] of sortedGroups) {
+    if (members.length >= batchSize) {
+      if (current.length > 0) {
+        batches.push(current);
+        current = [];
+      }
+      for (let i = 0; i < members.length; i += batchSize) {
+        batches.push(members.slice(i, i + batchSize));
+      }
+      continue;
+    }
+    if (current.length + members.length > batchSize) {
+      batches.push(current);
+      current = [];
+    }
+    current.push(...members);
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
 }
 
 // ── RSS Ingestion ─────────────────────────────────────────────────────────────
@@ -345,9 +418,11 @@ type RawGeneral = {
   id: number;
   external_id: string;
   title: string;
+  url: string;
   contents: string | null;
   source_name: string;
   matched_tags: string[];
+  ai_retry_count?: number;
 };
 
 async function buildCrewContext(): Promise<string> {
@@ -431,31 +506,167 @@ async function buildCrewContext(): Promise<string> {
     .join("\n");
 }
 
-async function curateGeneralNewsBatch(
+// Parse AI JSON output, tolerating control characters that Anthropic sometimes
+// emits inside string literals. First tries strict JSON.parse; if that fails,
+// walks the text, escaping control chars inside string literals (`"..."`) only.
+function parseAiJsonArray(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Fallback: rebuild a sanitized copy
+    let out = "";
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      const ch = text[i];
+      if (escaped) {
+        out += ch;
+        escaped = false;
+        continue;
+      }
+      if (inString && ch === "\\") {
+        out += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === "\"") {
+        inString = !inString;
+        out += ch;
+        continue;
+      }
+      if (inString && code < 0x20) {
+        if (code === 0x0a) out += "\\n";
+        else if (code === 0x0d) out += "\\r";
+        else if (code === 0x09) out += "\\t";
+        // drop other control chars silently
+        continue;
+      }
+      out += ch;
+    }
+    return JSON.parse(out);
+  }
+}
+
+async function curateBatchOnce(
   items: RawGeneral[],
-  crewContext: string
+  crewContext: string,
+  retryReminder?: string
 ): Promise<GeneralCurationResult[]> {
   const ai = getAIProvider();
 
   const payload = items.map((it) => ({
     id: it.external_id,
     source: it.source_name,
+    url: it.url,
+    cluster: extractClusterKey(it),
     title: it.title,
     excerpt: it.contents ? it.contents.slice(0, 800) + (it.contents.length > 800 ? "…" : "") : ""
   }));
 
   const systemPrompt = `# Role
 
-You are a gaming news curator for The Boneless Island — a tight-knit Discord gaming community of adult gamers in their 30s. You're a fellow gamer: direct, knowledgeable, low-fluff.
+You are a gaming news editor curating stories for the Boneless Island Discord community. For each news item provided (title + snippet, plus the source URL), you produce a structured four-section article output every time.
 
-# Task
+Your job is to surface what matters to this specific community — the games they play together, updates affecting those games, and industry news that shapes their experience. The Crew context below describes the games Boneless Island members own, play frequently, have played recently, and have wishlisted (pulled from Steam account syncs). Prioritize news about those games, but include everything — tangential industry news and culturally relevant stories still get full treatment.
 
-Curate a batch of general gaming news articles from external outlets (RSS feeds and news APIs). Score each for relevance to this crew based on their game library and playtime data.
+# Output sections (every article, every time)
+
+## 1. Rewritten Title
+
+Write a new headline. Do NOT copy the original title.
+
+The rewritten title must:
+- State clearly what happened.
+- Surface the most important outcome or change.
+- Use plain, direct language — no clickbait, no hype, no ellipsis drama.
+
+## 2. Summary
+
+Write a complete summary, 3–5 paragraphs, ~300–500 words. Cover:
+- What happened
+- Who is affected (players, developers, platforms, regions)
+- Why it happened (if known)
+- What is changing (features, pricing, timelines, policies, releases)
+- When it takes effect
+- Any background context needed to understand the impact
+
+Don't sacrifice detail for brevity. If a gamer deciding how to respond would care about it, include it. Label speculation clearly — don't present assumptions as facts.
+
+Use a mix of flowing prose paragraphs AND bullet points. Use bullets for concrete facts, specs, or list-shaped information (release dates, platforms, feature lists, pricing tiers, patch line items, performance numbers). Use prose for context, narrative, and synthesis. Format bullets as plain markdown — each bullet on its own line, prefixed with \`- \`. Separate prose paragraphs with a blank line. Separate a prose paragraph from an adjacent bullet block with a blank line.
+
+You work only from the source excerpts in this batch. Synthesize across articles in the batch when multiple cover the same story. Do NOT speculate beyond what the excerpts state. If sources are thin and you can only reliably restate the headline, do exactly that — pad nothing.
+
+## 3. Why This Matters to Boneless Island
+
+Write 1–2 short sentences as a direct, practical explanation — not a general commentary. This section is MANDATORY for every non-duplicate article.
+
+Always connect it to Boneless Island, even if the connection is thin or requires thought. Be specific about how this affects:
+- What people play
+- How they play it
+- Whether they need to act or pay attention soon
+
+Do NOT use phrases like "this is exciting," "this could be impactful," or any generic framing. Write like you're telling a friend who plays in this server, not filing a press release.
+
+If no direct connection to the community's games exists, explain the industry impact and why Boneless Island should track it — what broader context or business shift makes it relevant to gaming or how the community operates.
+
+If the news is breaking, frame it with urgency — signal that immediate attention matters. For evergreen analysis or updates, use standard treatment.
+
+## 4. Sources
+
+List 1 or more source URLs. Pull URLs ONLY from the \`url\` fields of articles in this batch — do not invent URLs.
+
+When this article is the PRIMARY of a multi-article cluster (other articles in the batch cover the same event), include the URLs of every sibling in that cluster PLUS your own article's URL — aim for 2+ sources total. When this article stands alone in the batch, the Sources list contains just your own URL.
+
+# Multi-source synthesis — CRITICAL
+
+Each payload item carries a \`cluster\` value. Items sharing a cluster value are PRE-GROUPED CANDIDATES for the same story (matched on the same game or named entity). Treat them as siblings unless the content clearly covers DIFFERENT events.
+
+Two articles are the SAME STORY when they cover the same announcement, patch, controversy, release, or event — even from different angles, different outlets, or different publication dates within a couple of weeks of each other.
+
+**Examples that ARE duplicates (merge):**
+- "PoE2 Announces Roadmap" + "PoE2 1.0 Likely End of 2026" (same announcement, different framing)
+- "Studio X laid off 30%" + "Studio X reveals layoffs in financial filing" (same event, different source)
+- "New CoD: Black Ops 7 Multiplayer Update Released" + "Treyarch Patches BO7 Spawn System" (same patch, different headlines)
+
+**Examples that are NOT duplicates (keep separate):**
+- "Studio X laid off 30%" + "Former Studio X devs announce new studio" (separate events, even if related)
+- Initial DLC reveal + 6-month-later DLC release (different news cycles)
+- Game's launch announcement + a later review of that same game (different content types)
+
+**For each cluster:**
+- Pick the richest-detail article as the PRIMARY.
+- Synthesize ALL unique information from every sibling — quotes, numbers, dates, features, developer comments, follow-up reactions — into the primary's \`summary\`. The primary should be richer than any individual source article.
+- Mark all OTHER siblings with \`duplicate: true\` and EMPTY \`summary\` / \`whyMatters\` / \`sources\`. They still need a \`subtitle\` and \`tags\`.
+- In the primary's \`sources\` array, include the URL of EVERY sibling in the cluster PLUS the primary's own URL. Aim for 2+ URLs when the cluster has multiple articles.
+
+For truly unique articles (cluster of size 1): summarize that single source.
 
 # Labels
+
 - \`top_news\`: Breaking / high-impact industry news regardless of crew relevance (studio closures, major releases, acquisitions, major controversies)
 - \`community\`: Trending gaming news that matches crew genre interests but not specific games they own
-- \`personal\`: Directly about games or series the crew actively plays (check Crew genre tags + top owned games in context)
+- \`personal\`: Directly about games or series the crew actively plays
+
+# Factual accuracy — HIGHEST PRIORITY
+
+Every claim in your summary must be **directly supported by the source excerpts in this batch**. Do not infer, generalize, or fill in plausible-sounding details from prior knowledge of the game, studio, or industry.
+
+**Hard rules:**
+- If the sources don't specify a business model (free-to-play, subscription, premium, B2P), DO NOT state one. Many shooters/MMOs default to assumed F2P/live-service in LLM training data — this is a common hallucination trap.
+- If the sources don't name a genre, platform, release date, or price, omit it rather than guess.
+- If the sources disagree, report the disagreement ("PC Gamer reports X; IGN reports Y") rather than picking one.
+- Numbers, quotes, dates, percentages must appear verbatim in at least one source excerpt. If you can't find the supporting text, drop the figure.
+- When a fact is widely-known but absent from the sources (e.g. publisher name), prefer to omit. Better to be brief than wrong.
+- If the sources are thin and you can only reliably restate the headline, do exactly that — don't pad with assumptions.
+
+**Common stereotype traps to avoid:**
+- Modern shooter ≠ free-to-play live-service unless source says so. Marathon, Concord, XDefiant, etc. each have specific models — don't conflate.
+- "Studio acquired by [publisher]" ≠ "publisher exclusive" unless source confirms.
+- "Sequel" ≠ same genre/mechanics as predecessor.
+- Live-service decline ≠ studio failure, and vice versa.
+
+**Self-check before emitting each summary:** for every concrete claim (genre, business model, dates, numbers, exclusivity, platform), confirm it appears in the source excerpts you were given. If not, remove it.
 
 # Multi-source synthesis — CRITICAL
 
@@ -472,14 +683,21 @@ This batch deliberately includes articles from multiple outlets. Your primary jo
 
 # Summary guidelines
 
+The summary must contain ONLY information about the article itself — facts, details, and context drawn directly from the source excerpts. Do NOT reference community interest, crew relevance, or player perspective in the summary; that belongs exclusively in \`whyRecommended\`.
+
 Write a cross-source synthesis covering:
 1. **What happened** — the core news fact, announcement, or event
-2. **Context** — why it matters, background on the game/studio/situation
+2. **Context** — why it matters in industry / studio / game-history terms (no crew framing)
 3. **Details** — specific numbers, dates, features, changes, or quotes drawn from EVERY source covering this story
-4. **Crew angle** — how this affects or interests this gaming community (omit if not applicable)
-5. **What's next** — expected follow-up, release date, or open questions
+4. **What's next** — expected follow-up, release date, or open questions surfaced by the sources
 
-Aim for 150–300 words. Direct, conversational gamer tone — informative but not dry. Flowing prose, no bullet points. Don't start with "This article" or restate the title. Set to empty string \`""\` for duplicates.
+**Length and format:**
+- Aim for ~350 words.
+- Use a mix of flowing prose paragraphs AND bullet points. Use bullets specifically for concrete facts, specs, or list-shaped information (e.g. release dates, platforms, feature lists, pricing tiers, patch line items, performance numbers). Use prose for context, narrative, and synthesis.
+- Format bullets as plain markdown — each bullet on its own line, prefixed with \`- \`. Separate prose paragraphs with a blank line. Separate a prose paragraph from an adjacent bullet block with a blank line.
+- Direct, conversational gamer tone — informative but not dry.
+- Don't start with "This article" or restate the title.
+- Set to empty string \`""\` for duplicates.
 
 # Tag taxonomy
 
@@ -507,47 +725,195 @@ Examples:
 
 # Output format
 
-Return a JSON array — one object per input article, in the same order.
+Return a JSON array — one object per input article, in the same order. Every field is required (use empty string / empty array for duplicates as noted).
 
 [
   {
     "id": "<string — must match input id exactly>",
-    "relevanceScore": <number 0.0–1.0>,
-    "label": "<top_news | community | personal>",
-    "spoilerWarning": <true | false>,
-    "summary": "<150–300 word multi-source synthesis; empty string for duplicates>",
+    "title": "<rewritten headline, plain direct language, no clickbait>",
+    "summary": "<3–5 paragraphs, ~300–500 words, prose + bullets, article-only facts; empty string for duplicates>",
+    "whyMatters": "<1–2 sentences, concrete crew connection, never generic; empty string for duplicates>",
+    "sources": ["<url1 from batch>", "<url2 from batch>"],
     "subtitle": "<one sharp subheadline sentence, 10–20 words; always include, even for duplicates>",
     "tags": ["News", "RPG"],
     "gameTitle": "<primary game title e.g. 'Elden Ring'; null if no single game focus>",
-    "whyRecommended": "<one sentence on crew relevance, or null>",
+    "label": "<top_news | community | personal>",
+    "relevanceScore": <number 0.0–1.0>,
+    "spoilerWarning": <true | false>,
     "duplicate": <true | false>
   }
 ]
 
 Relevance: 0.75–1.0 = major impact / crew relevance; 0.4–0.74 = notable; 0–0.39 = low signal.
 
-Return ONLY the JSON array.`;
+Tone & style — write like a knowledgeable human editor, not a content aggregator. No marketing language. No "as an AI" phrasing. No filler. Skip formal transitions (moreover, furthermore, in conclusion); use natural conversational tone. Minimize hedge words (essentially, basically, actually) and buzzwords (delve, unpack, embark, innovative, vibrant). Verify facts against source excerpts only; never present assumptions as facts.
 
-  const userContent = `## Crew context\n\n${crewContext}\n\n## Articles\n\n${JSON.stringify(payload, null, 2)}`;
+Return ONLY the JSON array. No markdown fences, no preamble.`;
+
+  const userContent =
+    `## Crew context\n\n${crewContext}\n\n## Articles\n\n${JSON.stringify(payload, null, 2)}` +
+    (retryReminder ? `\n\n## Retry directive\n\n${retryReminder}` : "");
 
   const result = await ai.complete(
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent }
     ],
-    { maxTokens: 8192 }
+    { maxTokens: 16384, temperature: 0.2 }
   );
 
   const raw = result.text.trim();
   const jsonText = raw.startsWith("```")
     ? raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "")
     : raw;
-  const parsed = JSON.parse(jsonText) as GeneralCurationResult[];
+  const parsed = parseAiJsonArray(jsonText) as GeneralCurationResult[];
   if (!Array.isArray(parsed)) throw new Error("AI returned non-array response");
   // Debug: log raw tags so we can verify taxonomy compliance
   const sample = parsed.slice(0, 3).map((r) => ({ id: r.id.slice(-30), tags: r.tags, dup: r.duplicate }));
   console.log("[generalNews] AI tag sample:", JSON.stringify(sample));
   return parsed;
+}
+
+function validateCuration(res: GeneralCurationResult, batchUrls: Set<string>): ValidationError[] {
+  if (res.duplicate) return [];
+  const errors: ValidationError[] = [];
+  if (!res.title || res.title.trim().length < 8) errors.push("missing_title");
+  if (!res.summary || res.summary.trim().length < 150) errors.push("summary_too_short");
+  if (!res.whyMatters || res.whyMatters.trim().length < 20) errors.push("missing_why_matters");
+  if (!Array.isArray(res.sources) || res.sources.length === 0) {
+    errors.push("missing_sources");
+  } else {
+    const allValid = res.sources.every(
+      (u) => typeof u === "string" && (batchUrls.has(u) || /^https?:\/\//.test(u))
+    );
+    if (!allValid) errors.push("invalid_source_urls");
+  }
+  return errors;
+}
+
+type CurationOutcome = {
+  result: GeneralCurationResult;
+  item: RawGeneral;
+  errors: ValidationError[];
+  attempts: number;
+};
+
+async function curateBatchWithValidation(
+  items: RawGeneral[],
+  crewContext: string
+): Promise<CurationOutcome[]> {
+  const batchUrls = new Set(items.map((it) => it.url));
+  const initial = await curateBatchOnce(items, crewContext);
+
+  const outcomes: CurationOutcome[] = items.map((item) => {
+    const result =
+      initial.find((r) => r.id === item.external_id) ?? ({} as GeneralCurationResult);
+    return {
+      item,
+      result,
+      errors: validateCuration(result, batchUrls),
+      attempts: 1
+    };
+  });
+
+  for (let round = 1; round <= MAX_RETRY_ROUNDS_PER_CYCLE; round++) {
+    const failed = outcomes.filter(
+      (o) => o.errors.length > 0 && (o.item.ai_retry_count ?? 0) + o.attempts <= MAX_RETRIES_PER_ARTICLE
+    );
+    if (failed.length === 0) break;
+
+    const reminder =
+      `These articles failed validation. Errors per id: ` +
+      failed
+        .map((o) => `${o.item.external_id}: ${o.errors.join(",")}`)
+        .join(" | ") +
+      `. Return the corrected JSON for these IDs only, ensuring every required field is populated.`;
+
+    const retryItems = failed.map((o) => o.item);
+    console.warn(
+      `[generalNews] validation retry round ${round}: ${failed.length}/${outcomes.length} articles`
+    );
+    const retryResults = await curateBatchOnce(retryItems, crewContext, reminder);
+
+    for (const o of failed) {
+      const fresh = retryResults.find((r) => r.id === o.item.external_id);
+      if (fresh) {
+        o.result = fresh;
+        o.errors = validateCuration(fresh, batchUrls);
+        o.attempts++;
+      }
+    }
+  }
+
+  return outcomes;
+}
+
+async function persistCurationOutcome(
+  outcome: CurationOutcome,
+  crewEntityNames: Set<string>
+): Promise<{ persisted: boolean; failed: boolean }> {
+  const { item, result, errors, attempts } = outcome;
+
+  if (result.duplicate) {
+    await db.query(
+      `UPDATE general_news
+         SET ai_relevance_score = 0,
+             ai_curated_at = NOW(),
+             ai_retry_count = COALESCE(ai_retry_count, 0),
+             ai_validation_failed = FALSE,
+             ai_last_validation_errors = NULL
+       WHERE id = $1`,
+      [item.id]
+    );
+    return { persisted: true, failed: false };
+  }
+
+  const validationFailed = errors.length > 0;
+  const tags = sanitizeTags(result.tags ?? [], crewEntityNames);
+  const finalRetryCount = (item.ai_retry_count ?? 0) + attempts - 1;
+
+  await db.query(
+    `UPDATE general_news
+       SET ai_relevance_score        = $1,
+           ai_summary                = $2,
+           ai_label                  = $3,
+           ai_spoiler_warning        = $4,
+           ai_subtitle               = $5,
+           ai_tags                   = $6,
+           ai_why_recommended        = $7,
+           ai_game_title             = $8,
+           ai_title                  = $9,
+           ai_sources                = $10,
+           ai_retry_count            = $11,
+           ai_validation_failed      = $12,
+           ai_last_validation_errors = $13,
+           ai_curated_at             = NOW()
+     WHERE id = $14`,
+    [
+      result.relevanceScore ?? 0,
+      result.summary || null,
+      result.label || null,
+      result.spoilerWarning ?? false,
+      result.subtitle || null,
+      tags,
+      result.whyMatters || null,
+      result.gameTitle || null,
+      result.title || null,
+      Array.isArray(result.sources) ? result.sources : null,
+      finalRetryCount,
+      validationFailed,
+      validationFailed ? errors : null,
+      item.id
+    ]
+  );
+
+  if (validationFailed) {
+    console.warn(
+      `[generalNews] validation failed after ${attempts} attempts for ${item.external_id}: ${errors.join(",")}`
+    );
+  }
+
+  return { persisted: true, failed: validationFailed };
 }
 
 // ── Main Export ───────────────────────────────────────────────────────────────
@@ -589,50 +955,31 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
     const insertedIds = await upsertGeneralNews(allItems);
     totalFetched = insertedIds.length;
 
-    // Curate new rows
+    // Curate new rows (cluster-aware batching: pull wider pool, group siblings,
+    // then pack into batches preserving cluster boundaries).
     const uncurated = await db.query<RawGeneral>(
       `
-        SELECT id, external_id, title, contents, source_name, matched_tags
+        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
         FROM general_news
         WHERE ai_curated_at IS NULL
+          AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
         ORDER BY published_at DESC
         LIMIT $1
       `,
-      [CURATION_BATCH_SIZE]
+      [CURATION_POOL_SIZE]
     );
 
     if (uncurated.rows.length > 0) {
       try {
         const crewContext = await buildCrewContext();
-        const results = await curateGeneralNewsBatch(uncurated.rows, crewContext);
-
-        for (const res of results) {
-          const row = uncurated.rows.find((r) => r.external_id === res.id);
-          if (!row) continue;
-
-          if (res.duplicate) {
-            await db.query(
-              `UPDATE general_news SET ai_relevance_score = 0, ai_curated_at = NOW() WHERE id = $1`,
-              [row.id]
-            );
-          } else {
-            await db.query(
-              `UPDATE general_news
-               SET ai_relevance_score  = $1,
-                   ai_summary          = $2,
-                   ai_label            = $3,
-                   ai_spoiler_warning  = $4,
-                   ai_subtitle         = $5,
-                   ai_tags             = $6,
-                   ai_why_recommended  = $7,
-                   ai_game_title       = $8,
-                   ai_curated_at       = NOW()
-               WHERE id = $9`,
-              [res.relevanceScore, res.summary, res.label, res.spoilerWarning ?? false,
-               res.subtitle || null, sanitizeTags(res.tags ?? [], crewEntityNames), res.whyRecommended ?? null,
-               res.gameTitle ?? null, row.id]
-            );
-            totalCurated++;
+        const batches = groupAndPack(uncurated.rows, CURATION_BATCH_SIZE);
+        for (const batch of batches) {
+          const outcomes = await curateBatchWithValidation(batch, crewContext);
+          for (const outcome of outcomes) {
+            const persisted = await persistCurationOutcome(outcome, crewEntityNames);
+            if (persisted.persisted && !persisted.failed && !outcome.result.duplicate) {
+              totalCurated++;
+            }
           }
         }
       } catch (err) {
@@ -659,7 +1006,12 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
  */
 export async function resetAllCuration(): Promise<number> {
   const result = await db.query<{ count: string }>(
-    `UPDATE general_news SET ai_curated_at = NULL RETURNING id`
+    `UPDATE general_news
+       SET ai_curated_at = NULL,
+           ai_retry_count = 0,
+           ai_validation_failed = FALSE,
+           ai_last_validation_errors = NULL
+       RETURNING id`
   );
   return result.rowCount ?? 0;
 }
@@ -675,7 +1027,7 @@ export async function debugCurateOne(): Promise<{
   error?: string;
 }> {
   const row = await db.query<RawGeneral>(
-    `SELECT id, external_id, title, contents, source_name, matched_tags
+    `SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
      FROM general_news
      ORDER BY published_at DESC
      LIMIT 1`
@@ -685,7 +1037,7 @@ export async function debugCurateOne(): Promise<{
 
   try {
     const [crewContext, crewEntityNames] = await Promise.all([buildCrewContext(), getCrewEntityNames()]);
-    const results = await curateGeneralNewsBatch([article], crewContext);
+    const results = await curateBatchOnce([article], crewContext);
     const raw = results[0] ?? null;
     return {
       article,
@@ -707,52 +1059,45 @@ export async function debugCurateOne(): Promise<{
  * Used by the admin "trigger curation" button.
  */
 export async function curateUncuratedGeneralNews(): Promise<number> {
-  const uncurated = await db.query<RawGeneral>(
+  // Phase 1: cluster-aware window (catches sibling articles for same story).
+  let uncurated = await db.query<RawGeneral>(
     `
-      SELECT id, external_id, title, contents, source_name, matched_tags
+      SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
       FROM general_news
       WHERE ai_curated_at IS NULL
+        AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
       ORDER BY published_at DESC
       LIMIT $1
     `,
-    [CURATION_BATCH_SIZE]
+    [CURATION_POOL_SIZE]
   );
+
+  // Phase 2 (tail): if no in-window candidates left, fall back to older
+  // articles so they still get curated. No clustering applied to the tail.
+  if (uncurated.rows.length === 0) {
+    uncurated = await db.query<RawGeneral>(
+      `
+        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
+        FROM general_news
+        WHERE ai_curated_at IS NULL
+        ORDER BY published_at DESC
+        LIMIT $1
+      `,
+      [CURATION_BATCH_SIZE]
+    );
+  }
 
   if (uncurated.rows.length === 0) return 0;
 
   try {
     const [crewContext, crewEntityNames] = await Promise.all([buildCrewContext(), getCrewEntityNames()]);
-    const results = await curateGeneralNewsBatch(uncurated.rows, crewContext);
+    const batches = groupAndPack(uncurated.rows, CURATION_BATCH_SIZE);
     let count = 0;
-
-    for (const res of results) {
-      const row = uncurated.rows.find((r) => r.external_id === res.id);
-      if (!row) continue;
-
-      if (res.duplicate) {
-        await db.query(
-          `UPDATE general_news SET ai_relevance_score = 0, ai_curated_at = NOW() WHERE id = $1`,
-          [row.id]
-        );
-      } else {
-        const tags = sanitizeTags(res.tags ?? [], crewEntityNames);
-        await db.query(
-          `UPDATE general_news
-           SET ai_relevance_score  = $1,
-               ai_summary          = $2,
-               ai_label            = $3,
-               ai_spoiler_warning  = $4,
-               ai_subtitle         = $5,
-               ai_tags             = $6,
-               ai_why_recommended  = $7,
-               ai_game_title       = $8,
-               ai_curated_at       = NOW()
-           WHERE id = $9`,
-          [res.relevanceScore, res.summary, res.label, res.spoilerWarning ?? false,
-           res.subtitle || null, tags, res.whyRecommended ?? null,
-           res.gameTitle ?? null, row.id]
-        );
-        count++;
+    for (const batch of batches) {
+      const outcomes = await curateBatchWithValidation(batch, crewContext);
+      for (const outcome of outcomes) {
+        const result = await persistCurationOutcome(outcome, crewEntityNames);
+        if (result.persisted && !result.failed && !outcome.result.duplicate) count++;
       }
     }
     return count;

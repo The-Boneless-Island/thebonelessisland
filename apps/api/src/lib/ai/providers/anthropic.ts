@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { AIMessage, AIProvider, AIResult } from "../provider.js";
+import { AICompleteOpts, AIMessage, AIProvider, AIResult } from "../provider.js";
 
 export class AnthropicProvider implements AIProvider {
   readonly name = "anthropic";
@@ -11,7 +11,7 @@ export class AnthropicProvider implements AIProvider {
     this.model = model;
   }
 
-  async complete(messages: AIMessage[], opts?: { maxTokens?: number }): Promise<AIResult> {
+  async complete(messages: AIMessage[], opts?: AICompleteOpts): Promise<AIResult> {
     const systemMessage = messages.find((m) => m.role === "system");
     const chatMessages = messages.filter((m) => m.role !== "system");
 
@@ -29,6 +29,7 @@ export class AnthropicProvider implements AIProvider {
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: opts?.maxTokens ?? 1024,
+      ...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {}),
       ...(systemBlock ? { system: [systemBlock] } : {}),
       messages: chatMessages.map((m) => ({
         role: m.role as "user" | "assistant",

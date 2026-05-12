@@ -31,6 +31,9 @@ export type GameStateResponse = {
     playerTotal?: number;
     dealerVisibleTotal?: number;
     dealerTotal?: number;
+    canDouble?: boolean;
+    doubled?: boolean;
+    originalBet?: number;
   };
   result?: GameResult;
   payout?: number;
@@ -133,7 +136,7 @@ export function startBlackjack(bet: number) {
   );
 }
 
-export function blackjackStep(sessionId: number, action: "hit" | "stand") {
+export function blackjackStep(sessionId: number, action: "hit" | "stand" | "double") {
   return postWithKey<GameStateResponse>(
     `/nuggies/games/${sessionId}/step`,
     { action },

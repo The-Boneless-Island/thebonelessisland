@@ -15,9 +15,15 @@ export interface AIResult {
   cachedTokens?: number;
 }
 
+export interface AICompleteOpts {
+  maxTokens?: number;
+  /** 0.0 = deterministic, 1.0 = creative. Default depends on provider. */
+  temperature?: number;
+}
+
 export interface AIProvider {
   readonly name: string;
-  complete(messages: AIMessage[], opts?: { maxTokens?: number }): Promise<AIResult>;
+  complete(messages: AIMessage[], opts?: AICompleteOpts): Promise<AIResult>;
 }
 
 export class AIDisabledError extends Error {

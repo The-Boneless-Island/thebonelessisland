@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db/client.js";
 import { getGuildId } from "../lib/serverSettings.js";
 import { requireSession } from "../lib/auth.js";
-import { getEquippedItems } from "../lib/nuggiesLedger.js";
+import { getEquippedItemsByUserId } from "../lib/nuggiesLedger.js";
 
 const patchSchema = z.object({
   steamVisibility: z.enum(["private", "members", "public"]).optional(),
@@ -15,10 +15,16 @@ profileRouter.use(requireSession);
 
 profileRouter.get("/me", async (req, res) => {
   const discordUserId = String(res.locals.userId);
+  // Single mega-join: profile + balance + opted_out + steam + guild_member.
+  // Replaces 4 separate queries with 1; equipped items still needs its own
+  // (joins inventory + shop catalogue), but we pass the bigint user_id so it
+  // skips a redundant discord-id lookup.
   const result = await db.query<{
+    user_id: string;
     discord_user_id: string;
     steam_visibility: string;
     feature_opt_in: boolean;
+    nuggies_opted_out: boolean;
     username: string;
     avatar_url: string | null;
     steam_id64: string | null;
@@ -27,12 +33,15 @@ profileRouter.get("/me", async (req, res) => {
     role_names: string[] | null;
     in_voice: boolean | null;
     rich_presence_text: string | null;
+    balance: string | null;
   }>(
     `
       SELECT
+        u.id::text AS user_id,
         u.discord_user_id,
         u.steam_visibility,
         u.feature_opt_in,
+        u.nuggies_opted_out,
         dp.username,
         dp.avatar_url,
         sl.steam_id64,
@@ -40,7 +49,8 @@ profileRouter.get("/me", async (req, res) => {
         gm.display_name,
         gm.role_names,
         gm.in_voice,
-        gm.rich_presence_text
+        gm.rich_presence_text,
+        nb.balance
       FROM users u
       INNER JOIN discord_profiles dp ON dp.user_id = u.id
       LEFT JOIN steam_links sl ON sl.user_id = u.id
@@ -48,6 +58,7 @@ profileRouter.get("/me", async (req, res) => {
         ON gm.discord_user_id = u.discord_user_id
        AND gm.guild_id = $2
        AND gm.in_guild = TRUE
+      LEFT JOIN nuggies_balances nb ON nb.user_id = u.id
       WHERE u.discord_user_id = $1
     `,
     [discordUserId, getGuildId()]
@@ -58,20 +69,7 @@ profileRouter.get("/me", async (req, res) => {
     return;
   }
 
-  // Nuggies balance + opted-out + equipped items
-  const [balRow, optRow, equippedItems] = await Promise.all([
-    db.query<{ balance: string }>(
-      `SELECT nb.balance FROM nuggies_balances nb
-       INNER JOIN users u ON u.id = nb.user_id
-       WHERE u.discord_user_id = $1`,
-      [row.discord_user_id]
-    ),
-    db.query<{ nuggies_opted_out: boolean }>(
-      "SELECT nuggies_opted_out FROM users WHERE discord_user_id = $1",
-      [row.discord_user_id]
-    ),
-    getEquippedItems(row.discord_user_id).catch(() => []),
-  ]);
+  const equippedItems = await getEquippedItemsByUserId(BigInt(row.user_id)).catch(() => []);
 
   res.json({
     profile: {
@@ -86,8 +84,8 @@ profileRouter.get("/me", async (req, res) => {
       roleNames: row.role_names ?? [],
       inVoice: Boolean(row.in_voice),
       richPresenceText: row.rich_presence_text ?? "Presence unavailable",
-      nuggieBalance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
-      nuggiesOptedOut: optRow.rows[0]?.nuggies_opted_out ?? false,
+      nuggieBalance: parseInt(row.balance ?? "0", 10),
+      nuggiesOptedOut: row.nuggies_opted_out,
       equippedItems,
     }
   });

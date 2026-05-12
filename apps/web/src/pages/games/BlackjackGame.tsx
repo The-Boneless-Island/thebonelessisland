@@ -9,6 +9,7 @@ import {
   type Card,
   type GameStateResponse
 } from "../../api/games.js";
+import { useRefetchActivity } from "../../system/activityContext.js";
 
 type Props = {
   startBalance: number | null;
@@ -25,6 +26,7 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
   const [phase, setPhase] = useState<Phase>(() => (initialState && initialState.status === "active" ? "active" : "idle"));
   const [state, setState] = useState<GameStateResponse | null>(initialState);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const refetchActivity = useRefetchActivity();
 
   const balanceAvail = startBalance ?? 0;
   const validBet = Number.isInteger(bet) && bet >= 1 && bet <= Math.min(maxBet, balanceAvail);
@@ -65,12 +67,13 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
     if (res.data.status === "resolved") {
       setPhase("settled");
       if (typeof res.data.newBalance === "number") onResolved(res.data.newBalance);
+      void refetchActivity();
     } else {
       setPhase("active");
     }
   }
 
-  async function step(action: "hit" | "stand") {
+  async function step(action: "hit" | "stand" | "double") {
     if (!state || phase === "stepping") return;
     setPhase("stepping");
     setErrorMsg(null);
@@ -84,6 +87,7 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
     if (res.data.status === "resolved") {
       setPhase("settled");
       if (typeof res.data.newBalance === "number") onResolved(res.data.newBalance);
+      void refetchActivity();
     } else {
       setPhase("active");
     }
@@ -101,38 +105,42 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
         <div>
           <div className="island-display" style={{ fontSize: 18, fontWeight: 800 }}>Blackjack</div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-            Dealer hits to 17 · Blackjack pays 2.5× · auto-stand after 60s · max bet {maxBet}
+            Dealer stands on 17 · Blackjack pays 3:2 · Double on first 2 cards · auto-stand 60s · max bet {maxBet}
           </div>
         </div>
         <BackBtn onBack={onBack} />
       </div>
 
-      {/* Dealer */}
+      {/* Felt table */}
       {state && (
-        <div style={tableStyle}>
-          <SeatLabel>Dealer</SeatLabel>
-          <CardRow
-            cards={state.data.dealerHand ?? []}
-            hidden={phase === "active" || phase === "stepping" ? state.data.dealerHidden ?? 0 : 0}
-            total={
-              state.status === "resolved"
-                ? state.data.dealerTotal
-                : state.data.dealerVisibleTotal
-            }
-            isDealer
-          />
-        </div>
-      )}
-
-      {/* Player */}
-      {state && (
-        <div style={tableStyle}>
-          <SeatLabel>You</SeatLabel>
-          <CardRow
-            cards={state.data.playerHand ?? []}
-            hidden={0}
-            total={state.data.playerTotal}
-          />
+        <div style={feltStyle}>
+          <div style={seatStyle}>
+            <SeatLabel>Dealer</SeatLabel>
+            <CardRow
+              cards={state.data.dealerHand ?? []}
+              hidden={phase === "active" || phase === "stepping" ? state.data.dealerHidden ?? 0 : 0}
+              total={
+                state.status === "resolved"
+                  ? state.data.dealerTotal
+                  : state.data.dealerVisibleTotal
+              }
+              isDealer
+            />
+          </div>
+          <div style={feltDividerStyle} aria-hidden="true" />
+          <div style={seatStyle}>
+            <SeatLabel>You</SeatLabel>
+            <CardRow
+              cards={state.data.playerHand ?? []}
+              hidden={0}
+              total={state.data.playerTotal}
+            />
+            {typeof state.bet === "number" && state.bet > 0 && (
+              <div style={betChipStyle}>
+                <span aria-hidden="true">🪙</span> Bet ₦{state.bet.toLocaleString()}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -153,55 +161,78 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
       {phase === "error" && errorMsg && <div style={errorStyle}>{errorMsg}</div>}
 
       {/* Controls */}
-      {phase === "idle" || phase === "error" ? (
-        <>
-          <div style={{ display: "grid", gap: 8 }}>
-            <label style={labelStyle}>Bet (Nuggies)</label>
-            <input
-              type="number"
-              min={1}
-              max={Math.min(maxBet, balanceAvail)}
-              value={bet}
-              onChange={(e) => setBet(parseInt(e.target.value, 10) || 0)}
-              style={inputStyle}
-            />
-            <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+      <div style={controlBarStyle}>
+        {phase === "idle" || phase === "error" ? (
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={{ ...labelStyle, textAlign: "center" }}>Bet (Nuggies)</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "center" }}>
+              <input
+                type="number"
+                min={1}
+                max={Math.min(maxBet, balanceAvail)}
+                value={bet}
+                onChange={(e) => setBet(parseInt(e.target.value, 10) || 0)}
+                style={{ ...inputStyle, width: 130, textAlign: "center" }}
+              />
+              {[10, 25, 50, 100].map((amount) => (
+                <button
+                  key={amount}
+                  type="button"
+                  onClick={() => setBet(Math.min(amount, maxBet, balanceAvail))}
+                  style={chipPresetStyle}
+                  disabled={amount > balanceAvail || amount > maxBet}
+                >
+                  {amount}
+                </button>
+              ))}
+              <IslandButton variant="primary" disabled={!validBet} onClick={() => void deal()} style={{ minWidth: 120 }}>
+                Deal
+              </IslandButton>
+            </div>
+            <div style={{ fontSize: 11, color: islandTheme.color.textMuted, textAlign: "center" }}>
               Balance: ₦{balanceAvail.toLocaleString()}
             </div>
           </div>
-          <IslandButton variant="primary" disabled={!validBet} onClick={() => void deal()}>
-            Deal
-          </IslandButton>
-        </>
-      ) : phase === "starting" ? (
-        <div style={{ fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-          Shuffling…
-        </div>
-      ) : phase === "active" || phase === "stepping" ? (
-        <div style={{ display: "flex", gap: 8 }}>
-          <IslandButton
-            variant="primary"
-            disabled={phase === "stepping"}
-            onClick={() => void step("hit")}
-            style={{ flex: 1 }}
-          >
-            {phase === "stepping" ? "…" : "Hit"}
-          </IslandButton>
-          <IslandButton
-            variant="secondary"
-            disabled={phase === "stepping"}
-            onClick={() => void step("stand")}
-            style={{ flex: 1 }}
-          >
-            Stand
-          </IslandButton>
-        </div>
-      ) : (
-        <div style={{ display: "flex", gap: 8 }}>
-          <IslandButton variant="primary" onClick={reset}>New hand</IslandButton>
-          <IslandButton variant="secondary" onClick={onBack}>Back to lobby</IslandButton>
-        </div>
-      )}
+        ) : phase === "starting" ? (
+          <div style={{ fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+            Shuffling…
+          </div>
+        ) : phase === "active" || phase === "stepping" ? (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+            <IslandButton
+              variant="primary"
+              disabled={phase === "stepping"}
+              onClick={() => void step("hit")}
+              style={{ flex: "1 1 110px", maxWidth: 180 }}
+            >
+              {phase === "stepping" ? "…" : "Hit"}
+            </IslandButton>
+            <IslandButton
+              variant="secondary"
+              disabled={phase === "stepping"}
+              onClick={() => void step("stand")}
+              style={{ flex: "1 1 110px", maxWidth: 180 }}
+            >
+              Stand
+            </IslandButton>
+            {state?.data.canDouble && (state?.data.playerHand?.length ?? 0) === 2 ? (
+              <IslandButton
+                variant="secondary"
+                disabled={phase === "stepping" || balanceAvail < (state?.data.originalBet ?? state?.bet ?? 0)}
+                onClick={() => void step("double")}
+                style={{ flex: "1 1 110px", maxWidth: 180 }}
+              >
+                Double
+              </IslandButton>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
+            <IslandButton variant="primary" onClick={reset}>New hand</IslandButton>
+            <IslandButton variant="secondary" onClick={onBack}>Back to lobby</IslandButton>
+          </div>
+        )}
+      </div>
     </IslandCard>
   );
 }
@@ -218,11 +249,11 @@ function SeatLabel({ children }: { children: React.ReactNode }) {
     <div
       className="island-mono"
       style={{
-        fontSize: 11,
+        fontSize: 10,
         color: islandTheme.color.textMuted,
         textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        marginBottom: 6
+        letterSpacing: "0.16em",
+        textAlign: "center"
       }}
     >
       {children}
@@ -241,24 +272,56 @@ function CardRow({
   total?: number;
   isDealer?: boolean;
 }) {
+  const showTotal = typeof total === "number" && total > 0;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <div style={{ display: "flex", gap: 6, flex: 1 }}>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
         {cards.map((c, i) => <CardView key={`${c.rank}${c.suit}-${i}`} card={c} />)}
         {Array.from({ length: hidden }).map((_, i) => <CardView key={`hidden-${i}`} hidden />)}
       </div>
-      {typeof total === "number" && total > 0 && (
-        <div
-          className="island-mono"
-          style={{
-            fontSize: 14,
-            fontWeight: 800,
-            color: total > 21 ? islandTheme.color.dangerAccent : isDealer ? "#fbbf77" : islandTheme.color.textPrimary
-          }}
-        >
-          {total}{total > 21 ? " bust" : ""}
-        </div>
-      )}
+      {showTotal && <ScoreChip total={total!} isDealer={isDealer} />}
+    </div>
+  );
+}
+
+function ScoreChip({ total, isDealer }: { total: number; isDealer: boolean }) {
+  const bust = total > 21;
+  const blackjack = total === 21;
+  const color = bust
+    ? "#fca5a5"
+    : blackjack
+      ? "#fde68a"
+      : isDealer
+        ? "#fbbf77"
+        : islandTheme.color.textPrimary;
+  const bg = bust
+    ? "rgba(239, 68, 68, 0.20)"
+    : blackjack
+      ? "rgba(250, 204, 21, 0.18)"
+      : "rgba(0, 0, 0, 0.45)";
+  const border = bust
+    ? "rgba(239, 68, 68, 0.55)"
+    : blackjack
+      ? "rgba(250, 204, 21, 0.55)"
+      : "rgba(255, 255, 255, 0.14)";
+  return (
+    <div
+      className="island-mono"
+      style={{
+        minWidth: 48,
+        padding: "6px 14px",
+        borderRadius: 999,
+        fontSize: 14,
+        fontWeight: 800,
+        letterSpacing: "0.06em",
+        textAlign: "center",
+        color,
+        background: bg,
+        border: `1px solid ${border}`,
+        boxShadow: "0 4px 14px rgba(0,0,0,0.35)"
+      }}
+    >
+      {total}{bust ? " · BUST" : blackjack ? " · 21" : ""}
     </div>
   );
 }
@@ -305,12 +368,67 @@ const headerStyle: React.CSSProperties = {
   gap: 12
 };
 
-const tableStyle: React.CSSProperties = {
+const feltStyle: React.CSSProperties = {
+  position: "relative",
+  padding: "26px 18px 30px",
+  borderRadius: 18,
+  background:
+    "radial-gradient(120% 90% at 50% 0%, rgba(20, 110, 80, 0.55) 0%, rgba(10, 60, 48, 0.85) 55%, rgba(6, 30, 26, 0.95) 100%)",
+  border: "1px solid rgba(34, 197, 94, 0.28)",
+  boxShadow:
+    "inset 0 0 80px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35)",
+  display: "grid",
+  gap: 18
+};
+
+const seatStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 10
+};
+
+const feltDividerStyle: React.CSSProperties = {
+  height: 1,
+  width: "60%",
+  margin: "0 auto",
+  background:
+    "linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.18), transparent)"
+};
+
+const betChipStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "4px 12px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 700,
+  fontFamily: "var(--island-mono, monospace)",
+  color: "#fde68a",
+  background: "rgba(250, 204, 21, 0.10)",
+  border: "1px solid rgba(250, 204, 21, 0.35)",
+  letterSpacing: "0.04em"
+};
+
+const controlBarStyle: React.CSSProperties = {
   padding: "12px 14px",
-  borderRadius: 12,
-  background: "rgba(15, 42, 40, 0.4)",
-  border: "1px solid rgba(34, 197, 94, 0.18)",
-  minHeight: 96
+  borderRadius: 14,
+  background: "rgba(8, 16, 22, 0.55)",
+  border: `1px solid ${islandTheme.color.cardBorder}`
+};
+
+const chipPresetStyle: React.CSSProperties = {
+  padding: "8px 12px",
+  borderRadius: 999,
+  border: "1px solid rgba(250, 204, 21, 0.35)",
+  background: "rgba(250, 204, 21, 0.08)",
+  color: "#fde68a",
+  fontWeight: 800,
+  fontSize: 12,
+  fontFamily: "var(--island-mono, monospace)",
+  cursor: "pointer",
+  letterSpacing: "0.04em"
 };
 
 const labelStyle: React.CSSProperties = {

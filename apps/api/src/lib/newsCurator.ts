@@ -8,6 +8,8 @@ type RawNewsItem = {
   contents: string | null;
   game_name: string;
   tags: string[];
+  source_kind: string | null;
+  source_label: string | null;
 };
 
 type CurationResult = {
@@ -38,6 +40,7 @@ async function callAIForCuration(
   const itemsPayload = items.map((item) => ({
     gid: item.gid,
     game: item.game_name,
+    source: item.source_label ?? item.source_kind ?? "steam",
     title: item.title,
     excerpt: truncate(item.contents, 200)
   }));
@@ -53,14 +56,37 @@ For each batch of articles, curate a gaming news feed by cross-referencing the p
 # Available signals
 
 **Community signals (provided in the user message):**
-- Games the crew has been playing most this week (with playtime hours)
-- Top games owned across the crew library
-- Game genres and tags popular in the community
+- *Played this week* — top games by recent (2-week) playtime across crew (hours)
+- *Active library* — games owned AND played within the last 180 days (owner counts)
+- *Wishlisted* — games multiple crew members have wishlisted (wishlist counts)
+- *Genre preference* — tags weighted by lifetime playtime (what crew actually engages with)
+- *Crew completion* — average achievement % across crew, for games with ≥2 tracked players
+- *Shared Steam groups* — Steam community groups multiple crew members belong to (mod scenes, esports, fan groups)
+- *Batch tags* — secondary tag pool from this batch's articles
 
-**Editorial signals you must apply independently:**
-- Breaking or high-impact gaming news (major releases, studio closures, significant patches, controversies, industry events) surfaces regardless of crew relevance — label \`"top_news"\`
-- Stories about games the crew is actively playing — label \`"personal"\`
-- Trending stories not tied to crew games — label \`"community"\`
+**Labeling rubric:**
+- \`"personal"\` — article covers a game in *played this week* OR *active library*. Also: DLC/expansion for a game where *crew completion* > 50% (crew has finished base content, ready for more).
+- \`"community"\` — article covers a game in *wishlisted* (hype/upcoming), OR matches a top *genre preference* even when the specific game isn't in active library, OR concerns a *shared Steam group* / scene.
+- \`"top_news"\` — breaking or high-impact industry news (major releases, studio closures, controversies) regardless of crew alignment.
+
+If multiple labels fit, prefer \`"personal"\` over \`"community"\` over \`"top_news"\`.
+
+# Factual accuracy — HIGHEST PRIORITY
+
+Every claim in your summary must be **directly supported by the article excerpt provided**. Do not infer, generalize, or fill in plausible-sounding details from prior knowledge of the game, studio, or industry.
+
+**Hard rules:**
+- If the excerpt doesn't specify a business model (free-to-play, subscription, premium, B2P), DO NOT state one. LLMs commonly hallucinate "free-to-play live-service" for any modern shooter/MMO — this is a known trap.
+- If the excerpt doesn't name a genre, platform, release date, price, or publisher, omit it rather than guess.
+- Numbers, quotes, dates, percentages must appear verbatim in the excerpt. If the supporting text isn't there, drop the figure.
+- Widely-known facts that are absent from the excerpt should still be omitted. Brevity beats fabrication.
+
+**Common stereotype traps to avoid:**
+- Modern shooter ≠ free-to-play live-service unless stated. Marathon, Concord, XDefiant, etc. each have specific business models.
+- "Studio acquired by [publisher]" ≠ "publisher exclusive" unless source confirms.
+- "Sequel to X" ≠ same genre/mechanics as predecessor.
+
+**Self-check before emitting each summary:** every concrete claim (genre, business model, dates, numbers, exclusivity, platform) must appear in the excerpt. If it doesn't, remove it.
 
 # Deduplication
 
@@ -126,7 +152,7 @@ Return ONLY the JSON array. No markdown fences, no explanation.`;
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent }
     ],
-    { maxTokens: 3072 }
+    { maxTokens: 3072, temperature: 0.2 }
   );
 
   const raw = result.text.trim();
@@ -151,7 +177,8 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
   // Fetch un-curated items for these apps, newest first
   const result = await db.query<RawNewsItem>(
     `
-      SELECT n.app_id, n.gid, n.title, n.contents, g.name AS game_name, g.tags
+      SELECT n.app_id, n.gid, n.title, n.contents, g.name AS game_name, g.tags,
+             n.source_kind, n.source_label
       FROM game_news n
       INNER JOIN games g ON g.app_id = n.app_id
       WHERE n.app_id = ANY($1::int[])
@@ -168,8 +195,17 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
   }
 
   try {
-    // Build compact crew context — tokens matter here, it goes in every curation call
-    const [recentlyPlayedResult, topOwnedResult] = await Promise.all([
+    // Build compact crew context — tokens matter here, it goes in every curation call.
+    // Five signals: recent playtime, active library, wishlist, genre preference, completion.
+    const [
+      recentlyPlayedResult,
+      topActiveOwnedResult,
+      topWishlistedResult,
+      tagPreferenceResult,
+      completionResult,
+      sharedGroupsResult
+    ] = await Promise.all([
+      // Top 8 by 2-week playtime — what crew is playing RIGHT NOW
       db.query<{ game_name: string; playtime_2weeks: number }>(
         `SELECT g.name AS game_name, SUM(ug.playtime_2weeks)::int AS playtime_2weeks
          FROM user_games ug
@@ -179,32 +215,96 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
          ORDER BY playtime_2weeks DESC
          LIMIT 8`
       ),
+      // Active library — owned AND played within 180d. Drops bundle-freebie bloat.
       db.query<{ game_name: string; owners: number }>(
         `SELECT g.name AS game_name, COUNT(DISTINCT ug.user_id)::int AS owners
          FROM user_games ug
          INNER JOIN games g ON g.app_id = ug.app_id
+         WHERE ug.playtime_minutes > 0
+           AND (ug.last_played_at IS NULL OR ug.last_played_at > NOW() - INTERVAL '180 days')
          GROUP BY g.name
          ORDER BY owners DESC
          LIMIT 10`
+      ),
+      // Wishlist top-10 — signals upcoming-release / hype relevance.
+      db.query<{ game_name: string; wishlisters: number }>(
+        `SELECT g.name AS game_name, COUNT(DISTINCT uw.user_id)::int AS wishlisters
+         FROM user_wishlists uw
+         INNER JOIN games g ON g.app_id = uw.app_id
+         GROUP BY g.name
+         ORDER BY wishlisters DESC, g.name ASC
+         LIMIT 10`
+      ),
+      // Playtime-weighted tag preference — what genres crew ACTUALLY engages with.
+      db.query<{ tag: string; weighted_minutes: string }>(
+        `SELECT tag, SUM(ug.playtime_minutes)::bigint AS weighted_minutes
+         FROM user_games ug
+         INNER JOIN games g ON g.app_id = ug.app_id
+         CROSS JOIN LATERAL unnest(g.tags) AS tag
+         WHERE ug.playtime_minutes > 0
+         GROUP BY tag
+         ORDER BY weighted_minutes DESC
+         LIMIT 10`
+      ),
+      // Crew completion signal — high engagement (need ≥2 members tracked).
+      db.query<{ game_name: string; avg_completion: number; tracked: number }>(
+        `SELECT g.name AS game_name,
+                ROUND(AVG(p.completion_pct))::int AS avg_completion,
+                COUNT(DISTINCT p.user_id)::int AS tracked
+         FROM user_game_progress p
+         INNER JOIN games g ON g.app_id = p.app_id
+         WHERE p.completion_pct IS NOT NULL
+         GROUP BY g.name
+         HAVING COUNT(DISTINCT p.user_id) >= 2
+         ORDER BY avg_completion DESC
+         LIMIT 8`
+      ),
+      // Steam groups shared by ≥2 crew members.
+      db.query<{ group_id: string; group_name: string | null; member_count: number }>(
+        `SELECT group_id, MAX(group_name) AS group_name, COUNT(DISTINCT user_id)::int AS member_count
+         FROM user_steam_groups
+         GROUP BY group_id
+         HAVING COUNT(DISTINCT user_id) >= 2
+         ORDER BY member_count DESC
+         LIMIT 5`
       )
     ]);
 
-    // Compact format — "Game A(8h) Game B(3h)" instead of verbose sentences
     const recentStr = recentlyPlayedResult.rows
       .map((r) => `${r.game_name}(${Math.round((r.playtime_2weeks / 60) * 10) / 10}h)`)
       .join(" ");
 
-    const ownedStr = topOwnedResult.rows
+    const activeOwnedStr = topActiveOwnedResult.rows
       .map((r) => `${r.game_name}(${r.owners})`)
       .join(" ");
 
+    const wishlistStr = topWishlistedResult.rows
+      .map((r) => `${r.game_name}(${r.wishlisters})`)
+      .join(" ");
+
+    const tagPrefStr = tagPreferenceResult.rows.map((r) => r.tag).join(", ");
+
+    const completionStr = completionResult.rows
+      .map((r) => `${r.game_name}(${r.avg_completion}% over ${r.tracked})`)
+      .join(" ");
+
+    const groupsStr = sharedGroupsResult.rows
+      .map((r) => `${r.group_name ?? `gid:${r.group_id}`}(${r.member_count})`)
+      .join(" ");
+
+    // Batch-derived tag pool retained as fallback — kept secondary now that
+    // playtime-weighted preference exists.
     const allTags = result.rows.flatMap((r) => r.tags);
-    const topTags = [...new Set(allTags)].slice(0, 10).join(", ");
+    const batchTags = [...new Set(allTags)].slice(0, 10).join(", ");
 
     const crewContext = [
       recentStr ? `Played this week: ${recentStr}` : null,
-      ownedStr ? `Top owned(count): ${ownedStr}` : null,
-      topTags ? `Tags: ${topTags}` : null
+      activeOwnedStr ? `Active library (owned + played): ${activeOwnedStr}` : null,
+      wishlistStr ? `Wishlisted: ${wishlistStr}` : null,
+      tagPrefStr ? `Genre preference (playtime-weighted): ${tagPrefStr}` : null,
+      completionStr ? `Crew completion: ${completionStr}` : null,
+      groupsStr ? `Shared Steam groups: ${groupsStr}` : null,
+      batchTags ? `Batch tags: ${batchTags}` : null
     ]
       .filter(Boolean)
       .join("\n");
