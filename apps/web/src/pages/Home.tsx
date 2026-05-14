@@ -589,7 +589,15 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
               cursor: claiming ? "wait" : optedOut ? "not-allowed" : "pointer"
             }}
           >
-            {claiming ? "Claiming…" : "🎁 Claim daily"}
+            {!claiming && !optedOut && claimedToday === false ? (
+              <GlowFollower
+                accent="#fbbf77"
+                colors={{ primary: "rgba(251, 191, 119, 0.55)", secondary: "rgba(245, 158, 11, 0.45)" }}
+              />
+            ) : null}
+            <span style={{ position: "relative", zIndex: 1 }}>
+              {claiming ? "Claiming…" : "🎁 Claim daily"}
+            </span>
           </button>
         )}
         <button
@@ -597,7 +605,11 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
           onClick={() => onNavigate("nuggies")}
           style={nuggieFooterBtnStyle(islandTheme.color.primaryGlow)}
         >
-          🛍 Shop
+          <GlowFollower
+            accent={islandTheme.color.primaryGlow}
+            colors={{ primary: "rgba(56, 189, 248, 0.55)", secondary: "rgba(168, 85, 247, 0.45)" }}
+          />
+          <span style={{ position: "relative", zIndex: 1 }}>🛍 Shop</span>
         </button>
       </div>
       {claimError && (
@@ -612,6 +624,8 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
 function nuggieFooterBtnStyle(accent: string): CSSProperties {
   return {
     flex: 1,
+    position: "relative",
+    overflow: "hidden",
     background: "transparent",
     border: `1px solid ${islandTheme.color.cardBorder}`,
     color: accent,
@@ -621,8 +635,83 @@ function nuggieFooterBtnStyle(accent: string): CSSProperties {
     borderRadius: 8,
     cursor: "pointer",
     font: "inherit",
-    textAlign: "center"
+    textAlign: "center",
+    transition: "border-color 180ms ease, box-shadow 180ms ease"
   };
+}
+
+type GlowColors = { primary: string; secondary: string };
+
+/**
+ * Wraps a button's content with a mouse-following radial highlight + an
+ * outer box-shadow glow that fades in on hover. Glow intensifies near the
+ * cursor's position relative to the button.
+ */
+function GlowFollower({ colors, accent }: { colors: GlowColors; accent: string }) {
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const [hover, setHover] = useState(false);
+
+  // Attach listeners to the parent button via a ref-effect dance. The
+  // parent doesn't need to wire them itself.
+  const ref = useRef<HTMLSpanElement | null>(null);
+  useEffect(() => {
+    const span = ref.current;
+    const parent = span?.parentElement;
+    if (!parent) return;
+    const onEnter = () => setHover(true);
+    const onLeave = () => { setHover(false); setPos(null); };
+    const onMove = (e: MouseEvent) => {
+      const rect = parent.getBoundingClientRect();
+      setPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+    };
+    parent.addEventListener("mouseenter", onEnter);
+    parent.addEventListener("mouseleave", onLeave);
+    parent.addEventListener("mousemove", onMove);
+    return () => {
+      parent.removeEventListener("mouseenter", onEnter);
+      parent.removeEventListener("mouseleave", onLeave);
+      parent.removeEventListener("mousemove", onMove);
+    };
+  }, []);
+
+  // Outer glow strength: scales with cursor proximity to button center,
+  // capped so corners still feel "lit". When pos unknown, use a soft static.
+  const parent = ref.current?.parentElement as HTMLElement | undefined;
+  let outerShadow: string | undefined;
+  if (hover && parent) {
+    outerShadow = `0 0 12px ${colors.primary}, 0 0 24px ${colors.secondary}`;
+  }
+  // Apply outer shadow + border accent to the parent imperatively so it
+  // doesn't fight the parent's inline style props.
+  useEffect(() => {
+    if (!parent) return;
+    if (hover) {
+      parent.style.boxShadow = outerShadow ?? "";
+      parent.style.borderColor = accent;
+    } else {
+      parent.style.boxShadow = "";
+      parent.style.borderColor = "";
+    }
+  }, [hover, outerShadow, parent, accent]);
+
+  const mx = pos ? `${pos.x}px` : "50%";
+  const my = pos ? `${pos.y}px` : "50%";
+
+  return (
+    <span
+      ref={ref}
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        opacity: hover ? 1 : 0,
+        transition: "opacity 160ms ease",
+        background: `radial-gradient(120px circle at ${mx} ${my}, ${colors.primary} 0%, ${colors.secondary} 35%, transparent 70%)`,
+        mixBlendMode: "screen",
+      }}
+    />
+  );
 }
 function FriendsOnline({
   activeMembers,

@@ -576,6 +576,10 @@ function SceneGlobalStyles() {
         html, body {
           margin: 0;
           background: var(--bi-app-bg);
+          /* Kill rubber-band overscroll. Without this, scrolling past the top or
+             bottom of the scene exposes the flat body background underneath the
+             gradient sky/water — looks like the page "changes color". */
+          overscroll-behavior: none;
         }
         body {
           min-height: 100vh;

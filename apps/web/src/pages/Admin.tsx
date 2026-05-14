@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { apiFetch } from "../api/client.js";
 import {
   createPatchSource,
@@ -8,8 +8,20 @@ import {
   testPatchSourceUrl,
   updatePatchSource
 } from "../api/patchSources.js";
+import {
+  createNewsSource,
+  deleteNewsSource,
+  listNewsServices,
+  listNewsSources,
+  testNewsSource,
+  updateNewsSource,
+  type NewsSource,
+  type NewsSourceKind,
+  type ServiceStatus
+} from "../api/newsSources.js";
 import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
+import { RANK_TIERS } from "../data/rankTiers.js";
 import { DomainPage } from "./admin/DomainPage.js";
 import type { OperationsArea, DomainTab } from "./admin/DomainPage.js";
 import { ALL_SETTINGS, DOMAIN_INFO, searchSettings } from "./admin/settingMeta.js";
@@ -66,10 +78,19 @@ type AdminPageProps = {
   onTriggerGeneralNewsRecurate: (
     onProgress?: (snap: RecurateProgressSnap) => void
   ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onCancelGeneralNewsRecurate: () => Promise<{ ok: boolean; error?: string }>;
+  onTriggerGeneralNewsEmbedBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
   onFetchGeneralNewsRecurateStatus: () => Promise<{
     state: "idle" | "running" | "done" | "error";
     reset: number;
     curated: number;
+    processed?: number;
+    merged?: number;
+    duplicates?: number;
+    failed?: number;
+    costUsd?: number;
     total: number;
     error: string | null;
   } | null>;
@@ -79,6 +100,11 @@ export type RecurateProgressSnap = {
   state: "running" | "done" | "error";
   reset: number;
   curated: number;
+  processed: number;
+  merged: number;
+  duplicates: number;
+  failed: number;
+  costUsd: number;
   total: number;
   error: string | null;
 };
@@ -173,6 +199,8 @@ function buildOperationsAreas(domain: SettingDomain, props: AdminPageProps): Ope
               onIngest={props.onTriggerGeneralNewsIngest}
               onCurate={props.onTriggerGeneralNewsCurate}
               onRecurate={props.onTriggerGeneralNewsRecurate}
+              onCancelRecurate={props.onCancelGeneralNewsRecurate}
+              onEmbedBackfill={props.onTriggerGeneralNewsEmbedBackfill}
               onFetchRecurateStatus={props.onFetchGeneralNewsRecurateStatus}
               onCurateGameNews={props.onTriggerNewsCuration}
               newsCards={props.newsCards}
@@ -215,11 +243,41 @@ function buildOperationsAreas(domain: SettingDomain, props: AdminPageProps): Ope
             <AIHealthArea settings={props.serverSettings} onTest={props.onTestAIConnection} />
           )
         },
+        {
+          id: "ai-settings",
+          label: "AI Settings",
+          icon: "⚙️",
+          render: () => (
+            <AISettingsSubpage
+              settings={props.serverSettings}
+              onUpdate={props.onUpdateServerSetting}
+              onTest={props.onTestAIConnection}
+            />
+          )
+        },
+        {
+          id: "discord-bridge",
+          label: "Discord Bridge",
+          icon: "🌉",
+          render: () => (
+            <DiscordBridgeSubpage
+              settings={props.serverSettings}
+              onUpdate={props.onUpdateServerSetting}
+            />
+          )
+        },
         { id: "data-sync", label: "Data Sync", icon: "🔄", render: () => <DataSyncSubpage /> },
         { id: "audit", label: "Audit Log", icon: "📜", render: () => <AuditSubpage profileJson={props.profileJson} /> }
       ];
   }
 }
+
+type AiCostToday = {
+  today: number;
+  calls: number;
+  threshold: number;
+  overThreshold: boolean;
+};
 
 function AIHealthArea({
   settings,
@@ -236,6 +294,32 @@ function AIHealthArea({
 
   const [testState, setTestState] = useState<"idle" | "running" | "ok" | "error">("idle");
   const [testMsg, setTestMsg] = useState("");
+  const [cost, setCost] = useState<AiCostToday | null>(null);
+  const [bannerDismissed, setBannerDismissed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return sessionStorage.getItem("bi:ai-cost-banner-dismissed") === "1";
+  });
+
+  // Poll today's spend on mount + every 60s while this subpage is visible.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const res = await fetch("/settings/ai-cost-today", { credentials: "include" });
+        if (!res.ok) return;
+        const data = (await res.json().catch(() => null)) as AiCostToday | null;
+        if (!cancelled && data) setCost(data);
+      } catch {
+        // best-effort; chip just stays empty
+      }
+    }
+    void load();
+    const handle = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
 
   async function runTest() {
     if (!provider) return;
@@ -257,34 +341,91 @@ function AIHealthArea({
   }
 
   const ready = enabled && !!provider && keySet;
+  const showBanner = cost?.overThreshold === true && !bannerDismissed;
 
   return (
-    <IslandCard style={{ padding: 18 }}>
-      <div style={{ display: "grid", gap: 14 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-          <div
+    <div style={{ display: "grid", gap: 12 }}>
+      {showBanner && cost && (
+        <IslandCard
+          style={{
+            padding: "12px 14px",
+            border: `1.5px solid ${islandTheme.color.dangerAccent}`,
+            background: "rgba(248,113,113,0.08)",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap"
+          }}
+        >
+          <span style={{ fontSize: 18 }}>⚠️</span>
+          <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.4 }}>
+            <strong>Today's estimated AI spend (${cost.today.toFixed(2)}) has crossed the warning threshold (${cost.threshold.toFixed(2)}).</strong>
+            <br />
+            No calls have been blocked. Review recent activity or raise the threshold in System → Settings → <code>ai_daily_cost_warn_usd</code>.
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              sessionStorage.setItem("bi:ai-cost-banner-dismissed", "1");
+              setBannerDismissed(true);
+            }}
             style={{
-              width: 36,
-              height: 36,
-              borderRadius: 8,
-              background: ready ? "rgba(34,197,94,0.18)" : "rgba(148,163,184,0.18)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 18
+              border: "none",
+              background: "transparent",
+              color: islandTheme.color.textSubtle,
+              cursor: "pointer",
+              fontSize: 12,
+              padding: "4px 8px"
             }}
           >
-            🤖
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>
-              AI {ready ? "ready" : "not configured"}
+            Dismiss for this session
+          </button>
+        </IslandCard>
+      )}
+      <IslandCard style={{ padding: 18 }}>
+        <div style={{ display: "grid", gap: 14 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 8,
+                background: ready ? "rgba(34,197,94,0.18)" : "rgba(148,163,184,0.18)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 18
+              }}
+            >
+              🤖
             </div>
-            <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
-              Edit values in the Settings tab
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>
+                AI {ready ? "ready" : "not configured"}
+              </div>
+              <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
+                Edit values in the Settings tab
+              </div>
             </div>
+            {cost && (
+              <span
+                className="island-mono"
+                title={`Estimated AI spend today across all providers. Warns at $${cost.threshold.toFixed(2)}.`}
+                style={{
+                  fontSize: 11,
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: cost.overThreshold ? "rgba(248,113,113,0.18)" : islandTheme.color.panelMutedBg,
+                  color: cost.overThreshold ? islandTheme.color.dangerAccent : islandTheme.color.textSubtle,
+                  border: `1px solid ${cost.overThreshold ? islandTheme.color.dangerAccent : islandTheme.color.cardBorder}`,
+                  whiteSpace: "nowrap"
+                }}
+              >
+                Today: ${cost.today.toFixed(2)} · {cost.calls} call{cost.calls === 1 ? "" : "s"}
+                {cost.threshold > 0 ? ` (warn ≥ $${cost.threshold.toFixed(2)})` : ""}
+              </span>
+            )}
           </div>
-        </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
           <StatRow label="Enabled" value={enabled ? "Yes" : "No"} ok={enabled} />
@@ -307,9 +448,10 @@ function AIHealthArea({
           {testState === "error" && (
             <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>✗ {testMsg}</span>
           )}
+          </div>
         </div>
-      </div>
-    </IslandCard>
+      </IslandCard>
+    </div>
   );
 }
 
@@ -883,6 +1025,8 @@ function NewsSubpage({
   onIngest,
   onCurate,
   onRecurate,
+  onCancelRecurate,
+  onEmbedBackfill,
   onFetchRecurateStatus,
   onCurateGameNews,
   newsCards,
@@ -897,6 +1041,10 @@ function NewsSubpage({
   onRecurate: (
     onProgress?: (snap: RecurateProgressSnap) => void
   ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onCancelRecurate: () => Promise<{ ok: boolean; error?: string }>;
+  onEmbedBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
   onFetchRecurateStatus: () => Promise<{
     state: "idle" | "running" | "done" | "error";
     reset: number;
@@ -942,6 +1090,8 @@ function NewsSubpage({
           onIngest={onIngest}
           onCurate={onCurate}
           onRecurate={onRecurate}
+          onCancelRecurate={onCancelRecurate}
+          onEmbedBackfill={onEmbedBackfill}
           onFetchRecurateStatus={onFetchRecurateStatus}
         />
       </div>
@@ -2502,20 +2652,14 @@ const SERVER_CONFIG_META: Record<string, { hint: string; sensitive?: boolean; re
 
 // ── News Sources Subpage ─────────────────────────────────────────────────────
 
-const RSS_SOURCE_OPTIONS = [
-  { key: "pcgamer", label: "PC Gamer" },
-  { key: "rockpapershotgun", label: "Rock Paper Shotgun" },
-  { key: "eurogamer", label: "Eurogamer" },
-  { key: "kotaku", label: "Kotaku" },
-  { key: "ign", label: "IGN" }
-];
-
 function NewsSourcesSubpage({
   settings,
   onUpdate,
   onIngest,
   onCurate,
   onRecurate,
+  onCancelRecurate,
+  onEmbedBackfill,
   onFetchRecurateStatus
 }: {
   settings: ServerSetting[] | null;
@@ -2525,24 +2669,31 @@ function NewsSourcesSubpage({
   onRecurate: (
     onProgress?: (snap: RecurateProgressSnap) => void
   ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
+  onCancelRecurate: () => Promise<{ ok: boolean; error?: string }>;
+  onEmbedBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
   onFetchRecurateStatus: () => Promise<{
     state: "idle" | "running" | "done" | "error";
     reset: number;
     curated: number;
+    processed?: number;
+    merged?: number;
+    duplicates?: number;
+    failed?: number;
+    costUsd?: number;
     total: number;
     error: string | null;
   } | null>;
 }) {
   const getSetting = (key: string) => settings?.find((s) => s.key === key)?.value ?? "";
 
-  const rawSources = getSetting("news_rss_sources") || "pcgamer,rockpapershotgun,eurogamer,kotaku";
-  const [enabledSources, setEnabledSources] = useState<Set<string>>(() =>
-    new Set(rawSources.split(",").map((s) => s.trim()).filter(Boolean))
-  );
   const [devCap, setDevCap] = useState(() => getSetting("news_dev_cap") || "2");
   const [generalEnabled, setGeneralEnabled] = useState(() => getSetting("news_general_enabled") !== "false");
   const [newsApiKey, setNewsApiKey] = useState("");
   const [newsApiKeyIsSet] = [getSetting("newsapi_key") === "••••••••"];
+  const [youtubeApiKey, setYoutubeApiKey] = useState("");
+  const [youtubeApiKeyIsSet] = [getSetting("youtube_api_key") === "••••••••"];
 
   const [ingestState, setIngestState] = useState<"idle" | "running" | "done" | "error">("idle");
   const [ingestMsg, setIngestMsg] = useState("");
@@ -2550,25 +2701,62 @@ function NewsSourcesSubpage({
   const [curateMsg, setCurateMsg] = useState("");
   const [recurateState, setRecurateState] = useState<"idle" | "running" | "done" | "error">("idle");
   const [recurateMsg, setRecurateMsg] = useState("");
-  const [recurateProgress, setRecurateProgress] = useState<{ curated: number; total: number } | null>(null);
+  const [recurateProgress, setRecurateProgress] = useState<{
+    processed: number;
+    curated: number;
+    merged: number;
+    duplicates: number;
+    failed: number;
+    costUsd: number;
+    total: number;
+  } | null>(null);
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const initializedRef = useRef(false);
 
-  function progressMsg(curated: number, total: number): string {
-    if (total <= 0) return `Regenerating… ${curated} processed`;
-    const pct = Math.min(100, Math.round((curated / total) * 100));
-    return `Regenerating… ${curated} / ${total} (${pct}%)`;
+  function progressMsg(processed: number, total: number, costUsd: number): string {
+    const costStr = costUsd > 0 ? ` · est. $${costUsd.toFixed(3)} spent` : "";
+    if (total <= 0) return `Regenerating… ${processed} processed${costStr}`;
+    const pct = Math.min(100, Math.round((processed / total) * 100));
+    return `Regenerating… ${processed} / ${total} (${pct}%)${costStr}`;
+  }
+
+  function doneMsg(p: { curated: number; merged: number; duplicates: number; failed: number; costUsd: number; total: number }): string {
+    const costStr = p.costUsd > 0 ? ` — est. $${p.costUsd.toFixed(3)} total spend` : "";
+    return (
+      `Done — ${p.total} articles processed: ` +
+      `${p.curated} new cards, ` +
+      `${p.merged} merged into existing cards, ` +
+      `${p.duplicates} dropped as duplicates` +
+      (p.failed > 0 ? `, ${p.failed} validation-failed` : "") +
+      costStr
+    );
   }
 
   function handleRecurateSnap(snap: RecurateProgressSnap) {
     if (snap.state === "running") {
       setRecurateState("running");
-      setRecurateProgress({ curated: snap.curated, total: snap.total });
-      setRecurateMsg(progressMsg(snap.curated, snap.total));
+      setRecurateProgress({
+        processed: snap.processed,
+        curated: snap.curated,
+        merged: snap.merged,
+        duplicates: snap.duplicates,
+        failed: snap.failed,
+        costUsd: snap.costUsd,
+        total: snap.total
+      });
+      setRecurateMsg(progressMsg(snap.processed, snap.total, snap.costUsd));
     } else if (snap.state === "done") {
       setRecurateState("done");
-      setRecurateProgress({ curated: snap.curated, total: snap.total });
-      setRecurateMsg(`Done — regenerated ${snap.curated} of ${snap.total} summaries`);
+      setRecurateProgress({
+        processed: snap.processed,
+        curated: snap.curated,
+        merged: snap.merged,
+        duplicates: snap.duplicates,
+        failed: snap.failed,
+        costUsd: snap.costUsd,
+        total: snap.total
+      });
+      setRecurateMsg(doneMsg(snap));
     } else {
       setRecurateState("error");
       setRecurateMsg(snap.error ?? "Recurate failed");
@@ -2582,8 +2770,16 @@ function NewsSourcesSubpage({
       const job = await onFetchRecurateStatus();
       if (cancelled || !job || job.state !== "running") return;
       setRecurateState("running");
-      setRecurateProgress({ curated: job.curated, total: job.total });
-      setRecurateMsg(progressMsg(job.curated, job.total));
+      setRecurateProgress({
+        processed: job.processed ?? 0,
+        curated: job.curated,
+        merged: job.merged ?? 0,
+        duplicates: job.duplicates ?? 0,
+        failed: job.failed ?? 0,
+        costUsd: job.costUsd ?? 0,
+        total: job.total
+      });
+      setRecurateMsg(progressMsg(job.processed ?? 0, job.total, job.costUsd ?? 0));
 
       const result = await onRecurate((snap) => {
         if (cancelled) return;
@@ -2604,8 +2800,6 @@ function NewsSourcesSubpage({
 
   useEffect(() => {
     if (settings && !initializedRef.current) {
-      const raw = getSetting("news_rss_sources") || "pcgamer,rockpapershotgun,eurogamer,kotaku";
-      setEnabledSources(new Set(raw.split(",").map((s) => s.trim()).filter(Boolean)));
       setDevCap(getSetting("news_dev_cap") || "2");
       setGeneralEnabled(getSetting("news_general_enabled") !== "false");
       initializedRef.current = true;
@@ -2616,16 +2810,6 @@ function NewsSourcesSubpage({
   function flashSaved(key: string) {
     setSaved((p) => ({ ...p, [key]: true }));
     setTimeout(() => setSaved((p) => ({ ...p, [key]: false })), 2200);
-  }
-
-  function toggleSource(key: string) {
-    const next = new Set(enabledSources);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
-    setEnabledSources(next);
-    const value = Array.from(next).join(",");
-    onUpdate("news_rss_sources", value);
-    flashSaved("rss");
   }
 
   const accent = "#0ea5e9";
@@ -2655,10 +2839,10 @@ function NewsSourcesSubpage({
               External News Feed
             </div>
             <div className="island-display" style={{ fontWeight: 800, fontSize: 18 }}>
-              {Array.from(enabledSources).length} RSS source{Array.from(enabledSources).length !== 1 ? "s" : ""} enabled
+              {generalEnabled ? "External news feed active" : "External news feed disabled"}
             </div>
             <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
-              {generalEnabled ? "General news feed active" : "General news feed disabled"}
+              Manage sources, services, and pipeline below
             </div>
           </div>
           <button
@@ -2688,63 +2872,8 @@ function NewsSourcesSubpage({
         </div>
       </IslandCard>
 
-      {/* RSS Sources */}
-      <IslandCard style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>RSS Feeds</SubsectionTitle>
-        <p style={{ margin: "0 0 14px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Toggle which outlets contribute to the home page gaming news feed. Changes take effect on the next ingestion run.
-        </p>
-        <div style={{ display: "grid", gap: 8 }}>
-          {RSS_SOURCE_OPTIONS.map((src) => {
-            const active = enabledSources.has(src.key);
-            return (
-              <button
-                key={src.key}
-                type="button"
-                className="island-btn"
-                onClick={() => toggleSource(src.key)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 12,
-                  padding: "10px 14px",
-                  borderRadius: 10,
-                  border: `1.5px solid ${active ? accent : islandTheme.color.cardBorder}`,
-                  background: active ? `${accent}18` : islandTheme.color.panelMutedBg,
-                  color: islandTheme.color.textPrimary,
-                  cursor: "pointer",
-                  font: "inherit",
-                  textAlign: "left",
-                  transition: "all 140ms"
-                }}
-              >
-                <span
-                  style={{
-                    width: 14,
-                    height: 14,
-                    borderRadius: 3,
-                    border: `2px solid ${active ? accent : islandTheme.color.cardBorder}`,
-                    background: active ? accent : "transparent",
-                    flexShrink: 0,
-                    transition: "all 140ms",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 9,
-                    color: islandTheme.color.textInverted
-                  }}
-                >
-                  {active ? "✓" : ""}
-                </span>
-                <span style={{ fontSize: 13, fontWeight: active ? 700 : 400 }}>{src.label}</span>
-              </button>
-            );
-          })}
-        </div>
-        {saved["rss"] && (
-          <div style={{ marginTop: 8, fontSize: 12, color: islandTheme.color.successAccent }}>Sources saved</div>
-        )}
-      </IslandCard>
+      {/* Source registry — curated presets + custom URLs across all providers */}
+      <NewsSourceRegistryPanel accent={accent} />
 
       {/* GNews API Key */}
       <IslandCard style={{ padding: "16px 18px" }}>
@@ -2775,6 +2904,39 @@ function NewsSourcesSubpage({
             disabled={!newsApiKey.trim() || saved["newsapi_key"]}
           >
             {saved["newsapi_key"] ? "Saved" : "Save Key"}
+          </IslandButton>
+        </div>
+      </IslandCard>
+
+      {/* YouTube API Key */}
+      <IslandCard style={{ padding: "16px 18px" }}>
+        <SubsectionTitle>YouTube API Key</SubsectionTitle>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+          Optional. Unlocks YouTube channel uploads as news signal.{" "}
+          <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" style={{ color: accent }}>
+            Get a free key from Google Cloud Console
+          </a>{" "}
+          (10,000 units/day on the free tier — plenty for hourly polling).
+        </p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            type="password"
+            placeholder={youtubeApiKeyIsSet ? "••••••••  (key is set)" : "Paste key here"}
+            value={youtubeApiKey}
+            onChange={(e) => setYoutubeApiKey(e.target.value)}
+            style={{ ...islandInputStyle, flex: 1 }}
+          />
+          <IslandButton
+            variant="secondary"
+            onClick={() => {
+              if (!youtubeApiKey.trim()) return;
+              onUpdate("youtube_api_key", youtubeApiKey.trim());
+              setYoutubeApiKey("");
+              flashSaved("youtube_api_key");
+            }}
+            disabled={!youtubeApiKey.trim() || saved["youtube_api_key"]}
+          >
+            {saved["youtube_api_key"] ? "Saved" : "Save Key"}
           </IslandButton>
         </div>
       </IslandCard>
@@ -2937,10 +3099,25 @@ function NewsSourcesSubpage({
             >
               {recurateState === "running"
                 ? recurateProgress && recurateProgress.total > 0
-                  ? `Regenerating… ${Math.min(100, Math.round((recurateProgress.curated / recurateProgress.total) * 100))}%`
+                  ? `Regenerating… ${Math.min(100, Math.round((recurateProgress.processed / recurateProgress.total) * 100))}%`
                   : "Regenerating…"
                 : "Regenerate All Summaries"}
             </IslandButton>
+            {recurateState === "running" && (
+              <IslandButton
+                variant="secondary"
+                onClick={async () => {
+                  const result = await onCancelRecurate();
+                  if (!result.ok) {
+                    setRecurateMsg(`Cancel failed: ${result.error ?? "unknown"}`);
+                  } else {
+                    setRecurateMsg("Cancel requested — stopping after current pass…");
+                  }
+                }}
+              >
+                Cancel
+              </IslandButton>
+            )}
             {recurateMsg && (
               <span
                 role="status"
@@ -2973,7 +3150,7 @@ function NewsSourcesSubpage({
             >
               <div
                 style={{
-                  width: `${Math.min(100, Math.round((recurateProgress.curated / recurateProgress.total) * 100))}%`,
+                  width: `${Math.min(100, Math.round((recurateProgress.processed / recurateProgress.total) * 100))}%`,
                   height: "100%",
                   background: islandTheme.color.dangerAccent,
                   transition: "width 400ms ease"
@@ -2982,7 +3159,81 @@ function NewsSourcesSubpage({
             </div>
           )}
         </div>
+
+        <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
+          <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Embedding Backfill</div>
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+            Generate semantic vectors (OpenAI text-embedding-3-small) for every article missing one. Required for deterministic cosine-similarity clustering. Processes up to 200 rows per click — re-click until "Done — 0 remaining". Costs roughly $0.02 per 1000 articles.
+          </div>
+          <EmbedBackfillButton onEmbedBackfill={onEmbedBackfill} />
+        </div>
       </IslandCard>
+    </div>
+  );
+}
+
+function EmbedBackfillButton({
+  onEmbedBackfill
+}: {
+  onEmbedBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
+}) {
+  const [state, setState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [msg, setMsg] = useState("");
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <IslandButton
+        variant="secondary"
+        disabled={state === "running"}
+        onClick={async () => {
+          setState("running");
+          let totalEmbedded = 0;
+          // Loop until the server reports 0 remaining. Server caps each call at
+          // 500 rows for HTTP-request bounding; 50 iterations covers ~25K rows
+          // which is well past anything we'll realistically hold.
+          for (let i = 0; i < 50; i++) {
+            setMsg(`Embedding batch ${i + 1}… (${totalEmbedded} embedded so far)`);
+            const result = await onEmbedBackfill(500);
+            if (!result.ok) {
+              setState("error");
+              setMsg(result.error ?? "Backfill failed");
+              return;
+            }
+            totalEmbedded += result.embedded ?? 0;
+            const remaining = result.remaining ?? 0;
+            if (remaining === 0 || (result.embedded ?? 0) === 0) {
+              setState("done");
+              setMsg(`Done — ${totalEmbedded} embedded, ${remaining} remaining.`);
+              setTimeout(() => setState("idle"), 15000);
+              return;
+            }
+          }
+          setState("done");
+          setMsg(`Stopped at iteration cap — ${totalEmbedded} embedded. Click again to continue.`);
+          setTimeout(() => setState("idle"), 15000);
+        }}
+      >
+        {state === "running" ? "Embedding…" : "Embed Missing Articles"}
+      </IslandButton>
+      {msg && (
+        <span
+          role="status"
+          aria-live="polite"
+          style={{
+            fontSize: 12,
+            color:
+              state === "error"
+                ? islandTheme.color.dangerAccent
+                : state === "done"
+                  ? islandTheme.color.successAccent
+                  : islandTheme.color.textSubtle
+          }}
+        >
+          {msg}
+        </span>
+      )}
     </div>
   );
 }
@@ -3427,21 +3678,110 @@ function smallBtn(bg: string, fg: string, ghost = false, border?: string): CSSPr
   };
 }
 
+function ProviderKeyRow({
+  settingKey,
+  label,
+  placeholder,
+  isSet,
+  saved,
+  onSave,
+  hint
+}: {
+  settingKey: string;
+  label: string;
+  placeholder: string;
+  isSet: boolean;
+  saved: boolean | undefined;
+  onSave: (value: string) => void;
+  hint?: string;
+}) {
+  const [value, setValue] = useState("");
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: hint ? 4 : 0
+        }}
+      >
+        <span
+          style={{
+            fontSize: 13,
+            color: islandTheme.color.textSecondary,
+            minWidth: 200
+          }}
+        >
+          {label}
+          {isSet ? (
+            <span
+              className="island-mono"
+              style={{
+                marginLeft: 8,
+                fontSize: 10,
+                color: islandTheme.color.successAccent,
+                textTransform: "uppercase",
+                letterSpacing: "0.1em"
+              }}
+            >
+              ✓ saved
+            </span>
+          ) : null}
+        </span>
+        <input
+          style={{
+            ...islandInputStyle,
+            flex: 1,
+            fontFamily: islandTheme.font.mono,
+            letterSpacing: "0.05em"
+          }}
+          type="password"
+          value={value}
+          placeholder={isSet ? "••••••••  (saved — enter new to replace)" : placeholder}
+          onChange={(e) => setValue(e.target.value)}
+          autoComplete="off"
+          data-1p-ignore="true"
+          name={`${settingKey}-input`}
+        />
+        <IslandButton
+          variant="secondary"
+          onClick={() => {
+            if (value) {
+              onSave(value);
+              setValue("");
+            }
+          }}
+          disabled={!value || saved}
+        >
+          {saved ? "Saved" : "Save"}
+        </IslandButton>
+      </div>
+      {hint ? (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginLeft: 210 }}>
+          {hint}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ── AI Settings subpage ───────────────────────────────────────────────────────
 
 const PROVIDER_DEFAULTS: Record<string, string> = {
   anthropic: "claude-haiku-4-5",
-  openai: "gpt-4o-mini"
+  openai: "gpt-4o-mini",
+  gemini: "gemini-2.5-flash-lite"
 };
 
 type ModelOption = { value: string; label: string; note?: string };
 
 const PROVIDER_MODELS: Record<string, ModelOption[]> = {
   anthropic: [
-    { value: "claude-haiku-4-5",   label: "Claude Haiku 4.5",   note: "Fastest · cheapest · great for bulk tasks" },
-    { value: "claude-sonnet-4-6",  label: "Claude Sonnet 4.6",  note: "Best balance of speed and intelligence" },
-    { value: "claude-opus-4-6",    label: "Claude Opus 4.6",    note: "Extended thinking · higher cost" },
-    { value: "claude-opus-4-7",    label: "Claude Opus 4.7",    note: "Most capable · best for complex reasoning" },
+    { value: "claude-sonnet-4-6",  label: "Claude Sonnet 4.6",  note: "Recommended for news curation · best speed/intelligence balance · caches at 2K tok" },
+    { value: "claude-haiku-4-5",   label: "Claude Haiku 4.5",   note: "Cheapest · fastest · cache needs ≥4K tok prefix to activate" },
+    { value: "claude-opus-4-7",    label: "Claude Opus 4.7",    note: "Most capable · 5× cost of Sonnet · save for hard reasoning" },
+    { value: "claude-opus-4-6",    label: "Claude Opus 4.6",    note: "Previous flagship · use only if pinning a known-good version" },
     { value: "__custom__",         label: "Custom model…",      note: "Enter a model ID manually" }
   ],
   openai: [
@@ -3451,6 +3791,12 @@ const PROVIDER_MODELS: Record<string, ModelOption[]> = {
     { value: "gpt-4.1",            label: "GPT-4.1",            note: "Latest GPT-4 generation" },
     { value: "o4-mini",            label: "o4-mini",            note: "Fast reasoning model" },
     { value: "__custom__",         label: "Custom model…",      note: "Enter a model ID manually" }
+  ],
+  gemini: [
+    { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash Lite", note: "Recommended for cost · ~30× cheaper than Sonnet · sufficient for structured news curation" },
+    { value: "gemini-2.5-flash",      label: "Gemini 2.5 Flash",      note: "Fast · cheap · implicit caching ≥1K tok · step up when Flash Lite misses nuance" },
+    { value: "gemini-2.5-pro",        label: "Gemini 2.5 Pro",        note: "Most capable Gemini · richer reasoning · caching ≥2K tok" },
+    { value: "__custom__",            label: "Custom model…",         note: "Enter a model ID manually" }
   ]
 };
 
@@ -3602,7 +3948,7 @@ function AISettingsSubpage({
           Choose your LLM provider. You can swap at any time — no code changes needed.
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          {["anthropic", "openai"].map((p) => (
+          {["anthropic", "openai", "gemini"].map((p) => (
             <button
               key={p}
               type="button"
@@ -3621,7 +3967,11 @@ function AISettingsSubpage({
                 transition: "all 140ms"
               }}
             >
-              {p === "anthropic" ? "Anthropic (Claude)" : "OpenAI (GPT)"}
+              {p === "anthropic"
+                ? "Anthropic (Claude)"
+                : p === "openai"
+                ? "OpenAI (GPT)"
+                : "Google (Gemini)"}
             </button>
           ))}
         </div>
@@ -3643,7 +3993,7 @@ function AISettingsSubpage({
         <SubsectionTitle>Model</SubsectionTitle>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
           {provider
-            ? `Choose a ${provider === "anthropic" ? "Claude" : "GPT"} model. Haiku / Mini tiers are fastest and cheapest — great for news curation. Use Sonnet / GPT-4o for richer reasoning.`
+            ? `Choose a ${provider === "anthropic" ? "Claude" : provider === "openai" ? "GPT" : "Gemini"} model. Haiku / Mini / Flash tiers are fastest and cheapest — great for news curation. Step up to Sonnet / GPT-4o / Pro for richer reasoning.`
             : "Select a provider above to see available models."}
         </p>
 
@@ -3727,7 +4077,7 @@ function AISettingsSubpage({
               <input
                 style={{ ...islandInputStyle }}
                 type="text"
-                placeholder={`Enter model ID (e.g. ${provider === "anthropic" ? "claude-opus-4-5" : "gpt-4-turbo"})`}
+                placeholder={`Enter model ID (e.g. ${provider === "anthropic" ? "claude-opus-4-5" : provider === "openai" ? "gpt-4-turbo" : "gemini-2.5-pro"})`}
                 value={customModel}
                 onChange={(e) => setCustomModel(e.target.value)}
                 autoFocus
@@ -3768,36 +4118,76 @@ function AISettingsSubpage({
         )}
       </IslandCard>
 
-      {/* API Key */}
+      {/* API Keys (per-provider) */}
       <IslandCard style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>API Key</SubsectionTitle>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          {apiKeyIsSet
-            ? "A key is already saved. Enter a new value to replace it, or leave blank to keep the existing key."
-            : "Your key is stored server-side and never returned to the browser after saving. You can also set ANTHROPIC_API_KEY / OPENAI_API_KEY in your .env as a fallback."}
+        <SubsectionTitle>API Keys</SubsectionTitle>
+        <p style={{ margin: "0 0 14px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+          One slot per provider so you can route different workloads to different vendors (e.g. Anthropic for curation, OpenAI for embedding clustering, Gemini for taglines). Keys are stored server-side and never returned to the browser after saving. Each falls back to its matching env var (<code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> / <code>GEMINI_API_KEY</code>) when blank.
         </p>
-        <div style={{ display: "flex", gap: 10 }}>
-          <input
-            style={{ ...islandInputStyle, flex: 1, fontFamily: islandTheme.font.mono, letterSpacing: "0.05em" }}
-            type="password"
-            value={apiKey}
-            placeholder={apiKeyIsSet ? "••••••••  (key saved — enter new to replace)" : "sk-ant-... or sk-..."}
-            onChange={(e) => setApiKey(e.target.value)}
-            autoComplete="off"
-          />
-          <IslandButton
-            variant="secondary"
-            onClick={() => {
-              if (apiKey) {
-                save("ai_api_key", apiKey);
-                setApiKey("");
-              }
+
+        <ProviderKeyRow
+          settingKey="anthropic_api_key"
+          label="Anthropic (Claude)"
+          placeholder="sk-ant-..."
+          saved={saved["anthropic_api_key"]}
+          isSet={getSetting("anthropic_api_key") === "••••••••"}
+          onSave={(v) => save("anthropic_api_key", v)}
+        />
+        <ProviderKeyRow
+          settingKey="openai_api_key"
+          label="OpenAI (GPT + embeddings)"
+          placeholder="sk-..."
+          saved={saved["openai_api_key"]}
+          isSet={getSetting("openai_api_key") === "••••••••"}
+          onSave={(v) => save("openai_api_key", v)}
+          hint="Also used for the text-embedding-3-small clustering pass — set this even if your chat provider is something else."
+        />
+        <ProviderKeyRow
+          settingKey="gemini_api_key"
+          label="Google (Gemini)"
+          placeholder="AIza..."
+          saved={saved["gemini_api_key"]}
+          isSet={getSetting("gemini_api_key") === "••••••••"}
+          onSave={(v) => save("gemini_api_key", v)}
+        />
+
+        {/* Legacy single-key slot — kept visible so existing installs can see
+            it and migrate. Hidden once cleared. */}
+        {apiKeyIsSet ? (
+          <div
+            style={{
+              marginTop: 16,
+              paddingTop: 12,
+              borderTop: `1px dashed ${islandTheme.color.cardBorder}`
             }}
-            disabled={!apiKey || saved["ai_api_key"]}
           >
-            {saved["ai_api_key"] ? "Saved" : "Save Key"}
-          </IslandButton>
-        </div>
+            <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 6 }}>
+              Legacy shared key (used only when the matching per-provider slot is empty). You can leave this alone — once you fill the per-provider key for your active provider, this row becomes inert.
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <input
+                style={{ ...islandInputStyle, flex: 1, fontFamily: islandTheme.font.mono, letterSpacing: "0.05em" }}
+                type="password"
+                value={apiKey}
+                placeholder="••••••••  (legacy key saved — enter new to replace)"
+                onChange={(e) => setApiKey(e.target.value)}
+                autoComplete="off"
+              />
+              <IslandButton
+                variant="secondary"
+                onClick={() => {
+                  if (apiKey) {
+                    save("ai_api_key", apiKey);
+                    setApiKey("");
+                  }
+                }}
+                disabled={!apiKey || saved["ai_api_key"]}
+              >
+                {saved["ai_api_key"] ? "Saved" : "Save Key"}
+              </IslandButton>
+            </div>
+          </div>
+        ) : null}
       </IslandCard>
 
       {/* Test connection */}
@@ -3826,6 +4216,241 @@ function AISettingsSubpage({
               {testState === "ok" ? "✓ " : "✗ "}{testMsg}
             </span>
           ) : null}
+        </div>
+      </IslandCard>
+    </div>
+  );
+}
+
+// ── Discord Bridge subpage ────────────────────────────────────────────────────
+// Surfaces the milestone_announcements_* + milestone_role_rank_* settings
+// from migration 031. Until configured, the bot's milestone announcer is a
+// no-op (silently marks outbox rows processed without posting or role-grant).
+
+function DiscordBridgeSubpage({
+  settings,
+  onUpdate,
+}: {
+  settings: ServerSetting[] | null;
+  onUpdate: (key: string, value: string) => void;
+}) {
+  const getSetting = (key: string) => settings?.find((s) => s.key === key)?.value ?? "";
+
+  const [enabled, setEnabled] = useState(() => getSetting("milestone_announcements_enabled") === "true");
+  const [channelDraft, setChannelDraft] = useState(() => getSetting("milestone_channel_id"));
+  const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>(() => {
+    const drafts: Record<string, string> = {};
+    for (let i = 1; i <= 8; i++) {
+      const key = `milestone_role_rank_${String(i).padStart(2, "0")}`;
+      drafts[key] = getSetting(key);
+    }
+    return drafts;
+  });
+  const [saved, setSaved] = useState<Record<string, boolean>>({});
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (settings && !initializedRef.current) {
+      setEnabled(getSetting("milestone_announcements_enabled") === "true");
+      setChannelDraft(getSetting("milestone_channel_id"));
+      const drafts: Record<string, string> = {};
+      for (let i = 1; i <= 8; i++) {
+        const key = `milestone_role_rank_${String(i).padStart(2, "0")}`;
+        drafts[key] = getSetting(key);
+      }
+      setRoleDrafts(drafts);
+      initializedRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings]);
+
+  const save = (key: string, value: string) => {
+    onUpdate(key, value);
+    setSaved((prev) => ({ ...prev, [key]: true }));
+    setTimeout(() => setSaved((prev) => ({ ...prev, [key]: false })), 2200);
+  };
+
+  if (settings === null) {
+    return (
+      <IslandCard style={{ padding: 20 }}>
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>Loading settings…</p>
+      </IslandCard>
+    );
+  }
+
+  const channelDirty = channelDraft.trim() !== getSetting("milestone_channel_id");
+  const accent = "#7dd3fc";
+  const configured = enabled && getSetting("milestone_channel_id").trim().length > 0;
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      {/* Status banner */}
+      <IslandCard
+        style={{
+          padding: "14px 18px",
+          background: `linear-gradient(135deg, ${accent}22 0%, ${islandTheme.color.panelBg} 100%)`,
+          border: `1px solid ${accent}44`,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <span style={{ fontSize: 28 }}>🌉</span>
+          <div style={{ flex: 1 }}>
+            <div className="island-mono" style={{ fontSize: 10, color: accent, textTransform: "uppercase", letterSpacing: "0.12em" }}>
+              Discord Bridge
+            </div>
+            <div className="island-display" style={{ fontWeight: 800, fontSize: 18 }}>
+              {configured ? "Milestone announcements live" : "Milestone announcements OFF"}
+            </div>
+            <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
+              {enabled
+                ? getSetting("milestone_channel_id")
+                  ? `Posting to channel ${getSetting("milestone_channel_id")}`
+                  : "Toggle ON but no channel set — bot will skip posts"
+                : "Bot will not post tier reaches to any channel"}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const next = !enabled;
+              setEnabled(next);
+              save("milestone_announcements_enabled", next ? "true" : "false");
+            }}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              color: islandTheme.color.textSubtle,
+              fontSize: 13,
+              font: "inherit",
+            }}
+          >
+            <Toggle on={enabled} />
+            <span>{enabled ? "On" : "Off"}</span>
+          </button>
+        </div>
+      </IslandCard>
+
+      {/* Channel */}
+      <IslandCard style={{ padding: "16px 18px" }}>
+        <SubsectionTitle>Announcement Channel</SubsectionTitle>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+          Discord channel ID where the bot posts when a member crosses a rank threshold.
+          Enable Developer Mode in Discord (User Settings → Advanced), then right-click the channel and choose <strong>Copy ID</strong>.
+        </p>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={channelDraft}
+            onChange={(e) => setChannelDraft(e.target.value)}
+            placeholder="1234567890123456789"
+            className="island-mono"
+            style={{
+              ...islandInputStyle,
+              flex: "1 1 240px",
+              maxWidth: 360,
+              fontSize: 13,
+            }}
+          />
+          <IslandButton
+            variant="secondary"
+            onClick={() => save("milestone_channel_id", channelDraft.trim())}
+            disabled={!channelDirty || saved["milestone_channel_id"]}
+          >
+            {saved["milestone_channel_id"] ? "Saved" : "Save Channel"}
+          </IslandButton>
+        </div>
+      </IslandCard>
+
+      {/* Role bindings */}
+      <IslandCard style={{ padding: "16px 18px" }}>
+        <SubsectionTitle>Tier Roles (Optional)</SubsectionTitle>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+          Discord role ID auto-assigned when a member reaches each tier. Lower tier roles are
+          automatically removed as members climb the ladder, so each member only carries their highest rank.
+          Leave blank to skip role assignment for a tier. The bot needs <strong>Manage Roles</strong>{" "}
+          and must sit above these roles in the role hierarchy.
+        </p>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 10,
+          }}
+        >
+          {RANK_TIERS.map((tier, i) => {
+            const key = `milestone_role_rank_${String(i + 1).padStart(2, "0")}`;
+            const draft = roleDrafts[key] ?? "";
+            const stored = getSetting(key);
+            const dirty = draft.trim() !== stored;
+            return (
+              <div
+                key={key}
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  background: islandTheme.color.panelMutedBg,
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  display: "grid",
+                  gap: 6,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 18 }}>{tier.emblem}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="island-mono" style={{ fontSize: 11, fontWeight: 800, letterSpacing: "0.05em" }}>
+                      {tier.label}
+                    </div>
+                    <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted }}>
+                      ₦{tier.threshold.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={draft}
+                    onChange={(e) =>
+                      setRoleDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                    }
+                    placeholder="role ID (optional)"
+                    className="island-mono"
+                    style={{
+                      ...islandInputStyle,
+                      flex: 1,
+                      fontSize: 12,
+                      padding: "6px 8px",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => save(key, draft.trim())}
+                    disabled={!dirty || saved[key]}
+                    className="island-mono"
+                    style={{
+                      padding: "0 10px",
+                      borderRadius: 6,
+                      border: `1px solid ${dirty ? accent : islandTheme.color.cardBorder}`,
+                      background: dirty ? `${accent}22` : "transparent",
+                      color: dirty ? accent : islandTheme.color.textMuted,
+                      fontSize: 10,
+                      letterSpacing: "0.06em",
+                      textTransform: "uppercase",
+                      cursor: dirty ? "pointer" : "default",
+                      font: "inherit",
+                    }}
+                  >
+                    {saved[key] ? "Saved" : "Save"}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </IslandCard>
     </div>
@@ -4341,3 +4966,349 @@ function EconomySubpage() {
     </div>
   );
 }
+
+// ── News Source Registry Panel ────────────────────────────────────────────────
+// Renders every row of news_source_registry grouped by kind. Each row has an
+// enable toggle, a Test button, and (for non-presets) a Delete button. A
+// service-readiness banner at the top calls out missing API keys.
+
+const KIND_META: Record<NewsSourceKind, { label: string; icon: string; hint: string }> = {
+  rss: { label: "RSS Feeds", icon: "📰", hint: "Paste any RSS / Atom feed URL." },
+  reddit: { label: "Reddit", icon: "👽", hint: "Enter a subreddit name (no r/ prefix)." },
+  youtube: { label: "YouTube", icon: "📺", hint: "Channel ID (starts with UC). Needs a YouTube API key." },
+  gnews: { label: "GNews API", icon: "🔍", hint: "Search query passed to GNews.io. Needs an API key." }
+};
+
+const KIND_ORDER: NewsSourceKind[] = ["rss", "reddit", "youtube", "gnews"];
+
+function NewsSourceRegistryPanel({ accent }: { accent: string }) {
+  const [sources, setSources] = useState<NewsSource[] | null>(null);
+  const [services, setServices] = useState<ServiceStatus[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<Record<string, { count: number; titles: string[]; error?: string }>>({});
+  const [addingKind, setAddingKind] = useState<NewsSourceKind | null>(null);
+  const [newName, setNewName] = useState("");
+  const [newIdentifier, setNewIdentifier] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const [s, svc] = await Promise.all([listNewsSources(), listNewsServices()]);
+    setSources(s);
+    setServices(svc);
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  async function toggleEnabled(src: NewsSource) {
+    setBusyId(src.id);
+    try {
+      const updated = await updateNewsSource(src.id, { enabled: !src.enabled });
+      setSources((prev) => (prev ?? []).map((s) => (s.id === src.id ? updated : s)));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleDelete(src: NewsSource) {
+    if (!confirm(`Delete custom source "${src.name}"?`)) return;
+    setBusyId(src.id);
+    try {
+      await deleteNewsSource(src.id);
+      setSources((prev) => (prev ?? []).filter((s) => s.id !== src.id));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleTest(src: NewsSource) {
+    setBusyId(src.id);
+    try {
+      const result = await testNewsSource(src.id);
+      setPreviews((p) => ({
+        ...p,
+        [src.id]: { count: result.count, titles: result.preview.map((i) => i.title) }
+      }));
+    } catch (err) {
+      setPreviews((p) => ({
+        ...p,
+        [src.id]: { count: 0, titles: [], error: err instanceof Error ? err.message : "Test failed" }
+      }));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleAdd(kind: NewsSourceKind) {
+    if (!newName.trim() || !newIdentifier.trim()) return;
+    setAddError(null);
+    try {
+      const created = await createNewsSource({
+        kind,
+        name: newName.trim(),
+        identifier: newIdentifier.trim()
+      });
+      setSources((prev) => [...(prev ?? []), created]);
+      setNewName("");
+      setNewIdentifier("");
+      setAddingKind(null);
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : "Add failed");
+    }
+  }
+
+  if (sources === null) {
+    return (
+      <IslandCard style={{ padding: 20 }}>
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>Loading sources…</p>
+      </IslandCard>
+    );
+  }
+
+  const byKind: Record<NewsSourceKind, NewsSource[]> = { rss: [], reddit: [], youtube: [], gnews: [] };
+  for (const s of sources) byKind[s.kind].push(s);
+
+  return (
+    <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 16 }}>
+      <SubsectionTitle>Sources</SubsectionTitle>
+
+      {/* Service readiness chips */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {services.map((svc) => {
+          const meta = KIND_META[svc.kind];
+          return (
+            <div
+              key={svc.kind}
+              title={svc.blocker ?? "Ready"}
+              className="island-mono"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "4px 10px",
+                borderRadius: 999,
+                background: svc.ready
+                  ? "rgba(34, 197, 94, 0.15)"
+                  : "rgba(239, 68, 68, 0.15)",
+                color: svc.ready ? "#86efac" : "#fca5a5",
+                border: `1px solid ${svc.ready ? "rgba(34, 197, 94, 0.4)" : "rgba(239, 68, 68, 0.4)"}`,
+                fontSize: 11,
+                letterSpacing: "0.05em",
+                textTransform: "uppercase",
+                fontWeight: 700
+              }}
+            >
+              <span aria-hidden="true">{meta.icon}</span>
+              <span>{meta.label}</span>
+              <span style={{ opacity: 0.7 }}>·</span>
+              <span>{svc.ready ? "Ready" : "Configure key"}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {KIND_ORDER.map((kind) => {
+        const meta = KIND_META[kind];
+        const rows = byKind[kind];
+        const enabledCount = rows.filter((r) => r.enabled).length;
+        return (
+          <div key={kind} style={{ display: "grid", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span style={{ fontSize: 14, fontWeight: 700 }}>
+                {meta.icon} {meta.label}
+              </span>
+              <span className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, letterSpacing: "0.06em" }}>
+                {enabledCount} / {rows.length} enabled
+              </span>
+              <div style={{ flex: 1 }} />
+              <button
+                type="button"
+                onClick={() => {
+                  if (addingKind === kind) {
+                    setAddingKind(null);
+                  } else {
+                    setAddingKind(kind);
+                    setNewName("");
+                    setNewIdentifier("");
+                    setAddError(null);
+                  }
+                }}
+                className="island-mono"
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${accent}`,
+                  color: accent,
+                  padding: "4px 10px",
+                  borderRadius: 6,
+                  fontSize: 10,
+                  letterSpacing: "0.06em",
+                  textTransform: "uppercase",
+                  cursor: "pointer",
+                  font: "inherit"
+                }}
+              >
+                {addingKind === kind ? "Cancel" : "+ Add custom"}
+              </button>
+            </div>
+
+            {addingKind === kind && (
+              <div
+                style={{
+                  display: "grid",
+                  gap: 8,
+                  padding: 12,
+                  border: `1px dashed ${accent}`,
+                  borderRadius: 8,
+                  background: `${accent}08`
+                }}
+              >
+                <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+                  {meta.hint}
+                </div>
+                <input
+                  type="text"
+                  placeholder="Display name (e.g. PC Gamer)"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  style={{ ...islandInputStyle }}
+                />
+                <input
+                  type="text"
+                  placeholder={
+                    kind === "rss" ? "https://example.com/feed.xml"
+                      : kind === "reddit" ? "subredditname"
+                        : kind === "youtube" ? "UCxxxxxxxxxxxxxxxxxxxxxx"
+                          : "search query"
+                  }
+                  value={newIdentifier}
+                  onChange={(e) => setNewIdentifier(e.target.value)}
+                  style={{ ...islandInputStyle }}
+                />
+                {addError && (
+                  <div style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>{addError}</div>
+                )}
+                <div>
+                  <IslandButton
+                    variant="primary"
+                    onClick={() => void handleAdd(kind)}
+                    disabled={!newName.trim() || !newIdentifier.trim()}
+                  >
+                    Add
+                  </IslandButton>
+                </div>
+              </div>
+            )}
+
+            {rows.length === 0 && (
+              <div style={{ fontSize: 12, color: islandTheme.color.textMuted, padding: "4px 0" }}>
+                No sources yet for this provider.
+              </div>
+            )}
+            {rows.map((src) => {
+              const preview = previews[src.id];
+              return (
+                <div
+                  key={src.id}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr auto",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "8px 12px",
+                    borderRadius: 8,
+                    border: `1px solid ${src.enabled ? `${accent}55` : islandTheme.color.cardBorder}`,
+                    background: src.enabled ? `${accent}10` : islandTheme.color.panelMutedBg,
+                    opacity: busyId === src.id ? 0.6 : 1
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => void toggleEnabled(src)}
+                    disabled={busyId === src.id}
+                    title={src.enabled ? "Disable" : "Enable"}
+                    style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 4,
+                      border: `2px solid ${src.enabled ? accent : islandTheme.color.cardBorder}`,
+                      background: src.enabled ? accent : "transparent",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      fontSize: 11,
+                      color: "#0f172a",
+                      padding: 0
+                    }}
+                  >
+                    {src.enabled ? "✓" : ""}
+                  </button>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700 }}>{src.name}</span>
+                      {src.is_preset && (
+                        <span className="island-mono" style={{ fontSize: 9, padding: "1px 6px", borderRadius: 999, background: islandTheme.color.panelBg, color: islandTheme.color.textMuted, border: `1px solid ${islandTheme.color.cardBorder}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                          preset
+                        </span>
+                      )}
+                      {src.last_error && (
+                        <span className="island-mono" style={{ fontSize: 9, padding: "1px 6px", borderRadius: 999, background: "rgba(239, 68, 68, 0.15)", color: "#fca5a5", border: "1px solid rgba(239, 68, 68, 0.4)", letterSpacing: "0.06em", textTransform: "uppercase" }} title={src.last_error}>
+                          error
+                        </span>
+                      )}
+                    </div>
+                    <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {src.identifier}
+                      {src.last_fetched_at && ` · fetched ${new Date(src.last_fetched_at).toLocaleString()}`}
+                    </div>
+                    {preview && (
+                      <div style={{ marginTop: 6, padding: 6, borderRadius: 4, background: islandTheme.color.panelBg, fontSize: 11, color: islandTheme.color.textSubtle }}>
+                        {preview.error ? (
+                          <span style={{ color: islandTheme.color.dangerAccent }}>✗ {preview.error}</span>
+                        ) : (
+                          <>
+                            <span style={{ color: islandTheme.color.successAccent }}>✓ {preview.count} item{preview.count === 1 ? "" : "s"}</span>
+                            {preview.titles.slice(0, 3).map((t, i) => (
+                              <div key={i} style={{ marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>· {t}</div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      type="button"
+                      onClick={() => void handleTest(src)}
+                      disabled={busyId === src.id}
+                      className="island-mono"
+                      style={{ background: "transparent", border: `1px solid ${islandTheme.color.cardBorder}`, color: islandTheme.color.textSubtle, padding: "3px 8px", borderRadius: 4, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", cursor: "pointer", font: "inherit" }}
+                    >
+                      Test
+                    </button>
+                    {!src.is_preset && (
+                      <button
+                        type="button"
+                        onClick={() => void handleDelete(src)}
+                        disabled={busyId === src.id}
+                        className="island-mono"
+                        style={{ background: "transparent", border: `1px solid ${islandTheme.color.dangerAccent}`, color: islandTheme.color.dangerAccent, padding: "3px 8px", borderRadius: 4, fontSize: 10, letterSpacing: "0.06em", textTransform: "uppercase", cursor: "pointer", font: "inherit" }}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </IslandCard>
+  );
+}
+
+

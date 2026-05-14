@@ -908,9 +908,61 @@ export function App() {
     }
   }
 
+  async function triggerGeneralNewsEmbedBackfill(limit = 200) {
+    try {
+      const response = await apiFetch("/news/general/embed-backfill", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ limit })
+      });
+      const data = (await response.json().catch(() => null)) as {
+        ok: boolean; embedded?: number; remaining?: number; error?: string;
+      } | null;
+      return data ?? { ok: false, error: "No response" };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
   async function triggerGeneralNewsRecurate(
-    onProgress?: (snap: { state: "running" | "done" | "error"; reset: number; curated: number; total: number; error: string | null }) => void
+    onProgress?: (snap: {
+      state: "running" | "done" | "error";
+      reset: number;
+      curated: number;
+      processed: number;
+      merged: number;
+      duplicates: number;
+      failed: number;
+      costUsd: number;
+      total: number;
+      error: string | null;
+    }) => void
   ) {
+    type JobShape = {
+      state: "idle" | "running" | "done" | "error";
+      reset: number;
+      curated: number;
+      processed?: number;
+      merged?: number;
+      duplicates?: number;
+      failed?: number;
+      costUsd?: number;
+      total: number;
+      error: string | null;
+    };
+    const snap = (job: JobShape, state: "running" | "done" | "error") => ({
+      state,
+      reset: job.reset,
+      curated: job.curated,
+      processed: job.processed ?? 0,
+      merged: job.merged ?? 0,
+      duplicates: job.duplicates ?? 0,
+      failed: job.failed ?? 0,
+      costUsd: job.costUsd ?? 0,
+      total: job.total,
+      error: state === "error" ? job.error : null
+    });
     try {
       const kickResp = await apiFetch("/news/general/recurate", { method: "POST", credentials: "include" });
       // 202 = newly started, 409 = already running (we just attach to it). Anything else = error.
@@ -928,26 +980,39 @@ export function App() {
         if (!statusResp.ok) continue; // transient — retry on next tick
         const data = (await statusResp.json().catch(() => null)) as {
           ok?: boolean;
-          job?: { state: "idle" | "running" | "done" | "error"; reset: number; curated: number; total: number; error: string | null };
+          job?: JobShape;
         } | null;
         const job = data?.job;
         if (!job) continue;
 
         if (job.state === "running") {
-          onProgress?.({ state: "running", reset: job.reset, curated: job.curated, total: job.total, error: null });
+          onProgress?.(snap(job, "running"));
           continue;
         }
         if (job.state === "done") {
-          onProgress?.({ state: "done", reset: job.reset, curated: job.curated, total: job.total, error: null });
+          onProgress?.(snap(job, "done"));
           return { ok: true, reset: job.reset, curated: job.curated };
         }
         if (job.state === "error") {
-          onProgress?.({ state: "error", reset: job.reset, curated: job.curated, total: job.total, error: job.error });
+          onProgress?.(snap(job, "error"));
           return { ok: false, error: job.error ?? "Recurate failed" };
         }
         // state === "idle" before our kickoff registered — keep polling
       }
       return { ok: false, error: "Timed out waiting for job (still running on server — refresh to check)" };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
+  async function cancelGeneralNewsRecurate() {
+    try {
+      const response = await apiFetch("/news/general/recurate/cancel", {
+        method: "POST",
+        credentials: "include"
+      });
+      const data = (await response.json().catch(() => null)) as { ok: boolean; error?: string } | null;
+      return data ?? { ok: false, error: "No response" };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
     }
@@ -959,7 +1024,18 @@ export function App() {
       if (!resp.ok) return null;
       const data = (await resp.json().catch(() => null)) as {
         ok?: boolean;
-        job?: { state: "idle" | "running" | "done" | "error"; reset: number; curated: number; total: number; error: string | null };
+        job?: {
+          state: "idle" | "running" | "done" | "error";
+          reset: number;
+          curated: number;
+          processed?: number;
+          merged?: number;
+          duplicates?: number;
+          failed?: number;
+          costUsd?: number;
+          total: number;
+          error: string | null;
+        };
       } | null;
       return data?.job ?? null;
     } catch {
@@ -1541,6 +1617,8 @@ export function App() {
           onTriggerGeneralNewsIngest={triggerGeneralNewsIngest}
           onTriggerGeneralNewsCurate={triggerGeneralNewsCurate}
           onTriggerGeneralNewsRecurate={triggerGeneralNewsRecurate}
+          onCancelGeneralNewsRecurate={cancelGeneralNewsRecurate}
+          onTriggerGeneralNewsEmbedBackfill={triggerGeneralNewsEmbedBackfill}
           onFetchGeneralNewsRecurateStatus={fetchGeneralNewsRecurateStatus}
         />
       ) : null}

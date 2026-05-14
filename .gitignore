@@ -5,3 +5,6 @@ dist
 *.log
 .claude/
 .design-handoff/
+
+# Local source export snapshots
+*.zip

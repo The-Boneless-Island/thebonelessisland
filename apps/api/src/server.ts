@@ -13,15 +13,18 @@ import { internalRouter } from "./routes/internal.js";
 import { gameNightRouter } from "./routes/gameNights.js";
 import { membersRouter } from "./routes/members.js";
 import { newsCardsRouter } from "./routes/newsCards.js";
+import { newsSourcesRouter } from "./routes/newsSources.js";
 import { nuggiesRouter } from "./routes/nuggies.js";
 import { nuggiesGamesRouter } from "./routes/nuggiesGames.js";
 import { registerAllGames } from "./lib/games/index.js";
+import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
 import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
 import { forumsRouter } from "./routes/forums.js";
 import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
 import { settingsRouter } from "./routes/settings.js";
+import { seedCuratedSources } from "./lib/news/curatedSources.js";
 import { loadSettings } from "./lib/serverSettings.js";
 import { isTaglineStale, refreshTaglines } from "./lib/taglineGenerator.js";
 import { runMigrations } from "./db/runMigrations.js";
@@ -58,6 +61,7 @@ app.use("/recommendations", recommendationRouter);
 app.use("/game-nights", gameNightRouter);
 app.use("/games", gameNewsRouter);
 app.use("/game-news-sources", gameNewsSourcesRouter);
+app.use("/news-sources", newsSourcesRouter);
 app.use("/news", generalNewsRouter);
 app.use("/activity", activityRouter);
 app.use("/news-cards", newsCardsRouter);
@@ -91,6 +95,12 @@ async function bootstrap() {
     await loadSettings();
   } catch (err) {
     console.error("[boot] settings load failed — starting anyway:", err);
+  }
+
+  try {
+    await seedCuratedSources();
+  } catch (err) {
+    console.error("[boot] news source seed failed — starting anyway:", err);
   }
 
   // Refresh taglines on startup if stale (> 7 days), then check daily
@@ -131,6 +141,17 @@ async function bootstrap() {
       console.error("[nuggies-loans] sweep failed:", err);
     });
   }, 5 * 60 * 1000);
+
+  // Background news refresh — guarantees fresh stories every 4 hours even
+  // when no members visit the gaming-news page. Page-load triggers still run
+  // as before; the 1-hour ingest cooldown inside ingestAndCurateGeneralNews
+  // prevents duplicate work when both fire close together. Force=false so
+  // the cooldown is respected.
+  setInterval(() => {
+    ingestAndCurateGeneralNews().catch((err) => {
+      console.error("[generalNews] scheduled background ingest failed:", err);
+    });
+  }, 4 * 60 * 60 * 1000);
 
   app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);

@@ -1,5 +1,16 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { AICompleteOpts, AIMessage, AIProvider, AIResult } from "../provider.js";
+import { recordAiCost } from "../usageTally.js";
+
+// Prompt caching is a prefix match — any byte change anywhere in the cached
+// prefix invalidates everything after it. The minimum cacheable prefix is
+// model-dependent and silently no-ops when below the threshold:
+//   Opus 4.7 / 4.6 / 4.5, Haiku 4.5 → 4096 tokens
+//   Sonnet 4.6                       → 2048 tokens
+//   Sonnet 4.5 / 4.1 / 4 / 3.7       → 1024 tokens
+// We place two breakpoints at most: one on the system block (caches tools +
+// system together) and one on the trailing assistant message of any prior
+// conversation history (caches the conversation prefix for multi-turn).
 
 export class AnthropicProvider implements AIProvider {
   readonly name = "anthropic";
@@ -15,9 +26,6 @@ export class AnthropicProvider implements AIProvider {
     const systemMessage = messages.find((m) => m.role === "system");
     const chatMessages = messages.filter((m) => m.role !== "system");
 
-    // Mark the system prompt for prompt caching.
-    // Anthropic caches blocks >= 1024 tokens (Sonnet/Opus) or >= 2048 tokens (Haiku).
-    // Below the threshold it's a no-op — no error, no extra cost.
     const systemBlock: Anthropic.TextBlockParam | undefined = systemMessage
       ? {
           type: "text",
@@ -26,15 +34,34 @@ export class AnthropicProvider implements AIProvider {
         }
       : undefined;
 
+    // Multi-turn cache breakpoint: when the trailing user turn is preceded by
+    // an assistant turn (i.e. we have a prior exchange), put cache_control on
+    // that assistant message. Each subsequent turn re-uses the conversation
+    // prefix up to and including that block. One-shot calls fall through —
+    // only the system block carries cache_control.
+    const lastIsUser =
+      chatMessages.length > 0 && chatMessages[chatMessages.length - 1].role === "user";
+    const priorAssistantIdx = lastIsUser ? findLastAssistantIndex(chatMessages, chatMessages.length - 2) : -1;
+
+    const mappedMessages: Anthropic.MessageParam[] = chatMessages.map((m, idx) => {
+      if (idx === priorAssistantIdx) {
+        return {
+          role: "assistant",
+          content: [{ type: "text", text: m.content, cache_control: { type: "ephemeral" } }]
+        };
+      }
+      return {
+        role: m.role as "user" | "assistant",
+        content: m.content
+      };
+    });
+
     const response = await this.client.messages.create({
       model: this.model,
       max_tokens: opts?.maxTokens ?? 1024,
       ...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {}),
       ...(systemBlock ? { system: [systemBlock] } : {}),
-      messages: chatMessages.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content
-      }))
+      messages: mappedMessages
     });
 
     const block = response.content[0];
@@ -62,14 +89,48 @@ export class AnthropicProvider implements AIProvider {
   }
 }
 
+function findLastAssistantIndex(messages: AIMessage[], maxIdx: number): number {
+  for (let i = maxIdx; i >= 0; i--) {
+    if (messages[i].role === "assistant") return i;
+  }
+  return -1;
+}
+
+// Published per-million-token prices ($USD). Cache-read is 10% of base input;
+// cache-write is 1.25× base input. Output is base output. Numbers may drift —
+// treat this as a cost-estimate signal, not a ground-truth invoice.
+const ANTHROPIC_PRICING: Record<string, { in: number; out: number }> = {
+  "claude-haiku-4-5":  { in: 1.0,  out: 5.0 },
+  "claude-sonnet-4-6": { in: 3.0,  out: 15.0 },
+  "claude-opus-4-7":   { in: 15.0, out: 75.0 },
+  "claude-opus-4-6":   { in: 15.0, out: 75.0 }
+};
+
+function estimateAnthropicCostUsd(
+  model: string,
+  usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
+): number {
+  const price = ANTHROPIC_PRICING[model];
+  if (!price) return 0;
+  // Anthropic's `input_tokens`, `cache_read_input_tokens`, and
+  // `cache_creation_input_tokens` are mutually exclusive counters — do NOT
+  // subtract cache_read from input. Earlier version did, which underreported
+  // cost by ~15%.
+  const inputDollars = (usage.input * price.in) / 1_000_000;
+  const cacheReadDollars = (usage.cacheRead * price.in * 0.1) / 1_000_000;
+  const cacheWriteDollars = (usage.cacheWrite * price.in * 1.25) / 1_000_000;
+  const outputDollars = (usage.output * price.out) / 1_000_000;
+  return inputDollars + cacheReadDollars + cacheWriteDollars + outputDollars;
+}
+
 function logUsage(
   provider: string,
   model: string,
   usage: { input: number; output: number; cacheRead: number; cacheWrite: number }
 ) {
-  const saved = usage.cacheRead > 0 ? ` cache_hit=${usage.cacheRead}tok` : "";
-  const written = usage.cacheWrite > 0 ? ` cache_write=${usage.cacheWrite}tok` : "";
+  const cost = estimateAnthropicCostUsd(model, usage);
+  recordAiCost(provider, model, cost);
   console.log(
-    `[ai:usage] ${provider}/${model} in=${usage.input}tok out=${usage.output}tok${saved}${written}`
+    `[ai:usage] ${provider}/${model} in=${usage.input}tok out=${usage.output}tok cache_hit=${usage.cacheRead}tok cache_write=${usage.cacheWrite}tok est=$${cost.toFixed(4)}`
   );
 }

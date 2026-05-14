@@ -1,5 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { env } from "../config.js";
+import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index.js";
 import { db } from "../db/client.js";
 import { loadSettings } from "./serverSettings.js";
 
@@ -27,18 +26,18 @@ Return ONLY a valid JSON array of exactly 50 strings. No explanation, no markdow
 Example: ["Tagline one.", "Tagline two.", ...]`;
 
 export async function generateTaglines(): Promise<string[]> {
-  if (!env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY not set — cannot generate taglines");
-  }
+  const ai = getAIProvider();
+  const result = await ai.complete(
+    [{ role: "user", content: GENERATION_PROMPT }],
+    { maxTokens: 2048, temperature: 0.9 }
+  );
 
-  const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
-  const message = await client.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 2048,
-    messages: [{ role: "user", content: GENERATION_PROMPT }]
-  });
+  // Strip optional markdown fence the model may emit.
+  const raw = result.text.trim();
+  const text = raw.startsWith("```")
+    ? raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim()
+    : raw;
 
-  const text = message.content.find((b) => b.type === "text")?.text?.trim() ?? "";
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -54,7 +53,16 @@ export async function generateTaglines(): Promise<string[]> {
 }
 
 export async function refreshTaglines(): Promise<void> {
-  const taglines = await generateTaglines();
+  let taglines: string[];
+  try {
+    taglines = await generateTaglines();
+  } catch (err) {
+    if (err instanceof AIDisabledError || err instanceof AINotConfiguredError) {
+      console.log(`[taglines] skipped: ${err.message}`);
+      return;
+    }
+    throw err;
+  }
   await db.query(
     `UPDATE server_settings SET value = $1, updated_at = NOW() WHERE key = 'splash_taglines'`,
     [JSON.stringify(taglines)]

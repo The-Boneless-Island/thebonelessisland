@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
+import { getAiCostTotalUsd } from "../lib/ai/usageTally.js";
+import { backfillEmbeddings, isEmbeddingColumnAvailable } from "../lib/news/embeddings.js";
 import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration } from "../lib/generalNewsIngestion.js";
 
 export const generalNewsRouter = Router();
@@ -38,41 +40,98 @@ type GeneralNewsRow = {
  */
 generalNewsRouter.get("/general", async (_req, res) => {
   try {
+    // Display-time fingerprint collapse — defensive layer beneath curation-time
+    // merge. Collapses cards into a single primary along TWO axes:
+    //  1. Exact-fingerprint match (within any date).
+    //  2. Same fingerprint ENTITY (left of the ":") within the same calendar
+    //     week. Handles the common failure mode where AI emits drifting
+    //     event-topic handles for the same news cycle ("cadence-shift" vs
+    //     "update-cadence" vs "six-month-cadence" — all entity=arc-raiders).
+    // Rows without a fingerprint partition by their unique external_id so
+    // they never accidentally merge with anything.
+    //
+    // Cluster_key construction:
+    //   if fp present: lower(entity) || '::' || week_bucket  →  group by entity/week
+    //   else:          external_id                            →  always rk=1
     const result = await db.query<GeneralNewsRow>(
       `
+        WITH ranked AS (
+          SELECT
+            gn.*,
+            CASE
+              WHEN gn.ai_story_fingerprint IS NOT NULL
+                AND gn.ai_story_fingerprint <> ''
+                AND POSITION(':' IN gn.ai_story_fingerprint) > 1
+                THEN LOWER(split_part(gn.ai_story_fingerprint, ':', 1))
+                  || '::'
+                  || to_char(DATE_TRUNC('week', gn.published_at), 'YYYY-MM-DD')
+              ELSE gn.external_id
+            END AS cluster_key,
+            ROW_NUMBER() OVER (
+              PARTITION BY
+                CASE
+                  WHEN gn.ai_story_fingerprint IS NOT NULL AND gn.ai_story_fingerprint <> ''
+                    THEN LOWER(split_part(gn.ai_story_fingerprint, ':', 1))
+                      || '::'
+                      || to_char(DATE_TRUNC('week', gn.published_at), 'YYYY-MM-DD')
+                  ELSE gn.external_id
+                END
+              ORDER BY gn.ai_relevance_score DESC NULLS LAST, gn.published_at DESC
+            ) AS rk
+          FROM general_news gn
+          WHERE COALESCE(gn.ai_relevance_score, 1) > 0
+            AND gn.ai_validation_failed = FALSE
+        ),
+        cluster_urls AS (
+          SELECT
+            cluster_key,
+            array_agg(DISTINCT url) AS sibling_urls
+          FROM ranked
+          WHERE ai_story_fingerprint IS NOT NULL AND ai_story_fingerprint <> ''
+          GROUP BY cluster_key
+          HAVING COUNT(*) > 1
+        )
         SELECT
-          gn.id,
-          gn.source_type,
-          gn.source_name,
-          gn.external_id,
-          gn.title,
-          gn.url,
-          gn.contents,
-          gn.author,
-          gn.image_url,
-          gn.published_at,
-          gn.matched_tags,
-          gn.ai_relevance_score,
-          gn.ai_summary,
-          gn.ai_subtitle,
-          gn.ai_tags,
-          gn.ai_why_recommended,
-          gn.ai_label,
-          gn.ai_spoiler_warning,
-          gn.ai_game_title,
-          gn.ai_title,
-          gn.ai_sources
-        FROM general_news gn
+          r.id,
+          r.source_type,
+          r.source_name,
+          r.external_id,
+          r.title,
+          r.url,
+          r.contents,
+          r.author,
+          r.image_url,
+          r.published_at,
+          r.matched_tags,
+          r.ai_relevance_score,
+          r.ai_summary,
+          r.ai_subtitle,
+          r.ai_tags,
+          r.ai_why_recommended,
+          r.ai_label,
+          r.ai_spoiler_warning,
+          r.ai_game_title,
+          r.ai_title,
+          CASE
+            WHEN cu.sibling_urls IS NOT NULL THEN (
+              SELECT array_agg(DISTINCT u)
+              FROM unnest(COALESCE(r.ai_sources, '{}'::text[]) || cu.sibling_urls) AS u
+            )
+            ELSE r.ai_sources
+          END AS ai_sources,
+          fb.upvotes,
+          fb.downvotes
+        FROM ranked r
+        LEFT JOIN cluster_urls cu ON cu.cluster_key = r.cluster_key
         LEFT JOIN LATERAL (
           SELECT
             COUNT(*) FILTER (WHERE rating = 1)::int  AS upvotes,
             COUNT(*) FILTER (WHERE rating = -1)::int AS downvotes
           FROM general_news_feedback
-          WHERE news_id = gn.id
+          WHERE news_id = r.id
         ) fb ON true
-        WHERE COALESCE(gn.ai_relevance_score, 1) > 0
-          AND gn.ai_validation_failed = FALSE
-        ORDER BY (COALESCE(gn.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes * 0.5) * 0.08) DESC, gn.published_at DESC
+        WHERE r.rk = 1
+        ORDER BY (COALESCE(r.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes * 0.5) * 0.08) DESC, r.published_at DESC
         LIMIT 50
       `
     );
@@ -144,6 +203,34 @@ generalNewsRouter.post("/general/curate", async (_req, res) => {
 });
 
 /**
+ * POST /news/general/embed-backfill
+ * Admin endpoint — populate embeddings for rows missing them. Processes up to
+ * `limit` rows (default 200) per call so the request stays bounded; the admin
+ * UI can poll repeatedly until count returns 0.
+ */
+generalNewsRouter.post("/general/embed-backfill", async (req, res) => {
+  try {
+    if (!(await isEmbeddingColumnAvailable())) {
+      res.status(400).json({
+        ok: false,
+        error: "pgvector / embedding column not available. Install pgvector and re-run migration 040."
+      });
+      return;
+    }
+    const limit = Math.min(500, Math.max(1, parseInt(String((req.body as { limit?: number } | undefined)?.limit ?? 200), 10)));
+    const embedded = await backfillEmbeddings(limit);
+    const remainingResult = await db.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM general_news WHERE embedding IS NULL`
+    );
+    const remaining = parseInt(remainingResult.rows[0]?.c ?? "0", 10);
+    res.json({ ok: true, embedded, remaining });
+  } catch (err) {
+    console.error("[generalNews] embed-backfill error:", err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
+  }
+});
+
+/**
  * GET /news/general/debug-tags
  * Temp debug endpoint — returns raw AI output for one article to diagnose tag issues.
  */
@@ -165,54 +252,132 @@ type RecurateJob = {
   state: RecurateJobState;
   startedAt: number | null;
   finishedAt: number | null;
-  reset: number;     // rows reset (also = total to curate)
-  curated: number;   // rows curated so far
-  total: number;     // = reset, snapshot for display
+  reset: number;       // rows reset (also = total to curate)
+  curated: number;     // primary cards emitted (no dupes / merges)
+  processed: number;   // every row touched: primary + merged + duplicate + failed
+  merged: number;      // rows absorbed into an existing primary
+  duplicates: number;  // rows the AI flagged as in-batch duplicates of another article
+  failed: number;      // rows where validation never reached threshold (stored anyway)
+  total: number;       // = reset, snapshot for display
+  costUsd: number;     // estimated USD spent on AI calls during this run
   error: string | null;
 };
 
-let recurateJob: RecurateJob = {
+const FRESH_JOB: RecurateJob = {
   state: "idle",
   startedAt: null,
   finishedAt: null,
   reset: 0,
   curated: 0,
+  processed: 0,
+  merged: 0,
+  duplicates: 0,
+  failed: 0,
   total: 0,
+  costUsd: 0,
   error: null
 };
+
+let recurateJob: RecurateJob = { ...FRESH_JOB };
 
 const RECURATE_MAX_PASSES = 50; // hard safety: 50 × 25 = 1250 articles cap
 const RECURATE_BATCH_PAUSE_MS = 250;
 
+// Cooperative cancel flag. Recurate loop checks between passes and exits early.
+let recurateCancelRequested = false;
+
+async function countUncurated(): Promise<number> {
+  const r = await db.query<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
+  );
+  return parseInt(r.rows[0]?.c ?? "0", 10);
+}
+
+async function snapshotBreakdown(): Promise<{
+  curated: number;
+  merged: number;
+  duplicates: number;
+  failed: number;
+}> {
+  // Primary cards: curated, non-failed, score > 0.
+  // Merged/duplicate absorbed: curated, score = 0, summary NULL (merge child) OR
+  //   score = 0 with non-null summary (regular dup).
+  // Failed: ai_validation_failed = TRUE.
+  const r = await db.query<{
+    curated: string;
+    score_zero_no_summary: string;
+    score_zero_with_summary: string;
+    failed: string;
+  }>(
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE ai_curated_at IS NOT NULL AND ai_relevance_score > 0 AND ai_validation_failed = FALSE)::text AS curated,
+        COUNT(*) FILTER (WHERE ai_curated_at IS NOT NULL AND ai_relevance_score = 0 AND ai_summary IS NULL)::text AS score_zero_no_summary,
+        COUNT(*) FILTER (WHERE ai_curated_at IS NOT NULL AND ai_relevance_score = 0 AND ai_summary IS NOT NULL)::text AS score_zero_with_summary,
+        COUNT(*) FILTER (WHERE ai_validation_failed = TRUE)::text AS failed
+      FROM general_news
+    `
+  );
+  const row = r.rows[0];
+  return {
+    curated: parseInt(row?.curated ?? "0", 10),
+    merged: parseInt(row?.score_zero_no_summary ?? "0", 10),
+    duplicates: parseInt(row?.score_zero_with_summary ?? "0", 10),
+    failed: parseInt(row?.failed ?? "0", 10)
+  };
+}
+
 async function runRecurateJob(): Promise<void> {
+  const costAtStart = getAiCostTotalUsd();
+  recurateCancelRequested = false;
   recurateJob = {
+    ...FRESH_JOB,
     state: "running",
-    startedAt: Date.now(),
-    finishedAt: null,
-    reset: 0,
-    curated: 0,
-    total: 0,
-    error: null
+    startedAt: Date.now()
   };
   try {
     const reset = await resetAllCuration();
     recurateJob.reset = reset;
     recurateJob.total = reset;
 
+    let remainingBefore = await countUncurated();
     for (let pass = 0; pass < RECURATE_MAX_PASSES; pass++) {
-      const curated = await curateUncuratedGeneralNews();
-      recurateJob.curated += curated;
-      const { rows } = await db.query(
-        `SELECT 1 FROM general_news WHERE ai_curated_at IS NULL LIMIT 1`
-      );
-      if (rows.length === 0) break;
-      // Tiny breather so a stuck/empty batch can't tight-loop the AI provider
-      if (curated === 0) break;
+      if (recurateCancelRequested) {
+        console.warn(`[generalNews] recurate cancelled by admin at pass ${pass}`);
+        break;
+      }
+      await curateUncuratedGeneralNews();
+
+      const remainingAfter = await countUncurated();
+      const breakdown = await snapshotBreakdown();
+      recurateJob.processed = recurateJob.total - remainingAfter;
+      recurateJob.curated = breakdown.curated;
+      recurateJob.merged = breakdown.merged;
+      recurateJob.duplicates = breakdown.duplicates;
+      recurateJob.failed = breakdown.failed;
+      recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
+
+      if (recurateCancelRequested) {
+        console.warn(`[generalNews] recurate cancelled by admin after pass ${pass}`);
+        break;
+      }
+      if (remainingAfter === 0) break;
+      // No-progress guard: if a pass didn't advance the uncurated count at all,
+      // we're stuck (AI errors, empty batch, etc.) — bail rather than tight-loop.
+      if (remainingAfter >= remainingBefore) {
+        console.warn(
+          `[generalNews] recurate stalled at pass ${pass}: ${remainingAfter} rows still uncurated (no progress)`
+        );
+        break;
+      }
+      remainingBefore = remainingAfter;
       await new Promise((resolve) => setTimeout(resolve, RECURATE_BATCH_PAUSE_MS));
     }
+    recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
     recurateJob.state = "done";
     recurateJob.finishedAt = Date.now();
   } catch (err) {
+    recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
     recurateJob.state = "error";
     recurateJob.finishedAt = Date.now();
     recurateJob.error = err instanceof Error ? err.message : String(err);
@@ -235,6 +400,21 @@ generalNewsRouter.post("/general/recurate", (_req, res) => {
     console.error("[generalNews] runRecurateJob unhandled:", err);
   });
   res.status(202).json({ ok: true, job: recurateJob });
+});
+
+/**
+ * POST /news/general/recurate/cancel
+ * Sets the cooperative cancel flag. Loop will exit at its next breakpoint
+ * (after the in-flight curate pass completes, so we don't waste a paid AI
+ * call mid-flight).
+ */
+generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParentRole, (_req, res) => {
+  if (recurateJob.state !== "running") {
+    res.status(409).json({ ok: false, error: "No recurate job running" });
+    return;
+  }
+  recurateCancelRequested = true;
+  res.json({ ok: true, message: "Cancel requested — job will stop after the current pass completes" });
 });
 
 /**

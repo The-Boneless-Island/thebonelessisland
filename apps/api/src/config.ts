@@ -27,7 +27,8 @@ const Env = z.object({
   IGDB_CLIENT_ID: z.string().default(""),
   IGDB_CLIENT_SECRET: z.string().default(""),
   ANTHROPIC_API_KEY: z.string().default(""),
-  OPENAI_API_KEY: z.string().default("")
+  OPENAI_API_KEY: z.string().default(""),
+  GEMINI_API_KEY: z.string().default("")
 });
 
 export const env = Env.parse(process.env);

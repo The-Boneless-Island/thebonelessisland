@@ -1,8 +1,9 @@
 import express from "express";
 import { z } from "zod";
 import { requireParentRole, requireSession } from "../lib/auth.js";
-import { ensureSettingsLoaded, getPublicSettings, upsertSetting } from "../lib/serverSettings.js";
+import { ensureSettingsLoaded, getAISetting, getPublicSettings, upsertSetting } from "../lib/serverSettings.js";
 import { AIDisabledError, AINotConfiguredError, getAIProvider } from "../lib/ai/index.js";
+import { getTodayCostUsd } from "../lib/ai/usageTally.js";
 
 export const settingsRouter = express.Router();
 
@@ -28,6 +29,24 @@ const aiTestSchema = z.object({
   provider: z.string().min(1),
   model: z.string().optional(),
   apiKey: z.string().optional()
+});
+
+/**
+ * GET /settings/ai-cost-today
+ * Returns today's persisted AI spend + call count and the configured warn
+ * threshold. UI uses this for a small chip + (when over) a banner.
+ */
+settingsRouter.get("/ai-cost-today", requireSession, requireParentRole, async (_req, res) => {
+  const today = await getTodayCostUsd();
+  const rawThreshold = getAISetting("ai_daily_cost_warn_usd") ?? "5";
+  const threshold = parseFloat(rawThreshold);
+  const safeThreshold = Number.isFinite(threshold) && threshold >= 0 ? threshold : 5;
+  res.json({
+    today: today.usd,
+    calls: today.calls,
+    threshold: safeThreshold,
+    overThreshold: safeThreshold > 0 && today.usd >= safeThreshold
+  });
 });
 
 settingsRouter.post("/ai/test", requireSession, requireParentRole, async (req, res) => {

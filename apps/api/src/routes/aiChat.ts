@@ -139,8 +139,11 @@ aiChatRouter.post("/chat", async (req, res) => {
     console.error("[aiChat] buildCrewContext failed:", err);
   }
 
-  // System prompt is intentionally compact — prompt caching kicks in when it
-  // exceeds the provider threshold (1024 tok Sonnet, 2048 tok Haiku).
+  // System prompt is intentionally compact. Prompt caching kicks in once the
+  // cached prefix exceeds the provider threshold (1024 tok Sonnet 4.5/3.7,
+  // 2048 tok Sonnet 4.6, 4096 tok Opus 4.x and Haiku 4.5). For multi-turn
+  // chat, the provider also caches the prior conversation so long sessions
+  // benefit even when the system block alone is small.
   const systemPrompt = [
     "You are the Island AI — sharp assistant for The Boneless Island, a Discord gaming community of adult gamers in their 30s.",
     "Help the crew decide what to play, give game recs, answer gaming questions.",

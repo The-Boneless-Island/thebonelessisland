@@ -59,14 +59,18 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }
           display: "flex",
           alignItems: "center",
           gap: 16,
-          flexWrap: "wrap"
+          // Hard no-wrap. The topbar height is locked at 62px via the
+          // bi-topbar-spacer var; any wrap would hide page content beneath
+          // the fixed header and make the top nav unreachable on scroll.
+          flexWrap: "nowrap",
+          minWidth: 0
         }}
       >
         <Brand onNavigate={onNavigate} tagline={tagline} />
         <MegaMenu page={page} onNavigate={onNavigate} isAdmin={isAdmin} />
         <div style={{ flex: 1, minWidth: 12 }} />
         <SearchInput value={search} onChange={setSearch} />
-        <div style={{ position: "relative", display: "flex" }}>
+        <div style={{ position: "relative", display: "flex", flexShrink: 0 }}>
           <UserTrigger
             buttonRef={triggerRef}
             profile={profile}
@@ -105,7 +109,10 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
         borderRadius: 10,
         cursor: "pointer",
         font: "inherit",
-        textAlign: "left"
+        textAlign: "left",
+        flexShrink: 0,
+        minWidth: 0,
+        maxWidth: 320
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = islandTheme.color.secondary;
@@ -125,11 +132,32 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
           flexShrink: 0
         }}
       />
-      <div>
-        <div className="island-display" style={{ fontWeight: 800, fontSize: 17, letterSpacing: "-0.01em", color: islandTheme.color.textPrimary }}>
+      <div style={{ minWidth: 0, overflow: "hidden" }}>
+        <div
+          className="island-display"
+          style={{
+            fontWeight: 800,
+            fontSize: 17,
+            letterSpacing: "-0.01em",
+            color: islandTheme.color.textPrimary,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis"
+          }}
+        >
           The Boneless Island
         </div>
-        <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: -2 }}>
+        <div
+          className="island-mono"
+          style={{
+            fontSize: 11,
+            color: islandTheme.color.textMuted,
+            marginTop: -2,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis"
+          }}
+        >
           {tagline || "crew at the shoreline"}
         </div>
       </div>
@@ -157,7 +185,12 @@ function SearchInput({ value, onChange }: SearchInputProps) {
         padding: "8px 12px 8px 34px",
         borderRadius: 999,
         fontSize: 13,
-        width: 220,
+        // Was a hard 220px — at narrow widths that pushed the user trigger
+        // off the row. Now it shrinks down to 96px before yielding to other
+        // chrome and never wraps.
+        flex: "0 1 220px",
+        minWidth: 96,
+        width: "100%",
         backgroundImage: `url("${searchIcon}")`,
         backgroundRepeat: "no-repeat",
         backgroundPosition: "11px center",

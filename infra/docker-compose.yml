@@ -1,6 +1,10 @@
 services:
   postgres:
-    image: postgres:16
+    # pgvector/pgvector:pg16 is the official Postgres 16 image with the
+    # pgvector extension pre-installed. Same upstream PG, just adds the
+    # CREATE EXTENSION vector path. Existing volume + data carries over
+    # cleanly when swapping from postgres:16 → pgvector/pgvector:pg16.
+    image: pgvector/pgvector:pg16
     container_name: boneless-postgres
     restart: unless-stopped
     environment:

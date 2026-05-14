@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
+    "@google/genai": "^2.0.1",
     "@island/shared": "0.1.0",
     "cookie-session": "^2.1.1",
     "cors": "^2.8.5",

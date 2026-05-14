@@ -50,7 +50,14 @@ export async function runMigrations(): Promise<{ applied: number; skipped: numbe
     }
     const sql = await readFile(resolve(migrationDir, file), "utf8");
     await db.query(sql);
-    await db.query("INSERT INTO schema_migrations (filename) VALUES ($1)", [file]);
+    // Idempotent: under tsx-watch a stale `appliedSet` snapshot taken before a
+    // concurrent restart applied a row can race with this insert. Don't crash
+    // the whole boot for a duplicate tracker entry — the SQL above is also
+    // expected to be safe to re-run (CREATE … IF NOT EXISTS / DO $$ guards).
+    await db.query(
+      "INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING",
+      [file]
+    );
     console.log(`[migrations] apply ${file}`);
     count++;
   }

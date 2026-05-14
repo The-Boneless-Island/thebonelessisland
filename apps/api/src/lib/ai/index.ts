@@ -2,20 +2,24 @@ import { env } from "../../config.js";
 import { getAISetting } from "../serverSettings.js";
 import { AIDisabledError, AINotConfiguredError, AIProvider } from "./provider.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
+import { GeminiProvider } from "./providers/gemini.js";
 import { OpenAIProvider } from "./providers/openai.js";
 
 // Re-export for consumers that only need the interface/errors
 export type { AIMessage, AIProvider, AIResult } from "./provider.js";
 export { AIDisabledError, AINotConfiguredError } from "./provider.js";
 
-type SupportedProvider = "anthropic" | "openai";
+type SupportedProvider = "anthropic" | "openai" | "gemini";
 
 export const PROVIDER_DEFAULTS: Record<SupportedProvider, string> = {
   anthropic: "claude-haiku-4-5",
-  openai: "gpt-4o-mini"
+  openai: "gpt-4o-mini",
+  // Flash Lite is ~30× cheaper than Sonnet and sufficient for structured JSON
+  // curation work — set as the default for fresh installs that pick Gemini.
+  gemini: "gemini-2.5-flash-lite"
 };
 
-export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai"];
+export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai", "gemini"];
 
 /**
  * Returns a ready-to-use AIProvider based on the current server_settings.
@@ -61,9 +65,25 @@ export function getAIProvider(overrides?: {
     PROVIDER_DEFAULTS[providerName] ??
     "";
 
-  const dbKey = getAISetting("ai_api_key") ?? "";
-  const envFallback = providerName === "anthropic" ? env.ANTHROPIC_API_KEY : env.OPENAI_API_KEY;
-  const apiKey = overrides?.apiKey ?? (dbKey || envFallback);
+  // Resolution order: explicit override → per-provider DB key → legacy
+  // shared ai_api_key → env var. Lets the admin keep separate keys per
+  // provider but stays backwards-compatible with the old single-key install.
+  const perProviderKey =
+    providerName === "anthropic"
+      ? getAISetting("anthropic_api_key") ?? ""
+      : providerName === "openai"
+        ? getAISetting("openai_api_key") ?? ""
+        : providerName === "gemini"
+          ? getAISetting("gemini_api_key") ?? ""
+          : "";
+  const legacyKey = getAISetting("ai_api_key") ?? "";
+  const envFallback =
+    providerName === "anthropic"
+      ? env.ANTHROPIC_API_KEY
+      : providerName === "gemini"
+        ? env.GEMINI_API_KEY
+        : env.OPENAI_API_KEY;
+  const apiKey = overrides?.apiKey ?? (perProviderKey || legacyKey || envFallback);
 
   if (!apiKey) {
     throw new AINotConfiguredError(`no API key set for provider "${providerName}"`);
@@ -74,6 +94,8 @@ export function getAIProvider(overrides?: {
       return new AnthropicProvider(apiKey, model || PROVIDER_DEFAULTS.anthropic);
     case "openai":
       return new OpenAIProvider(apiKey, model || PROVIDER_DEFAULTS.openai);
+    case "gemini":
+      return new GeminiProvider(apiKey, model || PROVIDER_DEFAULTS.gemini);
     default:
       throw new AINotConfiguredError(`unknown provider "${providerName}"`);
   }
