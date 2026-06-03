@@ -6,5 +6,8 @@ dist
 .claude/
 .design-handoff/
 
+# TLS material — Cloudflare Origin CA cert/key live on the box, never in git
+infra/certs/
+
 # Local source export snapshots
 *.zip

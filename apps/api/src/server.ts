@@ -40,6 +40,15 @@ import { authLimiter, aiLimiter, steamLimiter, defaultLimiter } from "./middlewa
 
 const app = express();
 
+// Behind Caddy + Cloudflare in production. Trust one proxy hop (Caddy) so
+// req.ip — used by the IP-based rate limiters — and req.secure reflect the
+// real client forwarded via X-Forwarded-For instead of the proxy's address.
+// Caddy is configured (trusted_proxies + Cf-Connecting-IP, see infra/Caddyfile)
+// to write a clean X-Forwarded-For from Cloudflare's real-visitor header, so
+// the value Express reads here is trustworthy. Without this, every request
+// would share the proxy's IP and collapse the rate-limit buckets.
+app.set("trust proxy", 1);
+
 app.use(
   cors({
     origin: env.WEB_ORIGIN,
