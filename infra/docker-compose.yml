@@ -1,3 +1,25 @@
+# Postgres for local dev AND the full single-box production stack.
+#
+# DEV (just the database, app runs on the host via `npm run dev`):
+#   docker compose -f infra/docker-compose.yml up -d            # postgres only
+#   — or the shortcut —  npm run db:up
+#
+# PROD (edge + api + bot + postgres, all on one EC2 box):
+#   docker compose -f infra/docker-compose.yml --profile prod up -d --build
+#
+# The api/bot/web services are gated behind the `prod` profile so the dev
+# `db:up` shortcut keeps starting only Postgres.
+#
+# Env (prod): every app service reads ../.env. Two supported shapes
+# (see .env.example):
+#   • env-file mode — .env holds all secrets, SECRETS_SOURCE unset.
+#   • SSM mode      — .env holds only NODE_ENV=production, SECRETS_SOURCE=ssm,
+#                     AWS_REGION, POSTGRES_PASSWORD; api/bot pull the rest from
+#                     /boneless/prod/* via the EC2 instance role at startup.
+#
+# In prod, DATABASE_URL must use the compose service name as host:
+#   postgresql://postgres:<pw>@postgres:5432/boneless
+
 services:
   postgres:
     # pgvector/pgvector:pg16 is the official Postgres 16 image with the
@@ -16,9 +38,69 @@ services:
       # .env, `docker compose up -d`, re-run migrations.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     ports:
-      - "5432:5432"
+      # Bind to loopback only. Dev (host app) reaches it at localhost:5432.
+      # In prod the app containers use the internal network, not this mapping,
+      # so nothing on the box's public interface ever exposes Postgres.
+      - "127.0.0.1:5432:5432"
     volumes:
       - boneless_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d boneless"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    profiles: ["prod"]
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    container_name: boneless-api
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No published ports — Caddy (web service) reaches it as http://api:3000 on
+    # the internal network. Migrations run automatically on boot (server.ts).
+    expose:
+      - "3000"
+
+  bot:
+    profiles: ["prod"]
+    build:
+      context: ..
+      dockerfile: apps/bot/Dockerfile
+    container_name: boneless-bot
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    depends_on:
+      - api
+    # Outbound only (Discord gateway). No ports.
+
+  web:
+    profiles: ["prod"]
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Baked into the SPA at build time. Must match the public API hostname.
+        VITE_API_BASE_URL: https://api.bonelessisland.com
+    container_name: boneless-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Cloudflare Origin CA cert + key (see DEPLOY.md). Read-only.
+      - ./certs:/certs:ro
+      # Persist Caddy's state dir.
+      - boneless_caddy_data:/data
 
 volumes:
   boneless_pg_data:
+  boneless_caddy_data:

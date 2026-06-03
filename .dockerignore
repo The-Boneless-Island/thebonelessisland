@@ -27,9 +27,11 @@ Thumbs.db
 README*
 .design-handoff
 
-# Web app — not deployed via the API/bot Dockerfiles
+# Web app build artifact — re-created in the web image's builder stage.
+# (apps/web/public IS needed: Vite copies it into dist, so keep it in context.)
 apps/web/dist
-apps/web/public
 
-# Infra files (compose, terraform, etc. — used externally)
+# Infra files (compose, terraform, etc.) aren't needed by the api/bot images,
+# but the web image bakes in the Caddy config — re-include just that file.
 infra
+!infra/Caddyfile
