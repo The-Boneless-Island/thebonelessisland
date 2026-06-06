@@ -27,7 +27,11 @@ permissions:
 
 jobs:
   build-push-deploy:
-    runs-on: ubuntu-latest
+    # ARM runner: the prod box is arm64 (EC2 t4g/Graviton), so images must be
+    # built arm64-native. GitHub's arm64 hosted runners are free for public
+    # repos. (Default x86 runners produce amd64 images the box can't run:
+    # "no matching manifest for linux/arm64/v8".)
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
