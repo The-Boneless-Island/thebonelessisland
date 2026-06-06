@@ -25,9 +25,23 @@
 	}
 }
 
+# Shared security response headers, imported by each site block below.
+# HSTS is set at Cloudflare's edge, so it's intentionally NOT duplicated here.
+# A Content-Security-Policy is deferred until it can be tuned against the SPA.
+(security_headers) {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		-Server
+	}
+}
+
 # ── Apex: static SPA ────────────────────────────────────────────────────────
 bonelessisland.com {
 	tls /certs/origin-cert.pem /certs/origin-key.pem
+	import security_headers
 
 	root * /srv
 	encode zstd gzip
@@ -55,5 +69,18 @@ www.bonelessisland.com {
 # ── API ─────────────────────────────────────────────────────────────────────
 api.bonelessisland.com {
 	tls /certs/origin-cert.pem /certs/origin-key.pem
-	reverse_proxy api:3000
+	import security_headers
+
+	# /internal/* serves the bot only, over the private docker network
+	# (API_BASE_URL=http://api:3000). It never needs public reachability —
+	# block it at the edge as defense in depth (it's also shared-secret gated).
+	# `handle` blocks are mutually exclusive + evaluated in order, so this is
+	# guaranteed to short-circuit before the proxy regardless of directive order.
+	handle /internal* {
+		respond 403
+	}
+
+	handle {
+		reverse_proxy api:3000
+	}
 }

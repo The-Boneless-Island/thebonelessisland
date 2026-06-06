@@ -20,6 +20,14 @@
 # In prod, DATABASE_URL must use the compose service name as host:
 #   postgresql://postgres:<pw>@postgres:5432/boneless
 
+# Cap container log files so they can't fill the box's disk (10MB × 3 files
+# per service). Each service references this via `logging: *default-logging`.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     # pgvector/pgvector:pg16 is the official Postgres 16 image with the
@@ -29,6 +37,7 @@ services:
     image: pgvector/pgvector:pg16
     container_name: boneless-postgres
     restart: unless-stopped
+    logging: *default-logging
     # POSTGRES_PASSWORD comes from the same .env as the app services. The path
     # is relative to THIS compose file (→ repo root), so it resolves no matter
     # which directory `docker compose` is invoked from. Using env_file instead
@@ -63,6 +72,7 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: boneless-api
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ../.env
     depends_on:
@@ -80,6 +90,7 @@ services:
       dockerfile: apps/bot/Dockerfile
     container_name: boneless-bot
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - ../.env
     depends_on:
@@ -96,6 +107,7 @@ services:
         VITE_API_BASE_URL: https://api.bonelessisland.com
     container_name: boneless-web
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - api
     ports:
