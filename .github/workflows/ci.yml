@@ -1,0 +1,63 @@
+name: CI
+
+# Pull-request gate: typecheck, build all three images, and scan them for
+# known CVEs. Nothing is pushed or deployed here — this just has to pass
+# before a PR can merge to main (enforce via branch protection).
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-build-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (lint)
+        run: npm run lint
+
+      - name: Build images
+        run: |
+          docker build -f apps/api/Dockerfile -t boneless-api:ci .
+          docker build -f apps/bot/Dockerfile -t boneless-bot:ci .
+          docker build -f apps/web/Dockerfile \
+            --build-arg VITE_API_BASE_URL=https://api.bonelessisland.com \
+            -t boneless-web:ci .
+
+      # Report HIGH/CRITICAL CVEs but don't fail the build yet (exit-code 0).
+      # Flip exit-code to "1" later to make vulnerabilities block merges.
+      - name: Trivy scan — api
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: boneless-api:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Trivy scan — bot
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: boneless-bot:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
+
+      - name: Trivy scan — web
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: boneless-web:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"

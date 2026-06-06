@@ -67,6 +67,11 @@ services:
 
   api:
     profiles: ["prod"]
+    # Prod pulls a prebuilt image from GHCR (CI builds + pushes it). IMAGE_TAG
+    # is set inline by the deploy command (the commit SHA); falls back to
+    # `latest` for manual runs. `build:` is kept for local/CI image builds —
+    # `docker compose build` tags the result with this same image name.
+    image: ghcr.io/d0nm3ga/boneless-api:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
@@ -85,6 +90,7 @@ services:
 
   bot:
     profiles: ["prod"]
+    image: ghcr.io/d0nm3ga/boneless-bot:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: apps/bot/Dockerfile
@@ -99,6 +105,7 @@ services:
 
   web:
     profiles: ["prod"]
+    image: ghcr.io/d0nm3ga/boneless-web:${IMAGE_TAG:-latest}
     build:
       context: ..
       dockerfile: apps/web/Dockerfile
