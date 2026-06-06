@@ -85,7 +85,7 @@ jobs:
             --instance-ids "${{ vars.INSTANCE_ID }}" \
             --document-name AWS-RunShellScript \
             --comment "deploy ${GITHUB_SHA::7}" \
-            --parameters commands='["set -e","cd /home/ssm-user/thebonelessisland","git config --global --add safe.directory /home/ssm-user/thebonelessisland","git fetch origin main","git reset --hard origin/main","export IMAGE_TAG=${{ github.sha }}","docker compose -f infra/docker-compose.yml --profile prod pull","docker compose -f infra/docker-compose.yml --profile prod up -d","docker image prune -f"]' \
+            --parameters commands='["set -e","export HOME=/root","cd /home/ssm-user/thebonelessisland","git config --global --add safe.directory /home/ssm-user/thebonelessisland","git fetch origin main","git reset --hard origin/main","export IMAGE_TAG=${{ github.sha }}","docker compose -f infra/docker-compose.yml --profile prod pull","docker compose -f infra/docker-compose.yml --profile prod up -d","docker image prune -f"]' \
             --query "Command.CommandId" --output text)
           echo "SSM command id: $CMD_ID"
           aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${{ vars.INSTANCE_ID }}" || true
