@@ -6,7 +6,7 @@ import { IslandCard, IslandEmptyState, IslandTag, islandInputStyle } from "../is
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { islandTheme } from "../theme.js";
-import { GameCover } from "../steamArt.js";
+import { GameCover, steamArt } from "../steamArt.js";
 import { useRefetchActivity } from "../system/activityContext.js";
 import type {
   ActivityCategory,
@@ -56,6 +56,7 @@ function HomePageInner({
   }, []);
 
   const featuredArticle = generalNews[0] ?? null;
+  const trending = useCrewTrending();
 
   return (
     <div>
@@ -73,7 +74,13 @@ function HomePageInner({
           }}
         >
           <div style={{ overflow: "hidden", minHeight: 0 }}>
-            <Hero profile={profile} onlineCount={activeMembers.length} tagline={tagline} onNavigate={onNavigate} />
+            <Hero
+              profile={profile}
+              onlineCount={activeMembers.length}
+              tagline={tagline}
+              collageGames={trending.games ?? []}
+              onNavigate={onNavigate}
+            />
           </div>
         </div>
       )}
@@ -88,7 +95,7 @@ function HomePageInner({
           />
         </section>
         {featuredArticle && <FeaturedNewsCard item={featuredArticle} onNavigate={onNavigate} />}
-        <CrewTrending onNavigate={onNavigate} />
+        <CrewTrending onNavigate={onNavigate} games={trending.games} loading={trending.loading} />
         <ActivityFeed events={activityEvents} onNavigate={onNavigate} />
         <DriftLog cards={newsCards} onNavigate={onNavigate} />
         <BotAndRitualRow guildId={profile?.guildId ?? null} onNavigate={onNavigate} />
@@ -103,11 +110,13 @@ function Hero({
   profile,
   onlineCount,
   tagline,
+  collageGames,
   onNavigate
 }: {
   profile: MeProfile | null;
   onlineCount: number;
   tagline?: string;
+  collageGames: TrendingGame[];
   onNavigate: (page: PageId) => void;
 }) {
   const name = profile?.displayName ?? "friend";
@@ -126,6 +135,7 @@ function Hero({
     <section
       style={{
         position: "relative",
+        isolation: "isolate",
         padding: "48px clamp(16px, 3vw, 32px) 56px",
         textAlign: "center",
         minHeight: "55vh",
@@ -136,6 +146,7 @@ function Hero({
         gap: 20
       }}
     >
+      <HeroCollage games={collageGames} />
       <IslandTag tone="success" style={{ gap: 6 }}>
         <span
           style={{
@@ -201,6 +212,63 @@ function Hero({
   );
 }
 
+
+// Ambient backdrop for the hero, collaged from what the crew actually played
+// this fortnight. Header art (the most reliably-present Steam asset) blurred
+// into a wash — it sets mood, it isn't a showcase. Static first frame under
+// prefers-reduced-motion.
+function HeroCollage({ games }: { games: TrendingGame[] }) {
+  const top = games.slice(0, 3).map((g) => g.appId);
+  if (top.length === 0) return null;
+  // Pad to 3 slots so the fixed keyframe windows always cross-fade cleanly.
+  while (top.length < 3) top.push(top[top.length % games.length] ?? top[0]);
+  const allSame = top.every((id) => id === top[0]);
+
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: -1, overflow: "hidden", borderRadius: 24 }}>
+      {top.map((appId, i) => {
+        if (allSame && i > 0) return null;
+        const layer: CSSProperties = {
+          position: "absolute",
+          inset: -24,
+          background: `center / cover no-repeat url(${JSON.stringify(steamArt.header(appId))})`,
+          filter: "blur(10px) saturate(118%)"
+        };
+        if (allSame) {
+          layer.opacity = 0.3;
+        } else {
+          layer.opacity = 0;
+          layer.animation = "biHeroCollage 24s linear infinite";
+          layer.animationDelay = `${i * 8}s`;
+        }
+        return <div key={`${appId}-${i}`} style={layer} />;
+      })}
+      {/* Scrim: readable text in the middle, dissolve into the scene at the edges. */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(ellipse at center, rgba(2,6,23,0.42) 0%, rgba(2,6,23,0.18) 55%, rgba(2,6,23,0) 100%)"
+        }}
+      />
+      <style>{`
+        @keyframes biHeroCollage {
+          0%   { opacity: 0; }
+          6%   { opacity: 0.3; }
+          33%  { opacity: 0.3; }
+          41%  { opacity: 0; }
+          100% { opacity: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          @keyframes biHeroCollage {
+            0%, 100% { opacity: 0.18; }
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
 
 type HeroButtonProps = {
   variant: "primary" | "ghost";
@@ -341,7 +409,8 @@ type TrendingGame = {
   topPlayer: { displayName: string; minutes: number } | null;
 };
 
-function CrewTrending({ onNavigate }: { onNavigate: (page: PageId) => void }) {
+// Fetched once at page level — the hero collage and the trending list share it.
+function useCrewTrending(): { games: TrendingGame[] | null; loading: boolean } {
   const [games, setGames] = useState<TrendingGame[] | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -358,6 +427,18 @@ function CrewTrending({ onNavigate }: { onNavigate: (page: PageId) => void }) {
     return () => { cancelled = true; };
   }, []);
 
+  return { games, loading };
+}
+
+function CrewTrending({
+  onNavigate,
+  games,
+  loading
+}: {
+  onNavigate: (page: PageId) => void;
+  games: TrendingGame[] | null;
+  loading: boolean;
+}) {
   // Hide entirely on a quiet week (no trending data) so the home page stays tidy.
   if (!loading && (!games || games.length === 0)) return null;
 
