@@ -2,6 +2,15 @@
 
 _Last updated: 2026-06-11. Based on a full code audit of `apps/web/src` (admin panel, all user-facing pages, theme system, scene shell)._
 
+> **Status: implemented 2026-06-11** (branch `claude/hungry-johnson-b396d2`, one commit per phase).
+> Deliberate deviations from the plan as written:
+> - The topbar had no search input at all (the audit overstated this), so Phase 3 added a new Ctrl/Cmd+K quick switcher rather than fixing a dead one.
+> - "Coming soon" pages were already real (Leaderboard, History); cleanup was limited to deleting the unused `ComingSoonPage` component.
+> - LoginScreen keeps its own palm art: it's a standalone splash with a deliberate exit animation, not token debt.
+> - The hardcoded Dota/CS:GO tile art and game-night banner rotation were dead code with no consumers — deleted instead of replaced.
+> - Mascot art shipped as placeholder SVGs in `apps/web/public/mascot/`; commissioned art can drop in on the same filenames.
+> - Recommender weight sliders remain read-only displays of the server formula (in-app tuning still unbuilt); they gained per-weight explanations.
+
 This document is the implementation plan for the next round of UX work. It is organized as six phases, each independently shippable. Phase 1 (admin reorganization) is the priority and is specified in the most detail.
 
 ---
