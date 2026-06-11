@@ -444,7 +444,7 @@ export function App() {
       page === "games-news"
         ? "rgba(34, 211, 238, 0.06)"
         : page === "nuggies-casino"
-          ? "rgba(244, 162, 97, 0.09)"
+          ? "rgba(20, 83, 45, 0.16)" // casino felt green
           : page === "nuggies" || page === "nuggies-milestones" || page === "nuggies-history"
             ? "rgba(251, 191, 119, 0.05)"
             : "transparent";

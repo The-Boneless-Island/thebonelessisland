@@ -1461,6 +1461,26 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
     return filtered.map(({ e }) => e);
   }, [indexed, tab, search, sortBy, dateRange]);
 
+  // Coalesce consecutive runs of the same actor + event type (+ same game) into
+  // one row with a ×N chip — five casino wins in a row read as one line, not a wall.
+  const grouped = useMemo(() => {
+    const items: Array<{ event: ActivityEvent; repeat: number }> = [];
+    for (const e of visible) {
+      const last = items[items.length - 1];
+      if (
+        last &&
+        last.event.eventType === e.eventType &&
+        (last.event.actor?.discordUserId ?? null) === (e.actor?.discordUserId ?? null) &&
+        (last.event.game?.name ?? null) === (e.game?.name ?? null)
+      ) {
+        last.repeat++;
+        continue;
+      }
+      items.push({ event: e, repeat: 1 });
+    }
+    return items;
+  }, [visible]);
+
   const filtersActive =
     tab !== "all" || dateRange !== "all" || search.trim().length > 0 || sortBy !== "newest";
 
@@ -1627,7 +1647,9 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
                   : "Nothing in this category right now."}
             </div>
           ) : (
-            visible.map((event, i) => <ActivityRow key={event.id} event={event} firstRow={i === 0} />)
+            grouped.map((item, i) => (
+              <ActivityRow key={item.event.id} event={item.event} repeat={item.repeat} firstRow={i === 0} />
+            ))
           )}
 
           <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />
@@ -1724,7 +1746,18 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
   );
 }
 
-function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: boolean }) {
+// Tiny glyph keyed off the event type family — scannable feed without reading.
+function activityIcon(eventType: string): string {
+  if (eventType.startsWith("forum")) return "💬";
+  if (eventType.includes("nuggie") || eventType.includes("daily") || eventType.includes("casino")) return "🍗";
+  if (eventType.includes("game_night") || eventType.includes("rsvp")) return "🎮";
+  if (eventType.includes("achievement") || eventType.includes("milestone") || eventType.includes("rank")) return "🏆";
+  if (eventType.includes("steam") || eventType.includes("library") || eventType.includes("sync")) return "🔄";
+  if (eventType.includes("patch") || eventType.includes("news")) return "📰";
+  return "🌊";
+}
+
+function ActivityRow({ event, repeat = 1, firstRow }: { event: ActivityEvent; repeat?: number; firstRow: boolean }) {
   const rendered = describeEvent(event);
   if (!rendered) return null;
   const actorAvatar = event.actor?.avatarUrl ?? null;
@@ -1739,27 +1772,61 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
         alignItems: "start"
       }}
     >
-      <div
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 999,
-          background: actorAvatar
-            ? `center / cover no-repeat url(${JSON.stringify(actorAvatar)})`
-            : colorForActor(event.actor?.discordUserId ?? null),
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 14,
-          fontWeight: 800,
-          color: "#0f172a"
-        }}
-      >
-        {actorAvatar ? null : initialsFor(event.actor?.displayName ?? null)}
+      <div style={{ position: "relative", width: 40, height: 40 }}>
+        <div
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: 999,
+            background: actorAvatar
+              ? `center / cover no-repeat url(${JSON.stringify(actorAvatar)})`
+              : colorForActor(event.actor?.discordUserId ?? null),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 14,
+            fontWeight: 800,
+            color: islandTheme.color.textDark
+          }}
+        >
+          {actorAvatar ? null : initialsFor(event.actor?.displayName ?? null)}
+        </div>
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            right: -4,
+            bottom: -4,
+            fontSize: 13,
+            lineHeight: 1,
+            filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.5))"
+          }}
+        >
+          {activityIcon(event.eventType)}
+        </span>
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 14, lineHeight: 1.45, color: islandTheme.color.textSubtle }}>
           {rendered.body}
+          {repeat > 1 ? (
+            <span
+              className="island-mono"
+              title={`${repeat} similar events in a row`}
+              style={{
+                marginLeft: 8,
+                fontSize: 12,
+                fontWeight: 800,
+                padding: "1px 8px",
+                borderRadius: 999,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                color: islandTheme.color.textMuted,
+                whiteSpace: "nowrap"
+              }}
+            >
+              ×{repeat}
+            </span>
+          ) : null}
         </div>
         {event.game?.headerImageUrl ? (
           <div

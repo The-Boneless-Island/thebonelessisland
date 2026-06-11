@@ -43,11 +43,58 @@ function SceneBackdrop() {
       <Celestial mode={mode} />
       <OceanBand mode={mode} />
       <CelestialReflection mode={mode} />
+      <GoldenHourWash />
       <BeachBand mode={mode} />
       <BeachProps mode={mode} />
       <Fireflies active={mode === "night"} />
       <SceneVignette mode={mode} />
     </div>
+  );
+}
+
+// ── Golden hour ──────────────────────────────────────────────────────────────
+// Dawn (6–8) and sunset (17–19) wash the scene in the tropical sunset palette.
+// Deliberately NOT a third theme mode: text/contrast vars stay binary
+// day/night; this is pure scene ambience, so evenings — when the crew actually
+// plays — get the prettiest sky without a contrast audit.
+
+type GoldenPhase = "dawn" | "sunset" | null;
+
+function goldenPhaseForHour(hour: number): GoldenPhase {
+  if (hour >= 6 && hour < 8) return "dawn";
+  if (hour >= 17 && hour < 19) return "sunset";
+  return null;
+}
+
+function useGoldenPhase(): GoldenPhase {
+  const [phase, setPhase] = useState<GoldenPhase>(() => goldenPhaseForHour(new Date().getHours()));
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setPhase(goldenPhaseForHour(new Date().getHours()));
+    }, 5 * 60 * 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return phase;
+}
+
+function GoldenHourWash() {
+  const phase = useGoldenPhase();
+  const sunset = islandTheme.palette;
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        opacity: phase ? 1 : 0,
+        transition: "opacity 2400ms ease",
+        background:
+          phase === "dawn"
+            ? `linear-gradient(180deg, transparent 0%, ${sunset.dawn}26 34%, ${sunset.coral}1f 52%, ${sunset.dawn}14 66%, transparent 84%)`
+            : `linear-gradient(180deg, transparent 0%, ${sunset.sunset}2e 32%, ${sunset.coral}29 50%, ${sunset.sunsetDeep}1f 64%, transparent 84%)`
+      }}
+    />
   );
 }
 

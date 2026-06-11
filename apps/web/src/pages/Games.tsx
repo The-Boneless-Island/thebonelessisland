@@ -1099,6 +1099,9 @@ function NightCard({
       onClick={onSelect}
       style={{
         textAlign: "left",
+        position: "relative",
+        isolation: "isolate",
+        overflow: "hidden",
         background: islandTheme.color.panelBg,
         backdropFilter: islandTheme.glass.blur,
         WebkitBackdropFilter: islandTheme.glass.blur,
@@ -1113,6 +1116,21 @@ function NightCard({
         boxShadow: isSelected ? "0 0 0 1px rgba(96,165,250,0.5), 0 6px 20px rgba(0,0,0,0.3)" : "none"
       }}
     >
+      {night.selectedAppId ? (
+        // A night for Lethal Company should look like Lethal Company: the
+        // game's own art washes the whole card under a scrim.
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            inset: -12,
+            zIndex: -1,
+            background: `linear-gradient(180deg, rgba(2,6,23,0.25), rgba(2,6,23,0.78)), center / cover no-repeat url(${JSON.stringify(coverUrl(night.selectedAppId, night.selectedGameImage) ?? "")})`,
+            filter: "blur(7px) saturate(115%)",
+            opacity: 0.5
+          }}
+        />
+      ) : null}
       {night.selectedAppId ? (
         <GameCover
           appId={night.selectedAppId}

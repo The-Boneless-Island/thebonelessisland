@@ -313,7 +313,9 @@ function GameTile({ card, onClick, disabled }: { card: typeof GAME_CARDS[number]
         padding: 16,
         borderRadius: 14,
         border: `1px solid ${islandTheme.color.cardBorder}`,
-        background: `linear-gradient(135deg, ${card.accent}22 0%, ${islandTheme.color.panelBg} 80%)`,
+        // Felt-table base under each game's accent — reads "casino", not
+        // another glass panel. Pairs with the felt-green scene tint.
+        background: `radial-gradient(ellipse at 30% 20%, ${card.accent}26 0%, transparent 55%), linear-gradient(150deg, rgba(20,83,45,0.34) 0%, rgba(13,53,30,0.22) 55%, ${islandTheme.color.panelBg} 100%)`,
         color: islandTheme.color.textPrimary,
         cursor: disabled ? "not-allowed" : "pointer",
         font: "inherit",
