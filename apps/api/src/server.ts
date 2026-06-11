@@ -42,7 +42,7 @@ import { loadSettings } from "./lib/serverSettings.js";
 import { isTaglineStale, refreshTaglines } from "./lib/taglineGenerator.js";
 import { runMigrations } from "./db/runMigrations.js";
 import { recommendationRouter } from "./routes/recommendations.js";
-import { steamRouter } from "./routes/steam.js";
+import { steamRouter, syncAllOwnedGames } from "./routes/steam.js";
 import { authLimiter, aiLimiter, steamLimiter, defaultLimiter } from "./middleware/rateLimit.js";
 
 const app = express();
@@ -258,6 +258,29 @@ async function bootstrap() {
       console.error("[priceSync] scheduled wishlist price sync failed:", err);
     });
   }, 24 * 60 * 60 * 1000);
+
+  // Steam owned-games auto-sync: keeps each linked member's library fresh
+  // without requiring a manual click. Each user is internally gated by a
+  // per-user cooldown inside syncAllOwnedGames, so a frequent sweep is safe
+  // and cheap. Runs shortly after boot, then every 30 minutes.
+  setTimeout(() => {
+    syncAllOwnedGames()
+      .then(({ usersSynced }) => {
+        console.log(`[steam] auto owned-games sync: ${usersSynced} user(s)`);
+      })
+      .catch((err) => {
+        console.error("[steam] initial owned-games sync failed:", err);
+      });
+  }, 20_000);
+  setInterval(() => {
+    syncAllOwnedGames()
+      .then(({ usersSynced }) => {
+        console.log(`[steam] auto owned-games sync: ${usersSynced} user(s)`);
+      })
+      .catch((err) => {
+        console.error("[steam] scheduled owned-games sync failed:", err);
+      });
+  }, 30 * 60 * 1000);
 
   // Weekly Tide digest: rebuilds the crew recap, then announces it once per
   // week via the bot outbox. buildAndStoreWeeklyDigest UPSERTs by week_start,

@@ -723,6 +723,7 @@ export function App() {
       const data = (await response.json().catch(() => null)) as
         | {
             syncedGames?: number;
+            privateLibrary?: boolean;
             error?: string;
             wishlist?: { ok?: boolean; syncedItems?: number; reason?: string };
           }
@@ -739,14 +740,20 @@ export function App() {
         loadActivity(true),
       ]);
       if (!silent) {
-        const wishlistInfo = data?.wishlist;
-        const wishlistDetails =
-          wishlistInfo?.ok === false
-            ? ` Wishlist sync skipped: ${wishlistInfo.reason ?? "unavailable"}.`
-            : wishlistInfo?.ok
-              ? ` Wishlist: ${wishlistInfo.syncedItems ?? 0}.`
-              : "";
-        setStatus(`Steam sync complete (${data?.syncedGames ?? 0} game(s)).${wishlistDetails}`);
+        if ((data?.syncedGames ?? 0) === 0 && data?.privateLibrary) {
+          setStatus(
+            "Your Steam library is private. In Steam: Profile -> Edit Profile -> Privacy -> set Game details to Public, then sync again."
+          );
+        } else {
+          const wishlistInfo = data?.wishlist;
+          const wishlistDetails =
+            wishlistInfo?.ok === false
+              ? ` Wishlist sync skipped: ${wishlistInfo.reason ?? "unavailable"}.`
+              : wishlistInfo?.ok
+                ? ` Wishlist: ${wishlistInfo.syncedItems ?? 0}.`
+                : "";
+          setStatus(`Steam sync complete (${data?.syncedGames ?? 0} game(s)).${wishlistDetails}`);
+        }
       }
     } catch (error) {
       if (!silent) {

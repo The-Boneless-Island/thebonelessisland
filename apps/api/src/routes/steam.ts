@@ -599,6 +599,153 @@ steamRouter.post("/sync-profile-context", async (_req, res) => {
 });
 
 
+type SyncOwnedGamesResult =
+  | { ok: true; syncedGames: number; privateLibrary: boolean; wishlist?: SyncWishlistResult }
+  | { ok: false; rateLimited?: boolean; retryAfterSeconds?: number; reason: string };
+
+/**
+ * Sync a single user's owned Steam games into games/user_games, refresh the
+ * steam_links.last_synced_at marker, and fan out the usual side effects (top-8
+ * news ingest, profile-context backfill, wishlist sync). Reusable from both the
+ * POST /sync-owned-games route and the syncAllOwnedGames cron pass.
+ *
+ * By default the wishlist sync is fire-and-forget; pass opts.awaitWishlist to
+ * await it and surface its result (the interactive route needs this so the web
+ * client can show wishlist status).
+ */
+export async function syncOwnedGamesForUser(
+  userIdInternal: string,
+  steamId64: string,
+  opts?: { awaitWishlist?: boolean }
+): Promise<SyncOwnedGamesResult> {
+  if (!env.STEAM_WEB_API_KEY) {
+    return { ok: false, reason: "Missing STEAM_WEB_API_KEY in environment" };
+  }
+
+  const apiUrl =
+    "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/" +
+    `?key=${env.STEAM_WEB_API_KEY}&steamid=${steamId64}&include_appinfo=1&include_played_free_games=1`;
+  const steamResponse = await fetch(apiUrl);
+
+  if (steamResponse.status === 429) {
+    const retryAfterSeconds = parseInt(steamResponse.headers.get("Retry-After") ?? "60", 10);
+    return { ok: false, rateLimited: true, retryAfterSeconds, reason: "Steam API rate limited" };
+  }
+
+  if (!steamResponse.ok) {
+    return { ok: false, reason: "Steam API request failed" };
+  }
+
+  const steamJson = (await steamResponse.json()) as {
+    response?: {
+      game_count?: number;
+      games?: Array<{ appid: number; name: string; playtime_forever?: number; playtime_2weeks?: number }>;
+    };
+  };
+
+  if (!steamJson.response) {
+    return { ok: false, reason: "Steam API response format was invalid" };
+  }
+
+  const games = steamJson.response.games ?? [];
+  // When "Game details" privacy is not Public, Steam omits game_count and games
+  // entirely (response is {}). Detect that so callers can explain the empty
+  // library instead of silently succeeding with 0 games.
+  const privateLibrary = steamJson.response.game_count === undefined && games.length === 0;
+
+  for (const game of games) {
+    await db.query(
+      `
+        INSERT INTO games (app_id, name)
+        VALUES ($1, $2)
+        ON CONFLICT (app_id) DO UPDATE SET name = EXCLUDED.name
+      `,
+      [game.appid, game.name]
+    );
+    await db.query(
+      `
+        INSERT INTO user_games (user_id, app_id, playtime_minutes, playtime_2weeks)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, app_id)
+        DO UPDATE SET
+          playtime_minutes = EXCLUDED.playtime_minutes,
+          playtime_2weeks  = EXCLUDED.playtime_2weeks,
+          last_played_at   = CASE WHEN EXCLUDED.playtime_2weeks > 0 THEN NOW() ELSE user_games.last_played_at END
+      `,
+      [userIdInternal, game.appid, game.playtime_forever ?? 0, game.playtime_2weeks ?? 0]
+    );
+  }
+
+  await db.query(`UPDATE steam_links SET last_synced_at = NOW() WHERE user_id = $1`, [userIdInternal]);
+
+  const topAppIds = games
+    .sort((a, b) => (b.playtime_forever ?? 0) - (a.playtime_forever ?? 0))
+    .slice(0, 8)
+    .map((g) => g.appid);
+  if (topAppIds.length > 0) {
+    void ingestNewsForApps(topAppIds, { maxApps: 8 }).catch(() => {});
+  }
+
+  // Fire-and-forget profile-context backfill (groups + achievements). Runs its
+  // own 24h cooldown internally, so safe to invoke on every owned-games sync.
+  void runProfileContextSync(userIdInternal, steamId64).catch((error: unknown) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("Profile-context sync threw during owned-games sync:", msg);
+  });
+
+  let wishlist: SyncWishlistResult | undefined;
+  if (opts?.awaitWishlist) {
+    wishlist = await syncWishlistForUser(userIdInternal, steamId64).catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Wishlist sync threw during owned-games sync:", msg, error);
+      return { ok: false, status: null, reason: msg } as SyncWishlistResult;
+    });
+  } else {
+    void syncWishlistForUser(userIdInternal, steamId64).catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Wishlist sync threw during owned-games sync:", msg, error);
+    });
+  }
+
+  return { ok: true, syncedGames: games.length, privateLibrary, wishlist };
+}
+
+/**
+ * Server-side automatic pass: sync owned games for every linked user whose
+ * library has never been synced or is past the cooldown window. Runs gently
+ * (~1s between users, per-user try/catch) so a single failure or rate-limit
+ * doesn't abort the batch. Wishlist sync is fire-and-forget here.
+ */
+export async function syncAllOwnedGames(): Promise<{ usersSynced: number }> {
+  const cooldownSeconds = Math.ceil(OWNED_GAMES_COOLDOWN_MS / 1000);
+  const due = await db.query<{ user_id: string; steam_id64: string }>(
+    `
+      SELECT user_id, steam_id64
+      FROM steam_links
+      WHERE last_synced_at IS NULL
+         OR last_synced_at < NOW() - ($1 || ' seconds')::interval
+    `,
+    [cooldownSeconds]
+  );
+
+  let usersSynced = 0;
+  for (const row of due.rows) {
+    try {
+      const result = await syncOwnedGamesForUser(row.user_id, row.steam_id64);
+      if (result.ok) {
+        usersSynced += 1;
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`Automatic owned-games sync failed for user ${row.user_id}:`, msg);
+    }
+    // Gentle pacing between users to stay under Steam's rate limits.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  return { usersSynced };
+}
+
 steamRouter.post("/sync-owned-games", async (_req, res) => {
   const discordUserId = String(res.locals.userId);
   const link = await db.query<{ user_id: string; steam_id64: string; last_synced_at: string | null }>(
@@ -630,87 +777,25 @@ steamRouter.post("/sync-owned-games", async (_req, res) => {
   }
 
   try {
-    const apiUrl =
-      "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/" +
-      `?key=${env.STEAM_WEB_API_KEY}&steamid=${link.rows[0].steam_id64}&include_appinfo=1`;
-    const steamResponse = await fetch(apiUrl);
+    const result = await syncOwnedGamesForUser(link.rows[0].user_id, link.rows[0].steam_id64, { awaitWishlist: true });
 
-    if (steamResponse.status === 429) {
-      const retryAfter = steamResponse.headers.get("Retry-After") ?? "60";
-      res.setHeader("Retry-After", retryAfter);
-      res.status(429).json({ error: "Steam API rate limited", retryAfterSeconds: parseInt(retryAfter, 10) });
+    if (!result.ok) {
+      if (result.rateLimited) {
+        const retryAfter = String(result.retryAfterSeconds ?? 60);
+        res.setHeader("Retry-After", retryAfter);
+        res.status(429).json({ error: "Steam API rate limited", retryAfterSeconds: parseInt(retryAfter, 10) });
+        return;
+      }
+      res.status(502).json({ error: result.reason });
       return;
     }
-
-    if (!steamResponse.ok) {
-      res.status(502).json({ error: "Steam API request failed" });
-      return;
-    }
-
-    const steamJson = (await steamResponse.json()) as {
-      response?: { games?: Array<{ appid: number; name: string; playtime_forever?: number; playtime_2weeks?: number }> };
-    };
-
-    if (!steamJson.response) {
-      res.status(502).json({ error: "Steam API response format was invalid" });
-      return;
-    }
-
-    const games = steamJson.response.games ?? [];
-    for (const game of games) {
-      await db.query(
-        `
-          INSERT INTO games (app_id, name)
-          VALUES ($1, $2)
-          ON CONFLICT (app_id) DO UPDATE SET name = EXCLUDED.name
-        `,
-        [game.appid, game.name]
-      );
-      await db.query(
-        `
-          INSERT INTO user_games (user_id, app_id, playtime_minutes, playtime_2weeks)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (user_id, app_id)
-          DO UPDATE SET
-            playtime_minutes = EXCLUDED.playtime_minutes,
-            playtime_2weeks  = EXCLUDED.playtime_2weeks,
-            last_played_at   = CASE WHEN EXCLUDED.playtime_2weeks > 0 THEN NOW() ELSE user_games.last_played_at END
-        `,
-        [link.rows[0].user_id, game.appid, game.playtime_forever ?? 0, game.playtime_2weeks ?? 0]
-      );
-    }
-
-    await db.query(`UPDATE steam_links SET last_synced_at = NOW() WHERE user_id = $1`, [link.rows[0].user_id]);
-
-    const topAppIds = games
-      .sort((a, b) => (b.playtime_forever ?? 0) - (a.playtime_forever ?? 0))
-      .slice(0, 8)
-      .map((g) => g.appid);
-    if (topAppIds.length > 0) {
-      void ingestNewsForApps(topAppIds, { maxApps: 8 }).catch(() => {});
-    }
-
-    const wishlistResult = await syncWishlistForUser(link.rows[0].user_id, link.rows[0].steam_id64).catch((error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("Wishlist sync threw during sync-owned-games:", msg, error);
-      return { ok: false, status: null, reason: msg } as SyncWishlistResult;
-    });
-
-    // Fire-and-forget profile-context backfill (groups + achievements). Runs
-    // own 24h cooldown internally, so safe to invoke on every owned-games sync.
-    void runProfileContextSync(link.rows[0].user_id, link.rows[0].steam_id64).catch((error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("Profile-context sync threw during sync-owned-games:", msg);
-    });
-
-    // Steam library sync runs automatically on a background interval — not
-    // a user action worth surfacing in the activity feed.
 
     res.json({
-      syncedGames: games.length,
-      wishlist: wishlistResult.ok
-        ? { ok: true, syncedItems: wishlistResult.syncedItems }
-        : { ok: false, status: wishlistResult.status, reason: wishlistResult.reason }
+      syncedGames: result.syncedGames,
+      privateLibrary: result.privateLibrary,
+      wishlist: result.wishlist?.ok
+        ? { ok: true, syncedItems: result.wishlist.syncedItems }
+        : { ok: false, status: result.wishlist?.status ?? null, reason: result.wishlist?.reason ?? "Wishlist sync failed" }
     });
   } catch (error) {
     console.error("Steam sync failed", error);
