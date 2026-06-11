@@ -343,13 +343,20 @@ membersRouter.get("/", requireSession, async (_req, res) => {
     activity_name: string | null;
     activity_type: number | null;
     presence_status: string | null;
+    banner_url: string | null;
+    accent_color: number | null;
   }>(
     `
-      SELECT discord_user_id, username, display_name, avatar_url, guild_avatar_url, role_names,
-             in_voice, voice_channel_id, rich_presence_text, activity_name, activity_type, presence_status
-      FROM guild_members
-      WHERE guild_id = $1 AND in_guild = TRUE
-      ORDER BY username ASC
+      SELECT gm.discord_user_id, gm.username, gm.display_name, gm.avatar_url, gm.guild_avatar_url,
+             gm.role_names, gm.in_voice, gm.voice_channel_id, gm.rich_presence_text,
+             gm.activity_name, gm.activity_type, gm.presence_status,
+             COALESCE(gm.banner_url, dp.banner_url) AS banner_url,
+             COALESCE(gm.accent_color, dp.accent_color) AS accent_color
+      FROM guild_members gm
+      LEFT JOIN users u ON u.discord_user_id = gm.discord_user_id
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE gm.guild_id = $1 AND gm.in_guild = TRUE
+      ORDER BY gm.username ASC
       LIMIT 2000
     `,
     [getGuildId()]
@@ -368,7 +375,9 @@ membersRouter.get("/", requireSession, async (_req, res) => {
       richPresenceText: activityText(row.activity_name, row.activity_type) ?? row.rich_presence_text,
       activityName: row.activity_name,
       activityType: row.activity_type,
-      presenceStatus: row.presence_status
+      presenceStatus: row.presence_status,
+      bannerUrl: row.banner_url,
+      accentColor: row.accent_color
     }))
   });
 });

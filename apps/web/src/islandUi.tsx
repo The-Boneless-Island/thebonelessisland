@@ -795,3 +795,9 @@ export function memberColor(seed: string): string {
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
   return palette[Math.abs(hash) % palette.length];
 }
+
+/** Discord accent_color int (0xRRGGBB) → CSS hex, null-safe. */
+export function accentHex(accentColor: number | null | undefined): string | null {
+  if (accentColor == null || !Number.isFinite(accentColor)) return null;
+  return `#${(accentColor & 0xffffff).toString(16).padStart(6, "0")}`;
+}

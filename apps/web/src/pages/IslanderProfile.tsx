@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandCard, IslandTag, memberColor } from "../islandUi.js";
+import { IslandCard, IslandTag, accentHex, memberColor } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { coverUrl } from "../steamArt.js";
 import type { PageId } from "../types.js";
@@ -98,11 +98,6 @@ function relTime(iso: string): string {
 
 function memberInitials(name: string): string {
   return (name || "??").trim().slice(0, 2).toUpperCase();
-}
-
-function accentHex(accentColor: number | null): string | null {
-  if (accentColor == null || !Number.isFinite(accentColor)) return null;
-  return `#${(accentColor & 0xffffff).toString(16).padStart(6, "0")}`;
 }
 
 function formatJoinDate(iso: string | null): string | null {

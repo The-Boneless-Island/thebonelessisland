@@ -75,6 +75,8 @@ export type GuildMember = {
   activityName?: string | null;
   activityType?: number | null;
   presenceStatus: PresenceStatus | null;
+  bannerUrl?: string | null;
+  accentColor?: number | null;
 };
 
 export type SteamSummary = {

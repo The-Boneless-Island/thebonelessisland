@@ -1,6 +1,6 @@
 import { useState, useEffect, memo } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandCard, IslandSkeletonRow, islandTagStyle } from "../islandUi.js";
+import { IslandCard, IslandSkeletonRow, accentHex, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
 import type { ActivityEvent, GameNight, GuildMember, NuggiesLeaderboardEntry, PageId } from "../types.js";
@@ -161,6 +161,14 @@ function CrewCard({
 }) {
   const status = memberStatus(member);
   const color = communityColorFor(member.discordUserId);
+  // Real Discord banner > accent-color gradient > hashed-color gradient. The
+  // banner makes member cards personal instead of eight identical tints.
+  const accent = accentHex(member.accentColor);
+  const bannerBackground = member.bannerUrl
+    ? `url("${member.bannerUrl}") center/cover`
+    : accent
+      ? `linear-gradient(135deg, ${accent}88, ${islandTheme.color.panelMutedBg})`
+      : `linear-gradient(135deg, ${color}55, ${islandTheme.color.panelMutedBg})`;
   return (
     <article
       style={{
@@ -175,7 +183,7 @@ function CrewCard({
         border: `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
-      <div style={{ height: 90, background: `linear-gradient(135deg, ${color}55, ${islandTheme.color.panelMutedBg})`, position: "relative" }}>
+      <div style={{ height: 90, background: bannerBackground, position: "relative" }}>
         <span
           className="island-mono"
           style={{
