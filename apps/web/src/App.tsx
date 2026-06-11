@@ -1650,6 +1650,9 @@ export function App() {
       >
 
       <Suspense fallback={<PageLoadingFallback />}>
+      {/* Keyed on page id: remounts per route so the enter animation replays —
+          a 150ms fade/rise instead of a hard cut between pages. */}
+      <div key={page} className="bi-page-enter">
 
       {page === "home" ? (
         <HomePage
@@ -1807,9 +1810,20 @@ export function App() {
         />
       ) : null}
 
+      </div>
       </Suspense>
 
       <style>{`
+        .bi-page-enter {
+          animation: biPageEnter 150ms ease-out;
+        }
+        @keyframes biPageEnter {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .bi-page-enter { animation: none; }
+        }
         @keyframes islandBladePulse {
           0% {
             transform: translateY(0) scale(1);
