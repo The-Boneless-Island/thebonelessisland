@@ -61,40 +61,147 @@ type ComposerPick = {
   maxPlayers: number | null;
 };
 
+// Two views: "tonight" is the focused default — pick people, pick a vibe,
+// lock a night. "everything" unfolds the full deck (patches, chat, wishlist,
+// library, streams) for browsing sessions. Choice sticks per browser.
+type GamesView = "tonight" | "everything";
+
 function GamesPageImpl(props: GamesPageProps) {
+  const [view, setViewState] = useState<GamesView>(() =>
+    localStorage.getItem("bi:games-view") === "everything" ? "everything" : "tonight"
+  );
+  const setView = (v: GamesView) => {
+    setViewState(v);
+    localStorage.setItem("bi:games-view", v);
+  };
+
   return (
     <div style={{ display: "grid", gap: 24, position: "relative" }}>
-      <GamesHero />
-      <SessionAndPatchesRow {...props} />
-      <CrewChat onSend={props.onSendChatMessage} />
-      <ScheduledNights {...props} />
-      <GroupWishlist crewWishlist={props.crewWishlist} />
-      <LibrarySnapshot onNavigate={props.onNavigate} />
-      <StreamDrawer members={props.filteredGuildMembers} />
+      <GamesHero view={view} onViewChange={setView} />
+      {view === "tonight" ? (
+        <>
+          <SessionComposer {...props} />
+          <ScheduledNights {...props} />
+          <EverythingTeaser onOpen={() => setView("everything")} />
+        </>
+      ) : (
+        <>
+          <SessionAndPatchesRow {...props} />
+          <CrewChat onSend={props.onSendChatMessage} />
+          <ScheduledNights {...props} />
+          <GroupWishlist crewWishlist={props.crewWishlist} />
+          <LibrarySnapshot onNavigate={props.onNavigate} />
+          <StreamDrawer members={props.filteredGuildMembers} />
+        </>
+      )}
     </div>
   );
 }
 
 export const GamesPage = React.memo(GamesPageImpl);
 
-function GamesHero() {
+function GamesHero({ view, onViewChange }: { view: GamesView; onViewChange: (v: GamesView) => void }) {
+  const tabs: Array<{ id: GamesView; label: string }> = [
+    { id: "tonight", label: "🌙 Tonight" },
+    { id: "everything", label: "🧰 Everything" }
+  ];
   return (
-    <header style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <span
-        className="island-mono"
+    <header style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <span
+          className="island-mono"
+          style={{
+            fontSize: 12,
+            textTransform: "uppercase",
+            letterSpacing: "0.1em",
+            color: islandTheme.color.textMuted
+          }}
+        >
+          Plan a session · pick a game · invite the crew
+        </span>
+        <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(28px, 4vw, 38px)", fontWeight: 800 }}>
+          Games
+        </h1>
+      </div>
+      <div
+        role="tablist"
+        aria-label="Games view"
         style={{
-          fontSize: 12,
-          textTransform: "uppercase",
-          letterSpacing: "0.1em",
-          color: islandTheme.color.textMuted
+          display: "flex",
+          gap: 4,
+          padding: 4,
+          borderRadius: 999,
+          background: islandTheme.color.panelMutedBg,
+          border: `1px solid ${islandTheme.color.cardBorder}`
         }}
       >
-        Plan a session · pick a game · invite the crew
-      </span>
-      <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(28px, 4vw, 38px)", fontWeight: 800 }}>
-        Games
-      </h1>
+        {tabs.map((t) => {
+          const active = view === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onViewChange(t.id)}
+              className="island-btn"
+              style={{
+                padding: "6px 14px",
+                borderRadius: 999,
+                border: "none",
+                background: active ? islandTheme.color.primary : "transparent",
+                color: active ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: "pointer",
+                font: "inherit"
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
     </header>
+  );
+}
+
+function EverythingTeaser({ onOpen }: { onOpen: () => void }) {
+  return (
+    <IslandCard
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        flexWrap: "wrap",
+        padding: 14,
+        background: `linear-gradient(135deg, rgba(56,189,248,0.08) 0%, ${islandTheme.color.panelBg} 70%)`
+      }}
+    >
+      <span style={{ fontSize: 13, color: islandTheme.color.textSubtle }}>
+        Patch notes, crew chat, group wishlist, library snapshot, live streams — all in the full deck.
+      </span>
+      <button
+        type="button"
+        className="island-btn"
+        onClick={onOpen}
+        style={{
+          background: "transparent",
+          border: `1px solid ${islandTheme.color.cardBorder}`,
+          color: islandTheme.color.primaryGlow,
+          padding: "6px 14px",
+          borderRadius: 999,
+          fontSize: 13,
+          fontWeight: 700,
+          cursor: "pointer",
+          font: "inherit",
+          flexShrink: 0
+        }}
+      >
+        🧰 Open everything →
+      </button>
+    </IslandCard>
   );
 }
 
