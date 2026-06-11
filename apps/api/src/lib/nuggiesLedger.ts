@@ -1,4 +1,5 @@
 import { db } from "../db/client.js";
+import { broadcast } from "./eventBus.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
 import {
   checkBankRun,
@@ -169,6 +170,11 @@ export async function applyTransaction(opts: {
     );
 
     await client.query("COMMIT");
+
+    // Nudge the affected member's open tabs to refetch their Nuggies balance
+    // immediately (admin grant, daily claim, trade, loan, etc.) instead of
+    // waiting for a manual refresh. Fire-and-forget over the SSE bus.
+    broadcast("nuggies-changed", { discordUserId: opts.discordUserId, newBalance });
 
     // Best-effort achievement + milestone checks after the transaction
     // commits. Run outside the tx so failures here can't roll back the

@@ -25,6 +25,7 @@ const TideCheckPage = lazy(() => import("./pages/TideCheck.js"));
 const IslanderProfilePage = lazy(() => import("./pages/IslanderProfile.js"));
 import { ToastHost, ToastQueueProvider, useToastQueue, useToastsFromStatus } from "./system/toast.js";
 import { ActivityRefetchProvider } from "./system/activityContext.js";
+import { NuggiesSignalProvider } from "./system/nuggiesSignal.js";
 import { AchievementCelebration, useCelebrationQueue } from "./system/celebration.js";
 import { islandCopy, islandTheme } from "./theme.js";
 import { Topbar } from "./components/Topbar.js";
@@ -125,6 +126,14 @@ export function App() {
   const toastQueue = useToastQueue();
   useToastsFromStatus(status, toastQueue.pushToast);
   const celebrationQueue = useCelebrationQueue();
+
+  // Bumped whenever the SSE bus reports this member's Nuggies balance changed,
+  // so the Balance/Milestones surfaces refetch immediately (see NuggiesSignal).
+  const [nuggiesSignal, setNuggiesSignal] = useState(0);
+  const myDiscordIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    myDiscordIdRef.current = profileData?.discordUserId ?? null;
+  }, [profileData?.discordUserId]);
 
   // ── Achievement / milestone unlock celebration ──────────────────────────────
   // Subscribes to the activity_events feed for the current user's
@@ -385,6 +394,18 @@ export function App() {
       // immediately (in step with the Discord announcement) instead of trailing
       // the slow poll.
       void loadActivity(true);
+    });
+    es.addEventListener("nuggies-changed", (ev) => {
+      // Only nudge a refetch when it's THIS member's balance that changed, so
+      // the Balance/Milestones pages update live after a grant/claim/etc.
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { discordUserId?: string };
+        if (data?.discordUserId && data.discordUserId === myDiscordIdRef.current) {
+          setNuggiesSignal((s) => s + 1);
+        }
+      } catch {
+        // Malformed frame — ignore.
+      }
     });
 
     return () => {
@@ -1539,6 +1560,7 @@ export function App() {
   };
 
   return (
+    <NuggiesSignalProvider signal={nuggiesSignal}>
     <ActivityRefetchProvider refetch={() => loadActivity(true)}>
     <ToastQueueProvider queue={toastQueue}>
       <Topbar
@@ -1771,5 +1793,6 @@ export function App() {
       <AchievementCelebration current={celebrationQueue.current} onDismiss={celebrationQueue.dismiss} remaining={celebrationQueue.remaining} />
     </ToastQueueProvider>
     </ActivityRefetchProvider>
+    </NuggiesSignalProvider>
   );
 }

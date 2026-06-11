@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "../api/client.js";
 import { useRefetchActivity } from "../system/activityContext.js";
+import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { usePushToast } from "../system/toast.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { IslandButton, IslandCard } from "../islandUi.js";
@@ -112,6 +113,13 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Live balance: refetch the instant the SSE bus reports this member's Nuggies
+  // changed (admin grant, daily claim, trade, loan…) — no manual refresh needed.
+  const nuggiesSignal = useNuggiesSignal();
+  useEffect(() => {
+    if (nuggiesSignal > 0) void load();
+  }, [nuggiesSignal, load]);
 
   async function claimDaily() {
     setClaiming(true);

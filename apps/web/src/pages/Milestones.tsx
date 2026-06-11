@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
+import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { IslandCard } from "../islandUi.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import {
@@ -71,6 +72,12 @@ export function MilestonesPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Live balance: refetch when the SSE bus reports this member's Nuggies changed.
+  const nuggiesSignal = useNuggiesSignal();
+  useEffect(() => {
+    if (nuggiesSignal > 0) void load();
+  }, [nuggiesSignal, load]);
 
   const handleEquipToggle = useCallback(async (itemId: number) => {
     setEquipPending(itemId);
