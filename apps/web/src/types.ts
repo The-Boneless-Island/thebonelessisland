@@ -72,6 +72,7 @@ export type MeProfile = {
   nuggieBalance: number;
   nuggiesOptedOut: boolean;
   equippedItems: EquippedItem[];
+  guildId: string | null;
 };
 
 export type OwnedGameLite = {

@@ -90,7 +90,7 @@ function HomePageInner({
         <CrewTrending onNavigate={onNavigate} />
         <ActivityFeed events={activityEvents} onNavigate={onNavigate} />
         <DriftLog cards={newsCards} onNavigate={onNavigate} />
-        <BotAndRitualRow onNavigate={onNavigate} />
+        <BotAndRitualRow guildId={profile?.guildId ?? null} onNavigate={onNavigate} />
       </div>
     </div>
   );
@@ -1149,6 +1149,20 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         )
       };
     }
+    case "achievement.steam_progress": {
+      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
+      const gameName = typeof payload.gameName === "string" ? payload.gameName : "a game";
+      return {
+        icon: "🏆",
+        metaText: ago,
+        body: (
+          <>
+            <strong>{actorName}</strong> unlocked {delta} achievement{delta === 1 ? "" : "s"} in{" "}
+            <Target>{gameName}</Target>.
+          </>
+        )
+      };
+    }
     case "milestone.reached": {
       const label = typeof payload.label === "string" ? payload.label : "a new tier";
       const emoji = typeof payload.emoji === "string" ? payload.emoji : "⭐";
@@ -1775,7 +1789,7 @@ function NewsCardTile({ card }: { card: NewsCardData }) {
   return content;
 }
 
-function BotAndRitualRow({ onNavigate }: { onNavigate: (page: PageId) => void }) {
+function BotAndRitualRow({ guildId, onNavigate }: { guildId: string | null; onNavigate: (page: PageId) => void }) {
   return (
     <section
       style={{
@@ -1792,7 +1806,11 @@ function BotAndRitualRow({ onNavigate }: { onNavigate: (page: PageId) => void })
         ctaLabel="Open in Discord ↗"
         primary
         onCta={() => {
-          // No guild id wired into the web env, so fall back to the in-app
+          if (guildId) {
+            window.open(`https://discord.com/channels/${guildId}`, "_blank", "noopener");
+            return;
+          }
+          // No guild id available, so fall back to the in-app
           // "what can we play" surface on the Games page.
           onNavigate("games");
         }}

@@ -272,6 +272,11 @@ function describeActivity(e: ActivityEvent): string {
       const emoji = typeof payload.emoji === "string" ? payload.emoji : "🏆";
       return `${emoji} **${actor}** unlocked **${name}** · ${ago}`;
     }
+    case "achievement.steam_progress": {
+      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
+      const gameName = typeof payload.gameName === "string" ? payload.gameName : "a game";
+      return `🏆 **${actor}** unlocked ${delta} achievement${delta === 1 ? "" : "s"} in **${gameName}** · ${ago}`;
+    }
     case "milestone.reached": {
       const label = typeof payload.label === "string" ? payload.label : "a new tier";
       const emoji = typeof payload.emoji === "string" ? payload.emoji : "⭐";

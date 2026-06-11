@@ -453,6 +453,42 @@ async function runProfileContextSync(userId: string, steamId64: string): Promise
       `,
       [userId, ACHIEVEMENT_TOP_N]
     );
+
+    // Pre-fetch prior unlocked counts + game names for the candidate apps in a
+    // single query so we can diff per-app and emit progress activity events
+    // without an extra round-trip inside the throttled loop. A null prior value
+    // (no existing progress row) is treated as a baseline — we skip emitting on
+    // the first sync to avoid flooding the feed.
+    const candidateAppIds = topGames.rows.map((row) => row.app_id);
+    const priorUnlockedByApp = new Map<number, number>();
+    const gameNameByApp = new Map<number, string>();
+    let actorDiscordUserId: string | null = null;
+    if (candidateAppIds.length > 0) {
+      const priorRows = await db.query<{ app_id: number; achievements_unlocked: number | null; name: string }>(
+        `
+          SELECT g.app_id,
+                 p.achievements_unlocked,
+                 g.name
+          FROM games g
+          LEFT JOIN user_game_progress p
+            ON p.app_id = g.app_id AND p.user_id = $1
+          WHERE g.app_id = ANY($2::int[])
+        `,
+        [userId, candidateAppIds]
+      );
+      for (const prior of priorRows.rows) {
+        if (prior.achievements_unlocked != null) {
+          priorUnlockedByApp.set(prior.app_id, prior.achievements_unlocked);
+        }
+        gameNameByApp.set(prior.app_id, prior.name);
+      }
+      const actorRow = await db.query<{ discord_user_id: string }>(
+        `SELECT discord_user_id FROM users WHERE id = $1`,
+        [userId]
+      );
+      actorDiscordUserId = actorRow.rows[0]?.discord_user_id ?? null;
+    }
+
     for (const row of topGames.rows) {
       const r = await fetchAchievementsForApp(steamId64, row.app_id);
       if (r.ok) {
@@ -470,6 +506,28 @@ async function runProfileContextSync(userId: string, steamId64: string): Promise
           [userId, row.app_id, r.unlocked, r.total, r.completionPct]
         );
         result.achievementsSynced++;
+
+        // Diff against the prior unlocked count. Only emit when a baseline
+        // existed (prior was non-null) and the count actually increased — this
+        // skips the first-ever sync and any no-change re-syncs.
+        const priorUnlocked = priorUnlockedByApp.get(row.app_id);
+        if (priorUnlocked != null && actorDiscordUserId) {
+          const delta = r.unlocked - priorUnlocked;
+          if (delta > 0) {
+            void recordEvent({
+              eventType: "achievement.steam_progress",
+              actorDiscordUserId,
+              targetAppId: row.app_id,
+              payload: {
+                appId: row.app_id,
+                gameName: gameNameByApp.get(row.app_id) ?? `app-${row.app_id}`,
+                unlockedDelta: delta,
+                newUnlocked: r.unlocked,
+                total: r.total
+              }
+            });
+          }
+        }
       } else if (!r.hasStatsApi) {
         await db.query(
           `

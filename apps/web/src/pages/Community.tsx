@@ -349,6 +349,15 @@ function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
       return { action: "stepped away from", target: "the next game night", detail: "Off the dock for now" };
     case "game_night.game_picked":
       return { action: "picked", target: gameName ?? "a game", detail: "Locked in for the next session" };
+    case "achievement.steam_progress": {
+      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
+      const game = typeof payload.gameName === "string" ? payload.gameName : gameName ?? "a game";
+      return {
+        action: "unlocked",
+        target: `${delta} achievement${delta === 1 ? "" : "s"} in ${game}`,
+        detail: "Steam progress on the island"
+      };
+    }
     case "steam.linked":
       return { action: "linked", target: "their Steam account", detail: "Library now visible to the crew" };
     case "steam.unlinked":

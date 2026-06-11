@@ -87,6 +87,7 @@ profileRouter.get("/me", async (req, res) => {
       nuggieBalance: parseInt(row.balance ?? "0", 10),
       nuggiesOptedOut: row.nuggies_opted_out,
       equippedItems,
+      guildId: getGuildId(),
     }
   });
 });

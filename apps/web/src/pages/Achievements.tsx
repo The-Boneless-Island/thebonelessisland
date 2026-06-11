@@ -25,6 +25,7 @@ type MeData = {
   transactions: NuggieTransaction[];
   inventory: NuggiesInventoryItem[];
   loans: NuggiesLoan[];
+  dailyAmount?: number;
 };
 
 function fmt(n: number) {
@@ -352,7 +353,7 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
               </div>
             ) : (
               <IslandButton variant="primary" onClick={() => void claimDaily()} disabled={claiming}>
-                {claiming ? "Claiming…" : "Claim Daily Nuggies"}
+                {claiming ? "Claiming…" : me.dailyAmount != null ? `Claim ${fmt(me.dailyAmount)} Nuggies Today` : "Claim Daily Nuggies"}
               </IslandButton>
             )}
             {claimMsg && (
