@@ -2,6 +2,7 @@ import { env } from "../../config.js";
 import { getAISetting } from "../serverSettings.js";
 import { AIDisabledError, AINotConfiguredError, AIProvider } from "./provider.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
+import { BedrockProvider } from "./providers/bedrock.js";
 import { GeminiProvider } from "./providers/gemini.js";
 import { OpenAIProvider } from "./providers/openai.js";
 
@@ -9,17 +10,18 @@ import { OpenAIProvider } from "./providers/openai.js";
 export type { AIMessage, AIProvider, AIResult } from "./provider.js";
 export { AIDisabledError, AINotConfiguredError } from "./provider.js";
 
-type SupportedProvider = "anthropic" | "openai" | "gemini";
+type SupportedProvider = "anthropic" | "openai" | "gemini" | "bedrock";
 
 export const PROVIDER_DEFAULTS: Record<SupportedProvider, string> = {
   anthropic: "claude-haiku-4-5",
   openai: "gpt-4o-mini",
   // Flash Lite is ~30× cheaper than Sonnet and sufficient for structured JSON
   // curation work — set as the default for fresh installs that pick Gemini.
-  gemini: "gemini-2.5-flash-lite"
+  gemini: "gemini-2.5-flash-lite",
+  bedrock: "anthropic.claude-haiku-4-5"
 };
 
-export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai", "gemini"];
+export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai", "gemini", "bedrock"];
 
 /**
  * Returns a ready-to-use AIProvider based on the current server_settings.
@@ -57,6 +59,14 @@ export function getAIProvider(overrides?: {
 
   if (!SUPPORTED_PROVIDERS.includes(providerName)) {
     throw new AINotConfiguredError(`unknown provider "${providerName}"`);
+  }
+
+  // Bedrock authenticates via the AWS credential chain (the EC2 instance role),
+  // so it has no API key. Resolve it before the key lookup/requirement below.
+  if (providerName === "bedrock") {
+    const region = getAISetting("bedrock_region") || process.env.AWS_REGION || "us-east-1";
+    const bedrockModel = overrides?.model ?? getAISetting("ai_model") ?? PROVIDER_DEFAULTS.bedrock;
+    return new BedrockProvider(region, bedrockModel || PROVIDER_DEFAULTS.bedrock);
   }
 
   const model =

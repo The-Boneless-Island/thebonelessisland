@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.92.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1066.0",
     "@aws-sdk/client-ssm": "^3.1048.0",
     "@google/genai": "^2.0.1",
     "@island/shared": "0.1.0",

@@ -4,7 +4,7 @@
 // and the risk layer (danger zone + typed confirm) consistently.
 
 export type SettingDomain = "people" | "content" | "engagement" | "system";
-export type DangerLevel = "low" | "high";
+export type DangerLevel = "low" | "medium" | "high";
 export type SettingInputType = "string" | "number" | "boolean" | "password" | "select" | "csv" | "textarea";
 
 export type SettingMeta = {
@@ -76,27 +76,28 @@ const RAW: SettingMeta[] = [
   {
     key: "ai_provider",
     label: "AI provider",
-    description: "Which LLM service to use for AI features.",
-    whenToChange: "When switching between Anthropic, OpenAI, and Gemini (e.g. cost, quality, or contractual reasons).",
-    ifWrong: "If the matching API key isn't set for the new provider, all AI features will fail until a working key is provided.",
-    tags: ["ai", "provider", "anthropic", "openai", "gemini", "google", "llm"],
+    description: "Which LLM service to use for AI features. Amazon Bedrock needs NO API key — it authenticates via the server's AWS IAM role.",
+    whenToChange: "When switching between Anthropic, OpenAI, Gemini, and Amazon Bedrock (e.g. cost, quality, or contractual reasons).",
+    ifWrong: "If the matching API key isn't set for the new provider, all AI features will fail until a working key is provided. (Amazon Bedrock uses the server's AWS IAM role instead of a key.)",
+    tags: ["ai", "provider", "anthropic", "openai", "gemini", "google", "bedrock", "aws", "llm"],
     dangerLevel: "high",
     domain: "system",
     type: "select",
     selectOptions: [
       { value: "anthropic", label: "Anthropic (Claude)" },
       { value: "openai", label: "OpenAI (GPT)" },
-      { value: "gemini", label: "Google (Gemini)" }
+      { value: "gemini", label: "Google (Gemini)" },
+      { value: "bedrock", label: "Amazon Bedrock (Claude / Nova — IAM, no key)" }
     ],
     confirmPhrase: "switch-provider"
   },
   {
     key: "ai_model",
     label: "AI model",
-    description: "Specific model name for the selected provider. Leave blank to use the provider default.",
+    description: "Specific model name for the selected provider. Leave blank to use the provider default. For Amazon Bedrock this is a Bedrock model id (e.g. anthropic.claude-haiku-4-5, amazon.nova-lite-v1:0, or amazon.nova-micro-v1:0) rather than the bare model name used for the other providers.",
     whenToChange: "When tuning cost vs quality, or when a new model becomes available you want to try.",
-    example: "claude-haiku-4-5",
-    tags: ["ai", "model", "claude", "gpt", "haiku", "sonnet", "opus"],
+    example: "claude-haiku-4-5 (Anthropic) or amazon.nova-lite-v1:0 (Bedrock)",
+    tags: ["ai", "model", "claude", "gpt", "haiku", "sonnet", "opus", "nova", "bedrock"],
     dangerLevel: "low",
     domain: "system",
     type: "string"
@@ -159,6 +160,17 @@ const RAW: SettingMeta[] = [
     domain: "system",
     type: "password",
     confirmPhrase: "rotate-key"
+  },
+  {
+    key: "bedrock_region",
+    label: "Bedrock region",
+    description: "AWS region for Amazon Bedrock. Defaults to us-east-1. Only used when the AI provider is Amazon Bedrock.",
+    whenToChange: "When your Bedrock model access or quota lives in a different AWS region than us-east-1.",
+    example: "us-east-1",
+    tags: ["ai", "bedrock", "aws", "region"],
+    dangerLevel: "medium",
+    domain: "system",
+    type: "string"
   },
 
   // ── Content · News pipeline ──────────────────────────────────────────────
