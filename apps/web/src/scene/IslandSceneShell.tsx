@@ -39,11 +39,184 @@ function SceneBackdrop() {
     >
       <Stars active={mode === "night"} />
       <Clouds active={mode === "day"} />
+      <Birds active={mode === "day"} />
       <Celestial mode={mode} />
       <OceanBand mode={mode} />
+      <CelestialReflection mode={mode} />
       <BeachBand mode={mode} />
+      <BeachProps mode={mode} />
+      <Fireflies active={mode === "night"} />
       <SceneVignette mode={mode} />
     </div>
+  );
+}
+
+// ── Ambient flourishes ───────────────────────────────────────────────────────
+// All of these are decoration-only: transform/opacity animations, hidden under
+// prefers-reduced-motion, zero per-frame JS.
+
+/** Shimmering column of light on the ocean directly below the sun/moon. */
+function CelestialReflection({ mode }: { mode: "day" | "night" }) {
+  const color =
+    mode === "day"
+      ? "rgba(253, 230, 138, 0.34)"
+      : "rgba(186, 230, 253, 0.22)";
+  return (
+    <div
+      aria-hidden="true"
+      className="island-celestial-reflection"
+      style={{
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        width: 110,
+        height: "22%",
+        transform: "translateX(-50%)",
+        background: `linear-gradient(180deg, ${color} 0%, transparent 90%)`,
+        maskImage: "linear-gradient(90deg, transparent 0%, black 30%, black 70%, transparent 100%)",
+        WebkitMaskImage: "linear-gradient(90deg, transparent 0%, black 30%, black 70%, transparent 100%)",
+        mixBlendMode: "screen",
+        transition: "background 1200ms ease",
+        pointerEvents: "none"
+      }}
+    />
+  );
+}
+
+/** A few slow fireflies drifting over the night beach. */
+function Fireflies({ active }: { active: boolean }) {
+  const flies = [
+    { left: "12%", bottom: "9%", dur: "11s", delay: "0s" },
+    { left: "28%", bottom: "11%", dur: "14s", delay: "-4s" },
+    { left: "64%", bottom: "10%", dur: "12s", delay: "-7s" },
+    { left: "82%", bottom: "12%", dur: "16s", delay: "-2s" }
+  ];
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        opacity: active ? 1 : 0,
+        transition: "opacity 1500ms ease",
+        pointerEvents: "none"
+      }}
+    >
+      {flies.map((f, i) => (
+        <span
+          key={i}
+          className="island-firefly"
+          style={{
+            position: "absolute",
+            left: f.left,
+            bottom: f.bottom,
+            width: 4,
+            height: 4,
+            borderRadius: 999,
+            background: "#fde68a",
+            boxShadow: "0 0 8px 2px rgba(253, 230, 138, 0.55)",
+            animationDuration: f.dur,
+            animationDelay: f.delay
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Two distant bird silhouettes crossing the day sky. */
+function Birds({ active }: { active: boolean }) {
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        opacity: active ? 1 : 0,
+        transition: "opacity 1500ms ease",
+        pointerEvents: "none"
+      }}
+    >
+      <span className="island-bird" style={{ top: "14%", animationDuration: "70s", animationDelay: "-12s" }}>
+        <BirdGlyph size={16} />
+      </span>
+      <span className="island-bird" style={{ top: "22%", animationDuration: "95s", animationDelay: "-50s" }}>
+        <BirdGlyph size={11} />
+      </span>
+    </div>
+  );
+}
+
+function BirdGlyph({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size * 0.45} viewBox="0 0 20 9" fill="none" aria-hidden="true">
+      <path d="M1 7 Q5 1 10 6 Q15 1 19 7" stroke="rgba(30, 41, 59, 0.55)" strokeWidth="1.6" strokeLinecap="round" fill="none" />
+    </svg>
+  );
+}
+
+/** Small props scattered on the beach band; selection rotates by day-of-month
+ *  (same trick as the shooting star) so the shore feels lived-in but stable
+ *  within a day. Night adds a faint bonfire glow. */
+function BeachProps({ mode }: { mode: "day" | "night" }) {
+  const day = new Date().getDate();
+  const props = [
+    { key: "driftwood", left: `${10 + (day % 5) * 4}%`, node: <DriftwoodGlyph /> },
+    { key: "starfish", left: `${68 + (day % 4) * 5}%`, node: <StarfishGlyph /> }
+  ];
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "8%", pointerEvents: "none" }}>
+      {props.map((p) => (
+        <span
+          key={p.key}
+          style={{
+            position: "absolute",
+            left: p.left,
+            bottom: "22%",
+            opacity: mode === "day" ? 0.5 : 0.3,
+            transition: "opacity 1200ms ease"
+          }}
+        >
+          {p.node}
+        </span>
+      ))}
+      {/* Night bonfire glow near the right palm */}
+      <span
+        className="island-bonfire"
+        style={{
+          position: "absolute",
+          right: "18%",
+          bottom: "10%",
+          width: 90,
+          height: 50,
+          borderRadius: "50%",
+          background: "radial-gradient(ellipse at 50% 80%, rgba(251, 146, 60, 0.4) 0%, rgba(245, 158, 11, 0.18) 45%, transparent 75%)",
+          opacity: mode === "night" ? 1 : 0,
+          transition: "opacity 1500ms ease"
+        }}
+      />
+    </div>
+  );
+}
+
+function DriftwoodGlyph() {
+  return (
+    <svg width="44" height="12" viewBox="0 0 44 12" aria-hidden="true">
+      <path d="M2 9 Q10 4 22 6 Q34 8 42 4 L42 7 Q30 11 18 9 Q8 8 2 11 Z" fill="#5c3d24" opacity="0.85" />
+      <path d="M6 8 Q14 5 24 7" stroke="#3d2817" strokeWidth="1" fill="none" opacity="0.6" />
+    </svg>
+  );
+}
+
+function StarfishGlyph() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
+      <path
+        d="M10 1 L12.2 7 L18.5 7.4 L13.6 11.4 L15.4 17.6 L10 14 L4.6 17.6 L6.4 11.4 L1.5 7.4 L7.8 7 Z"
+        fill="#ef8354"
+        opacity="0.85"
+      />
+    </svg>
   );
 }
 
@@ -325,6 +498,8 @@ function BeachBand({ mode }: { mode: "day" | "night" }) {
 }
 
 function SceneVignette({ mode }: { mode: "day" | "night" }) {
+  // --bi-scene-tint lets pages subtly recolor the scene (news leans cool,
+  // the arcade leans warm) without extra layers. App.tsx sets it per page.
   return (
     <div
       style={{
@@ -332,8 +507,8 @@ function SceneVignette({ mode }: { mode: "day" | "night" }) {
         inset: 0,
         background:
           mode === "day"
-            ? "radial-gradient(ellipse at 50% 35%, transparent 50%, rgba(30, 60, 90, 0.18) 100%)"
-            : "radial-gradient(ellipse at 50% 35%, transparent 40%, rgba(8, 16, 30, 0.55) 100%)",
+            ? "radial-gradient(ellipse at 50% 30%, var(--bi-scene-tint, transparent) 0%, transparent 65%), radial-gradient(ellipse at 50% 35%, transparent 50%, rgba(30, 60, 90, 0.18) 100%)"
+            : "radial-gradient(ellipse at 50% 30%, var(--bi-scene-tint, transparent) 0%, transparent 65%), radial-gradient(ellipse at 50% 35%, transparent 40%, rgba(8, 16, 30, 0.55) 100%)",
         transition: "background 1200ms ease",
         pointerEvents: "none"
       }}
@@ -661,6 +836,50 @@ function SceneGlobalStyles() {
           50% { opacity: 0.9; }
         }
 
+        /* ── Ambient flourishes ── */
+        .island-celestial-reflection {
+          animation: islandReflectionShimmer 6s ease-in-out infinite;
+        }
+        @keyframes islandReflectionShimmer {
+          0%, 100% { opacity: 0.75; transform: translateX(-50%) scaleX(1); }
+          50% { opacity: 1; transform: translateX(-50%) scaleX(1.12); }
+        }
+        .island-firefly {
+          animation-name: islandFireflyDrift;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+        }
+        @keyframes islandFireflyDrift {
+          0%   { transform: translate(0, 0); opacity: 0; }
+          12%  { opacity: 0.9; }
+          35%  { transform: translate(26px, -22px); opacity: 0.5; }
+          55%  { transform: translate(-12px, -38px); opacity: 0.95; }
+          78%  { transform: translate(18px, -14px); opacity: 0.4; }
+          100% { transform: translate(0, 0); opacity: 0; }
+        }
+        .island-bird {
+          position: absolute;
+          left: -5%;
+          animation-name: islandBirdFly;
+          animation-timing-function: linear;
+          animation-iteration-count: infinite;
+        }
+        @keyframes islandBirdFly {
+          0%   { transform: translateX(0) translateY(0); }
+          25%  { transform: translateX(28vw) translateY(-10px); }
+          50%  { transform: translateX(56vw) translateY(4px); }
+          75%  { transform: translateX(84vw) translateY(-8px); }
+          100% { transform: translateX(115vw) translateY(0); }
+        }
+        .island-bonfire {
+          animation: islandBonfireFlicker 3.2s ease-in-out infinite;
+        }
+        @keyframes islandBonfireFlicker {
+          0%, 100% { filter: brightness(1); }
+          40% { filter: brightness(1.25); }
+          70% { filter: brightness(0.9); }
+        }
+
         /* ── Occasional shooting star (night flourish) ── */
         .island-shooting-star {
           position: absolute;
@@ -796,10 +1015,14 @@ function SceneGlobalStyles() {
           .island-cloud-a,
           .island-cloud-b,
           .island-cloud-c,
+          .island-celestial-reflection,
+          .island-bonfire,
           .bi-anchor-flash {
             animation: none !important;
           }
-          .island-shooting-star {
+          .island-shooting-star,
+          .island-firefly,
+          .island-bird {
             display: none !important;
           }
           .island-btn {

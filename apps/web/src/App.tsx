@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
-import { GAME_NIGHTS_TILE_BG_URL, getGameNightBanner } from "./assets.js";
 import { LoginScreen } from "./pages/LoginScreen.js";
 
 // Route-level code splitting: each routed page is lazy-loaded so its bundle is
@@ -449,6 +448,20 @@ export function App() {
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
+  }, [page]);
+
+  // Per-page scene tint: subtly recolor the backdrop vignette so sections
+  // feel distinct (news cool, arcade/economy warm) without new scene layers.
+  useEffect(() => {
+    const tint =
+      page === "games-news"
+        ? "rgba(34, 211, 238, 0.06)"
+        : page === "nuggies-casino"
+          ? "rgba(244, 162, 97, 0.09)"
+          : page === "nuggies" || page === "nuggies-milestones" || page === "nuggies-history"
+            ? "rgba(251, 191, 119, 0.05)"
+            : "transparent";
+    document.documentElement.style.setProperty("--bi-scene-tint", tint);
   }, [page]);
 
   // Ctrl/Cmd+K opens the quick switcher from anywhere.

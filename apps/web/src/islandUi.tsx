@@ -66,61 +66,6 @@ export function IslandCard({ as = "section", style, ...props }: IslandCardProps)
   return <Tag {...props} style={{ ...islandCardStyle, ...style }} />;
 }
 
-type IslandTileButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  title: string;
-  description: string;
-  imageUrl: string;
-  accent: "primary" | "tool";
-  hovered?: boolean;
-};
-
-export function IslandTileButton({
-  title,
-  description,
-  imageUrl,
-  accent,
-  hovered = false,
-  style,
-  ...props
-}: IslandTileButtonProps) {
-  const accentBorder = accent === "primary" ? islandTheme.color.primaryStrong : islandTheme.color.toolAccent;
-  const hoverShadow = accent === "primary" ? islandTheme.shadow.tileGameNightHover : islandTheme.shadow.tileToolsHover;
-  const gradient = accent === "primary" ? islandTheme.gradient.gameNightTile : islandTheme.gradient.toolsTile;
-  return (
-    <button
-      {...props}
-      style={{
-        ...islandButtonStyle("secondary"),
-        width: "100%",
-        minHeight: "clamp(160px, 24vw, 250px)",
-        borderRadius: islandTheme.radius.surface,
-        textAlign: "left",
-        color: islandTheme.color.textInverted,
-        padding: "1rem",
-        border: `1px solid ${accentBorder}`,
-        backgroundImage: `${gradient}, url("${imageUrl}")`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        boxShadow: hovered ? hoverShadow : islandTheme.shadow.tileIdle,
-        transition: "box-shadow 160ms ease, transform 160ms ease",
-        transform: hovered ? "translateY(-2px)" : "translateY(0)",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "flex-end",
-        overflow: "hidden",
-        ...style
-      }}
-    >
-      <div>
-        <div style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.25rem)", fontWeight: 800, lineHeight: 1.05, marginBottom: 10 }}>
-          {title}
-        </div>
-        <div style={{ fontSize: 16, lineHeight: 1.3, opacity: 0.97, maxWidth: 280 }}>{description}</div>
-      </div>
-    </button>
-  );
-}
-
 type IslandMemberChipProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
   selected: boolean;
