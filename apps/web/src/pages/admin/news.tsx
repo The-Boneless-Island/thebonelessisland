@@ -39,9 +39,10 @@ import {
   smallBtn,
   SubsectionTitle
 } from "./adminUi.js";
-import { inlineSettingKeysFor } from "./adminNav.js";
+import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
-const ACCENT = "#0ea5e9";
+// Accent comes from the nav registry — one source for sidebar, search, and page chrome.
+const ACCENT = ADMIN_PAGES["news"].accent;
 
 export type RecurateProgressSnap = {
   state: "running" | "done" | "error";

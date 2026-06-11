@@ -6,9 +6,10 @@ import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { GameNight, GuildMember, NuggiesShopItem, ServerSetting } from "../../types.js";
 import { AdminStatusBanner, InlineSettings, SubsectionTitle } from "./adminUi.js";
-import { inlineSettingKeysFor } from "./adminNav.js";
+import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
-const ACCENT = "#f59e0b";
+// Accent comes from the nav registry — one source for sidebar, search, and page chrome.
+const ACCENT = ADMIN_PAGES["economy"].accent;
 
 type EconomyOverview = {
   totalSupply: number;

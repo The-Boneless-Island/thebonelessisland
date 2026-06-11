@@ -6,9 +6,10 @@ import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { ServerSetting } from "../../types.js";
 import { AdminStatusBanner, BannerToggle, InlineSettings, StatRow, SubsectionTitle } from "./adminUi.js";
-import { inlineSettingKeysFor } from "./adminNav.js";
+import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
-const ACCENT = "#8b5cf6";
+// Accent comes from the nav registry — one source for sidebar, search, and page chrome.
+const ACCENT = ADMIN_PAGES["ai"].accent;
 
 type AiCostToday = {
   today: number;

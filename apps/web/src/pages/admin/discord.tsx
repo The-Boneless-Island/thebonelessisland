@@ -6,7 +6,7 @@ import { islandTheme } from "../../theme.js";
 import { RANK_TIERS } from "../../data/rankTiers.js";
 import type { ServerSetting } from "../../types.js";
 import { AdminStatusBanner, BannerToggle, InlineSettings, SubsectionTitle } from "./adminUi.js";
-import { inlineSettingKeysFor } from "./adminNav.js";
+import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
 // ── Guild Identity ───────────────────────────────────────────────────────────
 
@@ -45,7 +45,7 @@ export function GuildAdminPage({
       >
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
           <span>⚠️</span>
-          <p style={{ margin: 0, fontSize: 13, color: "#fcd34d", lineHeight: 1.5 }}>
+          <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.warnAccent, lineHeight: 1.5 }}>
             Changing the <strong>Guild ID</strong> takes effect immediately on the next request —
             all member sync, role checks, and crew data will point to the new server.
             Run a member sync after switching to populate the new guild's roster.
@@ -68,7 +68,8 @@ export function GuildAdminPage({
 // Until configured, the bot's milestone announcer is a no-op (silently marks
 // outbox rows processed without posting or role-grant).
 
-const ACCENT = "#7dd3fc";
+// Accent comes from the nav registry — one source for sidebar, search, and page chrome.
+const ACCENT = ADMIN_PAGES["guild"].accent;
 
 export function BridgeAdminPage({
   settings,

@@ -323,7 +323,7 @@ export function InlineSettings({ keys, settings, onSave, title = "Settings" }: I
       {highRisk.length > 0 && (
         <div style={{ display: "grid", gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
-            <span className="island-mono" style={islandTagStyle({ color: "#ef4444" })}>
+            <span className="island-mono" style={islandTagStyle({ color: islandTheme.color.dangerAccent })}>
               Danger zone
             </span>
             <span style={{ fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.4 }}>
