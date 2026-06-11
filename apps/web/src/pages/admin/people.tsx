@@ -315,10 +315,21 @@ function ForumCategoriesTab() {
   const [categories, setCategories] = useState<ForumCategory[] | null>(null);
   const [editing, setEditing] = useState<ForumCategory | null>(null);
   const [creating, setCreating] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = async () => {
-    const r = await apiFetch("/forums/categories").then((r) => r.json()).catch(() => ({ categories: [] }));
-    setCategories(r.categories ?? []);
+    setLoadError(null);
+    try {
+      const r = await apiFetch("/forums/categories");
+      const data = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(data?.error ?? `Load failed (${r.status})`);
+      setCategories(data?.categories ?? []);
+    } catch (err) {
+      // Surface the failure — silently treating a 500 as "no categories"
+      // hides real backend/schema problems from the one person who can fix them.
+      setLoadError(err instanceof Error ? err.message : "Load failed");
+      setCategories([]);
+    }
   };
 
   useEffect(() => { void load(); }, []);
@@ -350,7 +361,11 @@ function ForumCategoriesTab() {
         <SubsectionTitle style={{ padding: "14px 16px 0" }}>
           Categories · {categories?.length ?? 0}
         </SubsectionTitle>
-        {categories === null ? (
+        {loadError ? (
+          <p style={{ margin: 0, padding: "10px 16px 16px", fontSize: 13, color: islandTheme.color.dangerText }}>
+            Couldn't load categories: {loadError}
+          </p>
+        ) : categories === null ? (
           <p style={{ margin: 0, padding: "10px 16px 16px", fontSize: 13, color: islandTheme.color.textMuted }}>Loading…</p>
         ) : categories.length === 0 ? (
           <p style={{ margin: 0, padding: "10px 16px 16px", fontSize: 13, color: islandTheme.color.textMuted }}>No categories yet.</p>

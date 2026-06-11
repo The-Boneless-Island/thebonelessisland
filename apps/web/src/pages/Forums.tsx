@@ -25,6 +25,8 @@ type ForumsPageProps = {
   isAdmin: boolean;
 };
 
+const FEED_PAGE_SIZE = 30;
+
 export function ForumsPage({ profile, isAdmin }: ForumsPageProps) {
   const [view, setView] = useState<ForumView>({ mode: "home" });
 
@@ -113,6 +115,7 @@ function ForumHome({
   onCompose: (slug: string) => void;
 }) {
   const [categories, setCategories] = useState<ForumCategory[] | null>(null);
+  const [shellError, setShellError] = useState<string | null>(null);
   const [stats, setStats] = useState<ForumStats | null>(null);
   const [feed, setFeed] = useState<ForumFeedThread[] | null>(null);
   const [feedLoading, setFeedLoading] = useState(false);
@@ -124,6 +127,7 @@ function ForumHome({
   const [composerOpen, setComposerOpen] = useState(false);
 
   const loadShell = useCallback(async () => {
+    setShellError(null);
     const [catsRes, statsRes] = await Promise.all([
       apiFetch("/forums/categories").catch(() => null),
       apiFetch("/forums/stats").catch(() => null)
@@ -131,6 +135,11 @@ function ForumHome({
     let cats: { categories?: ForumCategory[] } | null = null;
     if (catsRes && catsRes.ok) {
       cats = await catsRes.json().catch(() => null);
+    } else {
+      // A failed categories fetch is NOT "no categories yet" — surface it so a
+      // backend error doesn't masquerade as an empty forum.
+      const data = catsRes ? await catsRes.json().catch(() => null) : null;
+      setShellError(data?.error ?? (catsRes ? `Categories failed to load (${catsRes.status})` : "Categories failed to load (network)"));
     }
     let st: ForumStats | null = null;
     if (statsRes && statsRes.ok) {
@@ -150,13 +159,16 @@ function ForumHome({
     setStats(st);
   }, []);
 
-  const loadFeed = useCallback(async () => {
+  const [feedHasMore, setFeedHasMore] = useState(false);
+
+  const loadFeed = useCallback(async (offset = 0) => {
     setFeedLoading(true);
     setFeedError(null);
     try {
       const params = new URLSearchParams();
       params.set("sort", sort);
-      params.set("limit", "30");
+      params.set("limit", String(FEED_PAGE_SIZE));
+      params.set("offset", String(offset));
       if (categoryFilter) params.set("category", categoryFilter);
       const r = await apiFetch(`/forums/threads?${params.toString()}`);
       if (!r.ok) {
@@ -164,10 +176,12 @@ function ForumHome({
         throw new Error(data?.error ?? `Feed load failed (${r.status})`);
       }
       const data = await r.json();
-      setFeed(data.threads ?? []);
+      const batch: ForumFeedThread[] = data.threads ?? [];
+      setFeed((cur) => (offset === 0 ? batch : [...(cur ?? []), ...batch]));
+      setFeedHasMore(batch.length === FEED_PAGE_SIZE);
     } catch (err) {
       setFeedError(err instanceof Error ? err.message : "Feed load failed");
-      setFeed([]);
+      if (offset === 0) setFeed([]);
     } finally {
       setFeedLoading(false);
     }
@@ -189,7 +203,23 @@ function ForumHome({
     return () => window.clearTimeout(handle);
   }, [search]);
 
-  const noCategories = categories !== null && categories.length === 0;
+  const noCategories = categories !== null && categories.length === 0 && !shellError;
+  // First-visit onboarding: shown until dismissed or until the user has posted.
+  const [onboardingDismissed, setOnboardingDismissed] = useState(
+    () => localStorage.getItem("bi:forum-onboarding-dismissed") === "1"
+  );
+  const dismissOnboarding = () => {
+    localStorage.setItem("bi:forum-onboarding-dismissed", "1");
+    setOnboardingDismissed(true);
+  };
+  const showOnboarding =
+    !onboardingDismissed &&
+    Boolean(profile) &&
+    stats !== null &&
+    (stats.mine?.threadCount ?? 0) === 0 &&
+    (stats.mine?.postCount ?? 0) === 0 &&
+    !noCategories &&
+    !shellError;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -233,7 +263,14 @@ function ForumHome({
         </IslandCard>
       ) : (
         <>
+          {shellError ? <ForumsErrorState message={shellError} onRetry={() => void loadShell()} /> : null}
           {noCategories ? <ForumsEmptyState /> : null}
+          {showOnboarding ? (
+            <ForumOnboardingCard
+              onStart={() => setComposerOpen(true)}
+              onDismiss={dismissOnboarding}
+            />
+          ) : null}
 
           <SortFilterBar
             sort={sort}
@@ -257,6 +294,8 @@ function ForumHome({
             error={feedError}
             sort={sort}
             categoryFilter={categoryFilter}
+            hasMore={feedHasMore}
+            onLoadMore={() => void loadFeed(feed?.length ?? 0)}
             onSelect={onSelectThread}
             onClearFilter={() => { setCategoryFilter(null); setSort("latest"); }}
           />
@@ -360,6 +399,87 @@ function CategoryPickerCard({
             <span style={{ fontSize: 13, fontWeight: 700 }}>{c.name}</span>
           </button>
         ))}
+      </div>
+    </IslandCard>
+  );
+}
+
+function ForumsErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <IslandCard style={{ padding: 18, textAlign: "center", borderColor: islandTheme.color.danger }}>
+      <div style={{ fontSize: 30, marginBottom: 8 }}>🌊</div>
+      <h3 className="island-display" style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
+        Forums hit rough surf
+      </h3>
+      <p style={{ margin: "6px 0 10px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+        {message}
+      </p>
+      <IslandButton onClick={onRetry}>Try again</IslandButton>
+    </IslandCard>
+  );
+}
+
+const ONBOARDING_STEPS: Array<{ emoji: string; title: string; body: string }> = [
+  { emoji: "🗂️", title: "Pick a category", body: "General, Gaming, Hardware, Events… every thread lives somewhere." },
+  { emoji: "✍️", title: "Start a thread", body: "A clear title + your take. Markdown-ish formatting works." },
+  { emoji: "🪙", title: "Earn Nuggies", body: "₦5 per thread, ₦1 per reply — straight to your balance." }
+];
+
+function ForumOnboardingCard({ onStart, onDismiss }: { onStart: () => void; onDismiss: () => void }) {
+  return (
+    <IslandCard
+      style={{
+        padding: 16,
+        background: `linear-gradient(135deg, rgba(168,85,247,0.10) 0%, ${islandTheme.color.panelBg} 70%)`
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
+        <h3 className="island-display" style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
+          👋 First time on the boards?
+        </h3>
+        <button
+          type="button"
+          className="island-btn"
+          onClick={onDismiss}
+          aria-label="Dismiss forum intro"
+          style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, fontSize: 13, cursor: "pointer", font: "inherit", flexShrink: 0 }}
+        >
+          Got it ×
+        </button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginTop: 12 }}>
+        {ONBOARDING_STEPS.map((s, i) => (
+          <div
+            key={s.title}
+            style={{
+              display: "flex",
+              gap: 10,
+              padding: "10px 12px",
+              borderRadius: 10,
+              background: islandTheme.color.panelMutedBg,
+              border: `1px solid ${islandTheme.color.cardBorder}`
+            }}
+          >
+            <span style={{ fontSize: 20 }} aria-hidden="true">{s.emoji}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>
+                <span className="island-mono" style={{ color: islandTheme.color.textMuted, marginRight: 6 }}>{i + 1}.</span>
+                {s.title}
+              </div>
+              <div style={{ fontSize: 12, color: islandTheme.color.textSubtle, marginTop: 2, lineHeight: 1.45 }}>
+                {s.body}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+          House rules: be cool, stay on topic, report anything gross. Mods are watching (kindly).
+        </span>
+        <IslandButton variant="primary" onClick={onStart}>
+          Start your first thread →
+        </IslandButton>
       </div>
     </IslandCard>
   );
@@ -491,6 +611,8 @@ function FeedList({
   error,
   sort,
   categoryFilter,
+  hasMore,
+  onLoadMore,
   onSelect,
   onClearFilter
 }: {
@@ -499,6 +621,8 @@ function FeedList({
   error: string | null;
   sort: ForumFeedSort;
   categoryFilter: string | null;
+  hasMore: boolean;
+  onLoadMore: () => void;
   onSelect: (id: number) => void;
   onClearFilter: () => void;
 }) {
@@ -511,7 +635,7 @@ function FeedList({
   return (
     <IslandCard style={{ padding: 0, overflow: "hidden" }}>
       <SectionHeader>{headerLabel}</SectionHeader>
-      {loading ? (
+      {loading && (!threads || threads.length === 0) ? (
         <p style={{ margin: 0, padding: 16, fontSize: 13, color: islandTheme.color.textMuted }}>Loading…</p>
       ) : error ? (
         <p style={{ margin: 0, padding: 16, fontSize: 13, color: islandTheme.color.dangerText }}>{error}</p>
@@ -535,9 +659,33 @@ function FeedList({
           ) : null}
         </div>
       ) : (
-        threads.map((t, i) => (
-          <FeedRow key={t.id} thread={t} firstRow={i === 0} onSelect={() => onSelect(t.id)} />
-        ))
+        <>
+          {threads.map((t, i) => (
+            <FeedRow key={t.id} thread={t} firstRow={i === 0} onSelect={() => onSelect(t.id)} />
+          ))}
+          {hasMore ? (
+            <button
+              type="button"
+              className="island-btn"
+              onClick={onLoadMore}
+              disabled={loading}
+              style={{
+                width: "100%",
+                padding: "10px 16px",
+                background: "transparent",
+                border: "none",
+                borderTop: `1px solid ${islandTheme.color.cardBorder}`,
+                color: islandTheme.color.primaryGlow,
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+                font: "inherit"
+              }}
+            >
+              {loading ? "Loading…" : "Load more threads ↓"}
+            </button>
+          ) : null}
+        </>
       )}
     </IslandCard>
   );
@@ -1369,7 +1517,7 @@ function PostCard({
               fontStyle: post.isDeleted ? "italic" : "normal"
             }}
           >
-            {post.isDeleted ? "[deleted]" : post.body}
+            {post.isDeleted ? "[deleted]" : renderForumBody(post.body)}
           </div>
           {!post.isDeleted ? (
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
@@ -1594,6 +1742,118 @@ function LockGlyph() {
       🔒
     </span>
   );
+}
+
+// ── Markdown-ish body rendering ─────────────────────────────────────────────
+// The composer advertises *italic*, **bold**, `code`, > quote and ``` fences.
+// Render those (and nothing else) by building React nodes — never raw HTML.
+
+function renderInline(text: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  // Order matters: bold (**) before italic (*) so ** isn't eaten as two *.
+  const pattern = /(\*\*([^*]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`|https?:\/\/[^\s<>"')]+)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let key = 0;
+  while ((m = pattern.exec(text)) !== null) {
+    if (m.index > last) nodes.push(text.slice(last, m.index));
+    if (m[2] !== undefined) {
+      nodes.push(<strong key={`b${key++}`}>{m[2]}</strong>);
+    } else if (m[3] !== undefined) {
+      nodes.push(<em key={`i${key++}`}>{m[3]}</em>);
+    } else if (m[4] !== undefined) {
+      nodes.push(
+        <code
+          key={`c${key++}`}
+          className="island-mono"
+          style={{ background: islandTheme.color.panelMutedBg, padding: "1px 5px", borderRadius: 4, fontSize: "0.92em" }}
+        >
+          {m[4]}
+        </code>
+      );
+    } else {
+      nodes.push(
+        <a key={`a${key++}`} href={m[0]} target="_blank" rel="noopener noreferrer" style={{ color: islandTheme.color.primaryGlow, wordBreak: "break-all" }}>
+          {m[0]}
+        </a>
+      );
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) nodes.push(text.slice(last));
+  return nodes;
+}
+
+function renderForumBody(body: string): React.ReactNode {
+  const blocks: React.ReactNode[] = [];
+  const parts = body.split(/```/);
+  parts.forEach((part, pi) => {
+    if (pi % 2 === 1) {
+      // Inside a fence — verbatim code block.
+      blocks.push(
+        <pre
+          key={`pre${pi}`}
+          className="island-mono"
+          style={{
+            margin: "6px 0",
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: islandTheme.color.panelMutedBg,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            overflowX: "auto",
+            fontSize: 12.5,
+            whiteSpace: "pre"
+          }}
+        >
+          {part.replace(/^\n/, "").replace(/\n$/, "")}
+        </pre>
+      );
+      return;
+    }
+    // Outside fences: group consecutive "> " lines into quotes.
+    const lines = part.split("\n");
+    let quote: string[] = [];
+    let plain: string[] = [];
+    const flushPlain = () => {
+      if (!plain.length) return;
+      const text = plain.join("\n");
+      if (text.trim().length > 0 || blocks.length > 0) {
+        blocks.push(<span key={`t${pi}-${blocks.length}`}>{renderInline(text)}</span>);
+      }
+      plain = [];
+    };
+    const flushQuote = () => {
+      if (!quote.length) return;
+      blocks.push(
+        <blockquote
+          key={`q${pi}-${blocks.length}`}
+          style={{
+            margin: "6px 0",
+            padding: "4px 12px",
+            borderLeft: `3px solid ${islandTheme.color.primaryGlow}`,
+            color: islandTheme.color.textSubtle,
+            background: islandTheme.color.panelMutedBg,
+            borderRadius: "0 8px 8px 0"
+          }}
+        >
+          {renderInline(quote.join("\n"))}
+        </blockquote>
+      );
+      quote = [];
+    };
+    for (const line of lines) {
+      if (/^>\s?/.test(line)) {
+        flushPlain();
+        quote.push(line.replace(/^>\s?/, ""));
+      } else {
+        flushQuote();
+        plain.push(line);
+      }
+    }
+    flushQuote();
+    flushPlain();
+  });
+  return blocks;
 }
 
 function formatRelative(iso: string | null | undefined): string {
