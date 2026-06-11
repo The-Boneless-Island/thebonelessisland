@@ -1,9 +1,9 @@
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
-import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
+import { memo, useEffect, useMemo, useState } from "react";
+import { IslandCard, IslandTag, islandInputStyle, memberColor } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { CrewOwnedGame, CrewOwner, PageId } from "../types.js";
 import GameDetailDrawer from "../components/GameDetailDrawer.js";
-import { coverUrl } from "../steamArt.js";
+import { GameCover } from "../steamArt.js";
 import { formatCents } from "../gameModes.js";
 
 type LibraryPageProps = {
@@ -34,42 +34,14 @@ function categoryFor(game: CrewOwnedGame): LibCategory {
   return "solo";
 }
 
-function pickArtFor(category: LibCategory): string {
-  switch (category) {
-    case "co-op":
-      return "🎯";
-    case "horror":
-      return "👻";
-    case "puzzle":
-      return "🧩";
-    case "party":
-      return "🎉";
-    default:
-      return "🎮";
-  }
-}
-
-function pickCoverFor(category: LibCategory): string {
-  switch (category) {
-    case "co-op":
-      return "linear-gradient(135deg,#1e3a8a,#0c4a6e)";
-    case "horror":
-      return "linear-gradient(135deg,#0f172a,#020617)";
-    case "puzzle":
-      return "linear-gradient(135deg,#365314,#1a2e05)";
-    case "party":
-      return "linear-gradient(135deg,#7c2d12,#1c1917)";
-    default:
-      return "linear-gradient(135deg,#312e81,#1e1b4b)";
-  }
-}
-
-function ownerColor(seed: string): string {
-  const palette = islandTheme.categorical.avatars;
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  return palette[Math.abs(hash) % palette.length];
-}
+// Shelf-edge accent per category (theme-static identity colors, like avatars).
+const CATEGORY_ACCENTS: Record<LibCategory, string> = {
+  "co-op": "#60a5fa",
+  horror: "#a855f7",
+  puzzle: "#4ade80",
+  party: "#fbbf77",
+  solo: "#94a3b8"
+};
 
 function ownerInitials(name: string): string {
   return (name || "??").trim().slice(0, 2).toUpperCase();
@@ -103,23 +75,6 @@ function capabilityPills(game: CrewOwnedGame): string[] {
     pills.push(`Up to ${game.mpMaxPlayersApprox}`);
   }
   return pills;
-}
-
-function tagLabel(game: CrewOwnedGame, category: LibCategory): string {
-  const firstTag = game.tags.find((tag) => tag.trim().length > 0);
-  if (firstTag) return firstTag.toLowerCase();
-  switch (category) {
-    case "co-op":
-      return "co-op";
-    case "horror":
-      return "horror co-op";
-    case "puzzle":
-      return "puzzle";
-    case "party":
-      return "party";
-    default:
-      return "solo";
-  }
 }
 
 const LIB_HASH_PREFIX = "#/library";
@@ -294,15 +249,16 @@ function LibraryPageImpl({ crewGames, currentDiscordUserId, onNavigate, onPlan }
         </span>
       </IslandCard>
 
-      <IslandCard style={{ padding: 0, overflow: "hidden" }}>
-        <HeaderRow />
-        {empty ? (
+      {empty ? (
+        <IslandCard>
           <div style={{ padding: 22, fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-            Crew library is empty so far. Sync a Steam account from Profile, then this list lights up.
+            Crew library is empty so far. Sync a Steam account from Profile, then this shelf lights up.
           </div>
-        ) : visible.length ? (
-          visible.map((entry) => (
-            <LibRow
+        </IslandCard>
+      ) : visible.length ? (
+        <div className="bi-poster-wall">
+          {visible.map((entry) => (
+            <PosterCard
               key={entry.game.appId}
               game={entry.game}
               category={entry.category}
@@ -310,55 +266,63 @@ function LibraryPageImpl({ crewGames, currentDiscordUserId, onNavigate, onPlan }
               onPlan={onPlan}
               onDetails={setOpenAppId}
             />
-          ))
-        ) : (
+          ))}
+        </div>
+      ) : (
+        <IslandCard>
           <div style={{ padding: 22, fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
             No games match your filter.
           </div>
-        )}
-      </IslandCard>
+        </IslandCard>
+      )}
 
       <GameDetailDrawer appId={openAppId} onClose={() => setOpenAppId(null)} />
+
+      <style>{`
+        .bi-poster-wall {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+          gap: ${islandTheme.space[4]}px;
+        }
+        @media (max-width: 540px) {
+          .bi-poster-wall {
+            grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+            gap: ${islandTheme.space[3]}px;
+          }
+        }
+        .bi-poster {
+          position: relative;
+          border-radius: ${islandTheme.radius.card}px;
+          overflow: hidden;
+          background: ${islandTheme.gradient.gameArtFallback};
+          box-shadow: ${islandTheme.shadow.cardIdle};
+          transition: transform ${islandTheme.motion.dur.fast} ${islandTheme.motion.ease.out},
+                      box-shadow ${islandTheme.motion.dur.fast} ${islandTheme.motion.ease.out};
+        }
+        .bi-poster:hover, .bi-poster:focus-within {
+          transform: translateY(-3px);
+          box-shadow: ${islandTheme.shadow.cardHover};
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .bi-poster, .bi-poster:hover, .bi-poster:focus-within { transform: none; }
+        }
+        .bi-poster-overlay {
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity ${islandTheme.motion.dur.fast} ease;
+        }
+        .bi-poster:hover .bi-poster-overlay, .bi-poster:focus-within .bi-poster-overlay {
+          opacity: 1;
+          pointer-events: auto;
+        }
+      `}</style>
     </div>
   );
 }
 
 export const LibraryPage = memo(LibraryPageImpl);
 
-const COLUMNS = "60px 1.4fr 1fr 80px minmax(140px, 1.1fr) auto";
-
-function HeaderRow() {
-  return (
-    <div
-      className="island-mono bi-lib-head"
-      style={{
-        display: "grid",
-        gridTemplateColumns: COLUMNS,
-        gap: 14,
-        padding: "10px 16px",
-        fontSize: 12,
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        color: islandTheme.color.textMuted,
-        borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
-        background: islandTheme.color.panelMutedBg
-      }}
-    >
-      <Cell />
-      <Cell>Title</Cell>
-      <Cell>Owners</Cell>
-      <Cell>Count</Cell>
-      <Cell>Modes</Cell>
-      <Cell />
-    </div>
-  );
-}
-
-function Cell({ children }: { children?: ReactNode }) {
-  return <div>{children}</div>;
-}
-
-function LibRow({
+function PosterCard({
   game,
   category,
   mine,
@@ -371,104 +335,117 @@ function LibRow({
   onPlan: (appId: number) => void;
   onDetails: (appId: number) => void;
 }) {
-  const coverSrc = coverUrl(game.appId, game.headerImageUrl);
-  const cover = coverSrc
-    ? { backgroundImage: `url("${coverSrc}")`, backgroundSize: "cover", backgroundPosition: "center" }
-    : { background: pickCoverFor(category) };
-  const art = coverSrc ? "" : pickArtFor(category);
+  const accent = CATEGORY_ACCENTS[category];
   const onSale = typeof game.priceDiscountPct === "number" && game.priceDiscountPct > 0;
+  const priceLine = game.isFree
+    ? "Free"
+    : typeof game.priceFinalCents === "number"
+      ? formatCents(game.priceFinalCents)
+      : null;
 
   return (
-    <div
-      className="bi-lib-row"
-      style={{
-        display: "grid",
-        gridTemplateColumns: COLUMNS,
-        gap: 14,
-        padding: "12px 16px",
-        alignItems: "center",
-        borderBottom: `1px solid ${islandTheme.color.cardBorder}`
-      }}
-    >
-      <div
+    <div className="bi-poster" style={{ borderBottom: `3px solid ${accent}` }}>
+      {/* Whole poster opens the detail drawer; PLAN floats in the hover overlay. */}
+      <button
+        type="button"
+        onClick={() => onDetails(game.appId)}
+        aria-label={`${game.name} — details`}
         style={{
-          width: 60,
-          height: 48,
-          borderRadius: 6,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 22,
-          color: islandTheme.color.textInverted,
-          ...cover
+          display: "block",
+          width: "100%",
+          aspectRatio: "2 / 3",
+          padding: 0,
+          border: "none",
+          background: "transparent",
+          cursor: "pointer",
+          font: "inherit"
         }}
       >
-        {art}
-      </div>
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>
-          {game.name}
-          {mine ? <IslandTag tone="primary" style={{ marginLeft: 6 }}>★ MINE</IslandTag> : null}
-          {game.releaseComingSoon ? (
-            <IslandTag color="#a78bfa" style={{ marginLeft: 6 }}>SOON</IslandTag>
-          ) : null}
-          {onSale ? (
-            <IslandTag tone="success" style={{ marginLeft: 6 }}>-{game.priceDiscountPct}%</IslandTag>
-          ) : null}
-        </div>
-        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
-          {tagLabel(game, category)}
-          {game.releaseDateText ? (
-            <span style={{ color: islandTheme.color.textMuted }}> · {game.releaseDateText}</span>
-          ) : null}
-          {!game.isFree && typeof game.priceFinalCents === "number" ? (
-            <span style={{ color: islandTheme.color.textSubtle }}> · {formatCents(game.priceFinalCents)}</span>
-          ) : null}
-          {game.isFree ? <span style={{ color: islandTheme.color.primaryGlow }}> · Free</span> : null}
-        </div>
-      </div>
-      <OwnerStack owners={game.owners} />
-      <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-        {game.ownerCount} own
-      </span>
-      <CapabilityPills game={game} />
-      <div style={{ display: "flex", gap: 6 }}>
-        <button
-          type="button"
-          onClick={() => onPlan(game.appId)}
-          className="island-btn island-mono"
+        {/* No storedUrl: it's wide 460x215 header art that would preempt the
+            tall capsule and crop badly. Chain = libraryTall → header → 🎮. */}
+        <GameCover
+          appId={game.appId}
+          variant="libraryTall"
+          alt={game.name}
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+        />
+      </button>
+
+      {/* Always-on caption strip: makes art-less games legible + search results scannable. */}
+      <div
+        style={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          padding: `${islandTheme.space[5]}px ${islandTheme.space[2]}px ${islandTheme.space[2]}px`,
+          background: "linear-gradient(180deg, transparent, rgba(2,6,23,0.88))",
+          pointerEvents: "none"
+        }}
+      >
+        <div
           style={{
-            background: islandTheme.color.primary,
-            border: `1px solid ${islandTheme.color.primary}`,
-            color: islandTheme.color.primaryText,
-            padding: "5px 10px",
-            borderRadius: 999,
-            fontSize: 12,
-            fontWeight: 800,
-            cursor: "pointer",
-            font: "inherit"
-          }}
-        >
-          PLAN
-        </button>
-        <button
-          type="button"
-          onClick={() => onDetails(game.appId)}
-          className="island-btn island-mono"
-          style={{
-            background: "transparent",
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            color: islandTheme.color.textSubtle,
-            padding: "5px 10px",
-            borderRadius: 999,
-            fontSize: 12,
+            fontSize: islandTheme.text.md,
             fontWeight: 700,
-            cursor: "pointer",
-            font: "inherit"
+            color: "#f8fafc",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            textShadow: "0 1px 3px rgba(0,0,0,0.6)"
           }}
         >
-          DETAILS
-        </button>
+          {game.name}
+        </div>
+        <div className="island-mono" style={{ fontSize: islandTheme.text.sm, color: "#cbd5e1", marginTop: 1 }}>
+          {game.ownerCount} own{priceLine ? ` · ${priceLine}` : ""}
+        </div>
+      </div>
+
+      {/* Corner badges */}
+      <div style={{ position: "absolute", top: 6, left: 6, right: 6, display: "flex", gap: 4, flexWrap: "wrap", pointerEvents: "none" }}>
+        {mine ? <IslandTag tone="primary">★ MINE</IslandTag> : null}
+        {game.releaseComingSoon ? <IslandTag color="#a78bfa">SOON</IslandTag> : null}
+        {onSale ? <IslandTag tone="success">-{game.priceDiscountPct}%</IslandTag> : null}
+      </div>
+
+      {/* Hover/focus overlay: modes + owners + plan */}
+      <div
+        className="bi-poster-overlay"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "flex-end",
+          gap: islandTheme.space[2],
+          padding: islandTheme.space[3],
+          paddingBottom: 54,
+          background: "linear-gradient(180deg, rgba(2,6,23,0.25), rgba(2,6,23,0.78) 70%)"
+        }}
+      >
+        <CapabilityPills game={game} />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: islandTheme.space[2] }}>
+          <OwnerStack owners={game.owners} />
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onPlan(game.appId); }}
+            className="island-btn island-mono"
+            style={{
+              background: islandTheme.color.primary,
+              border: `1px solid ${islandTheme.color.primary}`,
+              color: islandTheme.color.primaryText,
+              padding: "5px 12px",
+              borderRadius: 999,
+              fontSize: islandTheme.text.sm,
+              fontWeight: 800,
+              cursor: "pointer",
+              font: "inherit",
+              flexShrink: 0
+            }}
+          >
+            PLAN
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -555,7 +532,7 @@ function OwnerBadge({ owner }: { owner: CrewOwner }) {
       title={owner.displayName}
       style={{
         ...ringStyle,
-        background: ownerColor(owner.discordUserId || owner.displayName),
+        background: memberColor(owner.discordUserId || owner.displayName),
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
