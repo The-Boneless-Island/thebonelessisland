@@ -74,6 +74,25 @@ function getResetDateString(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: RESET_TZ });
 }
 
+/**
+ * Whether the user already claimed their daily in the current reset window.
+ * Queries the latest 'daily' transaction directly instead of scanning a
+ * recent-transactions page — a busy casino day pushes the claim past any
+ * LIMIT and the claim button would wrongly reappear.
+ */
+export async function hasClaimedDailyToday(userId: bigint): Promise<boolean> {
+  const lastClaim = await db.query<{ created_at: string }>(
+    `SELECT created_at FROM nuggies_transactions
+     WHERE user_id = $1 AND type = 'daily'
+     ORDER BY created_at DESC LIMIT 1`,
+    [userId]
+  );
+  if (!lastClaim.rows[0]) return false;
+  const lastKey = new Date(lastClaim.rows[0].created_at)
+    .toLocaleDateString("en-CA", { timeZone: RESET_TZ });
+  return lastKey === getResetDateString();
+}
+
 function getSetting(key: string, fallback: number): number {
   const raw = getAISetting(key);
   if (!raw) return fallback;
@@ -199,7 +218,6 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
   await ensureSettingsLoaded();
 
   const userId = await resolveUserId(discordUserId);
-  const todayKey = getResetDateString();
 
   // Check opted out
   const userRow = await db.query<{ nuggies_opted_out: boolean }>(
@@ -209,17 +227,7 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
   if (userRow.rows[0]?.nuggies_opted_out) throw new OptedOutError();
 
   // Check if already claimed in current reset window
-  const lastClaim = await db.query<{ created_at: string }>(
-    `SELECT created_at FROM nuggies_transactions
-     WHERE user_id = $1 AND type = 'daily'
-     ORDER BY created_at DESC LIMIT 1`,
-    [userId]
-  );
-  if (lastClaim.rows.length > 0) {
-    const lastKey = new Date(lastClaim.rows[0].created_at)
-      .toLocaleDateString("en-CA", { timeZone: RESET_TZ });
-    if (lastKey === todayKey) throw new AlreadyClaimedError();
-  }
+  if (await hasClaimedDailyToday(userId)) throw new AlreadyClaimedError();
 
   const amount = getSetting("nuggies_daily_amount", 75);
   const { newBalance } = await applyTransaction({

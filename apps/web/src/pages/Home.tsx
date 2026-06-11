@@ -6,6 +6,7 @@ import { IslandCard, IslandEmptyState, IslandTag, islandInputStyle } from "../is
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { islandTheme } from "../theme.js";
+import { GameCover } from "../steamArt.js";
 import { useRefetchActivity } from "../system/activityContext.js";
 import type {
   ActivityCategory,
@@ -374,20 +375,23 @@ function CrewTrending({ onNavigate }: { onNavigate: (page: PageId) => void }) {
             Reading the tide charts…
           </div>
         ) : (
-          (games ?? []).map((game) => <TrendingRow key={game.appId} game={game} />)
+          (games ?? []).map((game, i) => <TrendingRow key={game.appId} game={game} rank={i + 1} />)
         )}
       </IslandCard>
     </section>
   );
 }
 
-function TrendingRow({ game }: { game: TrendingGame }) {
+const TRENDING_RANK_COLORS = ["#fbbf77", "#cbd5e1", "#d4956a"];
+
+function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
   const hours = (game.totalMinutes2Weeks / 60).toFixed(1);
+  const leaderHours = game.topPlayer ? Math.round(game.topPlayer.minutes / 60) : 0;
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "92px minmax(0, 1fr) auto",
+        gridTemplateColumns: "18px 92px minmax(0, 1fr) auto",
         gap: 12,
         alignItems: "center",
         padding: "8px 10px",
@@ -396,15 +400,28 @@ function TrendingRow({ game }: { game: TrendingGame }) {
         border: `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
-      <div
+      <span
+        className="island-display"
         aria-hidden="true"
+        style={{
+          fontSize: 15,
+          fontWeight: 800,
+          textAlign: "center",
+          color: TRENDING_RANK_COLORS[rank - 1] ?? islandTheme.color.textMuted
+        }}
+      >
+        {rank}
+      </span>
+      {/* GameCover walks stored URL → Steam CDN header → 🎮 placeholder, so the
+          row never renders an empty box when enrichment hasn't run yet. */}
+      <GameCover
+        appId={game.appId}
+        storedUrl={game.headerImageUrl}
+        alt={game.name}
         style={{
           width: 92,
           height: 43,
           borderRadius: 8,
-          background: game.headerImageUrl
-            ? `center / cover no-repeat url(${JSON.stringify(game.headerImageUrl)})`
-            : islandTheme.color.panelBg,
           border: `1px solid ${islandTheme.color.cardBorder}`
         }}
       />
@@ -423,6 +440,7 @@ function TrendingRow({ game }: { game: TrendingGame }) {
             }}
           >
             led by {game.topPlayer.displayName}
+            {leaderHours > 0 ? ` · ${leaderHours}h logged` : ""}
           </div>
         ) : null}
       </div>
@@ -555,8 +573,15 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
     let cancelled = false;
     void apiFetch("/nuggies/me").then(async (r) => {
       if (!r.ok || cancelled) return;
-      const d = (await r.json()) as { transactions?: DailyTx[] };
-      if (!cancelled) setClaimedToday(isClaimedToday(d.transactions ?? []));
+      const d = (await r.json()) as { claimedToday?: boolean; transactions?: DailyTx[] };
+      // Server-side flag is authoritative — the transactions list is capped at
+      // 20 rows, so a busy casino day pushes the daily claim off the page and
+      // the legacy scan would wrongly re-show the button.
+      if (!cancelled) {
+        setClaimedToday(
+          typeof d.claimedToday === "boolean" ? d.claimedToday : isClaimedToday(d.transactions ?? [])
+        );
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [optedOut]);

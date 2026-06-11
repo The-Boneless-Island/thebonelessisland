@@ -15,6 +15,7 @@ import {
   getEquippedItems,
   getRecentTransactions,
   getEquippedItemsByUserId,
+  hasClaimedDailyToday,
 } from "../lib/nuggiesLedger.js";
 import { checkBankRun, checkGameNightAttendance, checkNerfed } from "../lib/nuggiesAchievements.js";
 
@@ -53,7 +54,7 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
   // "nuggies_daily_amount") so the claim button label matches the payout.
   const dailyAmount = getSetting("nuggies_daily_amount", 75);
 
-  const [balRow, optRow, txRows, invRows, loanRows, lifetimeRow] = await Promise.all([
+  const [balRow, optRow, txRows, invRows, loanRows, lifetimeRow, claimedToday] = await Promise.all([
     db.query<{ balance: string }>(
       "SELECT balance FROM nuggies_balances WHERE user_id = $1",
       [userId]
@@ -90,12 +91,14 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
        WHERE user_id = $1 AND amount > 0`,
       [userId]
     ),
+    hasClaimedDailyToday(userId),
   ]);
 
   res.json({
     balance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
     lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
     dailyAmount,
+    claimedToday,
     optedOut: optRow.rows[0]?.nuggies_opted_out ?? false,
     transactions: txRows.rows.map((r) => ({
       id: parseInt(r.id, 10),

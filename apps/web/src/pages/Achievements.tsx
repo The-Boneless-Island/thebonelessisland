@@ -97,9 +97,13 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
       apiFetch("/nuggies/leaderboard"),
     ]);
     if (meRes.ok) {
-      const d = await meRes.json() as MeData;
+      const d = await meRes.json() as MeData & { claimedToday?: boolean };
       setMe(d);
-      setClaimedToday(hasDailyToday(d.transactions));
+      // Server flag is authoritative; the 20-row transactions page can scroll
+      // the daily claim out of view and falsely re-arm the button.
+      setClaimedToday(
+        typeof d.claimedToday === "boolean" ? d.claimedToday : hasDailyToday(d.transactions)
+      );
     }
     if (shopRes.ok) {
       const d = await shopRes.json() as { items: NuggiesShopItem[] };
