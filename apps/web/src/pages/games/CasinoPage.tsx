@@ -3,6 +3,7 @@ import { IslandCard, IslandTag, islandTagStyle } from "../../islandUi.js";
 import { NuggieCoin } from "../../components/NuggieCoin.js";
 import { islandTheme } from "../../theme.js";
 import { apiFetch } from "../../api/client.js";
+import { useNuggiesSignal } from "../../system/nuggiesSignal.js";
 import { getActiveGameSession, type GameStateResponse } from "../../api/games.js";
 import { CoinflipGame } from "./CoinflipGame.js";
 import { GuessNumberGame } from "./GuessNumberGame.js";
@@ -84,6 +85,23 @@ export function CasinoPage() {
       cancelled = true;
     };
   }, []);
+
+  // Live balance: refetch when the SSE bus reports this member's Nuggies changed
+  // (e.g. a blackjack hand played on the Discord bot while the arcade is open).
+  const nuggiesSignal = useNuggiesSignal();
+  useEffect(() => {
+    if (nuggiesSignal === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const meRes = await apiFetch("/nuggies/me");
+      if (cancelled || !meRes.ok) return;
+      const me = (await meRes.json()) as { balance?: number };
+      setBalance(me.balance ?? 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [nuggiesSignal]);
 
   // Pull max-bet config from server-settings via the public catalog (best
   // effort — fall back to default).
