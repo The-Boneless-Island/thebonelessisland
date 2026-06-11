@@ -40,12 +40,16 @@ export function SettingCard({ setting, meta, onSave, aiProvider }: SettingCardPr
   const confirmRequired = isHighRisk && !!meta.confirmPhrase;
   const confirmOk = !confirmRequired || confirmText.trim() === meta.confirmPhrase;
   const canSave = isDirty && confirmOk;
+  // Low-risk toggles and selects save the moment an option is clicked — no
+  // separate Save button. High-risk ones keep the explicit confirm+save flow.
+  const instantSave = !isHighRisk && (meta.type === "boolean" || meta.type === "select");
 
-  async function handleSave() {
+  async function handleSave(valueOverride?: string) {
     const previous = setting.value;
+    const next = valueOverride ?? draft;
     setError(null);
     try {
-      await onSave(setting.key, draft);
+      await onSave(setting.key, next);
       setSaved(true);
       if (savedTimer.current) clearTimeout(savedTimer.current);
       savedTimer.current = setTimeout(() => setSaved(false), 2200);
@@ -134,7 +138,15 @@ export function SettingCard({ setting, meta, onSave, aiProvider }: SettingCardPr
         meta={meta}
         setting={setting}
         draft={draft}
-        onChange={setDraft}
+        onChange={
+          instantSave
+            ? (v) => {
+                if (v === setting.value) return;
+                setDraft(v);
+                void handleSave(v);
+              }
+            : setDraft
+        }
         aiProvider={aiProvider}
       />
 
@@ -155,26 +167,39 @@ export function SettingCard({ setting, meta, onSave, aiProvider }: SettingCardPr
       )}
 
       {/* Save row + error */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <IslandButton
-          variant={saved ? "secondary" : "primary"}
-          disabled={!canSave}
-          onClick={() => void handleSave()}
-          style={{ minWidth: 90 }}
-        >
-          {saved ? "✓ Saved" : "Save"}
-        </IslandButton>
-        {error && (
-          <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
-            {error}
+      {instantSave ? (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+            {saved ? "✓ Saved" : "Saves immediately when you pick an option."}
           </span>
-        )}
-        {isDirty && !saved && (
-          <span style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-            Unsaved changes
-          </span>
-        )}
-      </div>
+          {error && (
+            <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
+              {error}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <IslandButton
+            variant={saved ? "secondary" : "primary"}
+            disabled={!canSave}
+            onClick={() => void handleSave()}
+            style={{ minWidth: 90 }}
+          >
+            {saved ? "✓ Saved" : "Save"}
+          </IslandButton>
+          {error && (
+            <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
+              {error}
+            </span>
+          )}
+          {isDirty && !saved && (
+            <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+              Unsaved changes
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Undo banner */}
       {undoFrom && (

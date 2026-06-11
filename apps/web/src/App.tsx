@@ -89,7 +89,11 @@ export function App() {
   const lastGuildMembersRef = useRef<string | null>(null);
   const lastGameNightsRef = useRef<string | null>(null);
   const lastSelectedNightRef = useRef<string | null>(null);
-  const [page, setPage] = useState<PageId>("home");
+  // Deep links into the admin area use the URL hash (#/admin/<page>); landing
+  // on one starts the session on the admin page instead of home.
+  const [page, setPage] = useState<PageId>(() =>
+    typeof window !== "undefined" && window.location.hash.startsWith("#/admin") ? "admin" : "home"
+  );
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [composerScrollNonce, setComposerScrollNonce] = useState(0);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
@@ -105,8 +109,6 @@ export function App() {
   const [currentUserAttendingSelectedNight, setCurrentUserAttendingSelectedNight] = useState(false);
   const [guildMembers, setGuildMembers] = useState<GuildMember[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
-  const [newsKeywords, setNewsKeywords] = useState("co-op, survival, strategy");
-  const [newsSources, setNewsSources] = useState("Steam News, PC Gamer, IGN");
   const [profileSteamVisibility, setProfileSteamVisibility] = useState<"private" | "members" | "public">("members");
   const [profileFeatureOptIn, setProfileFeatureOptIn] = useState(true);
   const [ownedGames, setOwnedGames] = useState<OwnedGameLite[]>([]);
@@ -442,10 +444,12 @@ export function App() {
   }, [isAuthenticated, page, selectedMemberIds]);
 
   useEffect(() => {
-    if (!isAdmin && page === "admin") {
+    // Wait for the profile before bouncing — otherwise an admin deep link
+    // gets redirected home during the auth bootstrap.
+    if (profileData && !isAdmin && page === "admin") {
       setPage("home");
     }
-  }, [isAdmin, page]);
+  }, [profileData, isAdmin, page]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -1522,10 +1526,6 @@ export function App() {
       (member.presenceStatus !== null && member.presenceStatus !== "offline")
   );
 
-  function saveNewsControlsPlaceholder() {
-    setStatus("Saved placeholder news curation settings (UI only for now)");
-  }
-
   // On real login (false → true), run 780ms palm-exit animation.
   // Skip on refresh (null → true) so already-authed sessions don't flash splash.
   useEffect(() => {
@@ -1738,11 +1738,6 @@ export function App() {
           selectedMemberCount={selectedMemberIds.length}
           recommendations={results}
           onRunRecommendation={runRecommendation}
-          newsKeywords={newsKeywords}
-          onNewsKeywordsChange={setNewsKeywords}
-          newsSources={newsSources}
-          onNewsSourcesChange={setNewsSources}
-          onSaveNewsControls={saveNewsControlsPlaceholder}
           profileJson={profileJson}
           newsCards={newsCards}
           onCreateNewsCard={createNewsCard}
