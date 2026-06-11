@@ -104,9 +104,9 @@ const ALLOWED_PLATFORMS = new Set([
 /** Fetch lowercased set of all crew game + studio names for Crew Pick tag validation. */
 async function getCrewEntityNames(): Promise<Set<string>> {
   const result = await db.query<{ name: string }>(
-    `SELECT DISTINCT LOWER(g.name) AS name FROM user_games ug INNER JOIN games g ON g.app_id = ug.app_id
+    `SELECT DISTINCT LOWER(g.name) AS name FROM shareable_user_games ug INNER JOIN games g ON g.app_id = ug.app_id
      UNION
-     SELECT DISTINCT LOWER(d) AS name FROM user_games ug
+     SELECT DISTINCT LOWER(d) AS name FROM shareable_user_games ug
      INNER JOIN games g ON g.app_id = ug.app_id,
      UNNEST(g.developers) AS d`
   );
@@ -158,7 +158,7 @@ async function getCrewGameTags(): Promise<string[]> {
   const result = await db.query<{ tag: string }>(
     `
       SELECT LOWER(TRIM(t)) AS tag, COUNT(DISTINCT ug.user_id) AS owners
-      FROM user_games ug
+      FROM shareable_user_games ug
       INNER JOIN games g ON g.app_id = ug.app_id,
       UNNEST(g.tags) AS t
       GROUP BY LOWER(TRIM(t))
@@ -175,7 +175,7 @@ async function getCrewGameNames(): Promise<string[]> {
   const result = await db.query<{ name: string }>(
     `
       SELECT DISTINCT LOWER(g.name) AS name
-      FROM user_games ug
+      FROM shareable_user_games ug
       INNER JOIN games g ON g.app_id = ug.app_id
     `
   );
@@ -602,7 +602,7 @@ async function buildCrewContext(): Promise<string> {
   const [recent, topOwned, tagFeedback, crewEntities] = await Promise.all([
     db.query<{ game_name: string; playtime_2weeks: number }>(
       `SELECT g.name AS game_name, SUM(ug.playtime_2weeks)::int AS playtime_2weeks
-       FROM user_games ug
+       FROM shareable_user_games ug
        INNER JOIN games g ON g.app_id = ug.app_id
        WHERE ug.playtime_2weeks > 0
        GROUP BY g.name
@@ -611,7 +611,7 @@ async function buildCrewContext(): Promise<string> {
     ),
     db.query<{ game_name: string; owners: number; tags: string[] }>(
       `SELECT g.name AS game_name, COUNT(DISTINCT ug.user_id)::int AS owners, g.tags
-       FROM user_games ug
+       FROM shareable_user_games ug
        INNER JOIN games g ON g.app_id = ug.app_id
        GROUP BY g.name, g.tags
        ORDER BY owners DESC
@@ -630,7 +630,7 @@ async function buildCrewContext(): Promise<string> {
     ),
     db.query<{ name: string; developers: string[] }>(
       `SELECT g.name, g.developers
-       FROM user_games ug
+       FROM shareable_user_games ug
        INNER JOIN games g ON g.app_id = ug.app_id
        GROUP BY g.name, g.developers
        ORDER BY COUNT(DISTINCT ug.user_id) DESC, SUM(ug.playtime_minutes) DESC

@@ -37,7 +37,7 @@ async function buildCrewContext(discordUserId: string): Promise<string> {
     db.query<{ name: string; owners: number }>(
       `SELECT g.name, COUNT(DISTINCT u.id)::int AS owners
        FROM games g
-       INNER JOIN user_games ug ON ug.app_id = g.app_id
+       INNER JOIN shareable_user_games ug ON ug.app_id = g.app_id
        INNER JOIN users u ON u.id = ug.user_id
        INNER JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id
          AND gm.guild_id = $1 AND gm.in_guild = TRUE
@@ -52,7 +52,7 @@ async function buildCrewContext(discordUserId: string): Promise<string> {
          COALESCE(gm.display_name, gm.username) AS display_name,
          g.name AS game_name,
          ug.playtime_2weeks
-       FROM user_games ug
+       FROM shareable_user_games ug
        INNER JOIN games g ON g.app_id = ug.app_id
        INNER JOIN users u ON u.id = ug.user_id
        INNER JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id

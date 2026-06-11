@@ -46,8 +46,7 @@ function isMultiplayerCapable(row: GameRow): boolean {
 //   - group request: single-player-only games are a poor fit (low groupFit);
 //     multiplayer-capable games fit well; if a known mp_max_players_approx is
 //     smaller than the group, groupFit is reduced.
-function scoreGame(row: GameRow, input: RecommendationInput): RecommendedGame {
-  const groupSize = input.memberIds.length;
+function scoreGame(row: GameRow, groupSize: number): RecommendedGame {
   const ownershipCoverage = row.owners / groupSize;
 
   let groupFit: number;
@@ -75,6 +74,24 @@ function scoreGame(row: GameRow, input: RecommendationInput): RecommendedGame {
 }
 
 export async function whatCanWePlay(input: RecommendationInput): Promise<RecommendedGame[]> {
+  // Privacy: members with a private library are ignored entirely — they neither
+  // contribute games nor count toward the group size. Resolve the eligible
+  // (non-private) participants first; the effective group size drives both the
+  // ownership-coverage math and the near-miss threshold. If nobody in the
+  // session shares a library, there is nothing to recommend.
+  const eligible = await db.query<{ discord_user_id: string }>(
+    `
+      SELECT discord_user_id
+      FROM users
+      WHERE discord_user_id = ANY($1::text[])
+        AND steam_visibility <> 'private'
+    `,
+    [input.memberIds]
+  );
+  const eligibleIds = eligible.rows.map((r) => r.discord_user_id);
+  if (eligibleIds.length === 0) return [];
+  const groupSize = eligibleIds.length;
+
   const result = await db.query<GameRow>(
     `
       SELECT
@@ -89,7 +106,7 @@ export async function whatCanWePlay(input: RecommendationInput): Promise<Recomme
         g.mp_max_players_approx,
         g.tags,
         COUNT(*)::int AS owners
-      FROM user_games ug
+      FROM shareable_user_games ug
       INNER JOIN games g ON g.app_id = ug.app_id
       INNER JOIN users u ON u.id = ug.user_id
       WHERE u.discord_user_id = ANY($1::text[])
@@ -100,7 +117,7 @@ export async function whatCanWePlay(input: RecommendationInput): Promise<Recomme
       ORDER BY owners DESC, g.name ASC
       LIMIT 20
     `,
-    [input.memberIds, input.memberIds.length]
+    [eligibleIds, groupSize]
   );
-  return result.rows.map((row) => scoreGame(row, input)).sort((a, b) => b.score - a.score);
+  return result.rows.map((row) => scoreGame(row, groupSize)).sort((a, b) => b.score - a.score);
 }

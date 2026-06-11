@@ -30,7 +30,7 @@ async function resolveScopeAppIds(discordUserId: string): Promise<{
       ),
       crew_owned AS (
         SELECT ug.app_id
-        FROM user_games ug
+        FROM shareable_user_games ug
         INNER JOIN users u ON u.id = ug.user_id
         INNER JOIN guild_members gm
           ON gm.discord_user_id = u.discord_user_id
@@ -40,7 +40,7 @@ async function resolveScopeAppIds(discordUserId: string): Promise<{
       ),
       crew_wishlist AS (
         SELECT uw.app_id
-        FROM user_wishlists uw
+        FROM shareable_user_wishlists uw
         INNER JOIN users u ON u.id = uw.user_id
         INNER JOIN guild_members gm
           ON gm.discord_user_id = u.discord_user_id
@@ -56,7 +56,7 @@ async function resolveScopeAppIds(discordUserId: string): Promise<{
       ),
       crew_owner_counts AS (
         SELECT ug.app_id, COUNT(DISTINCT u.id)::int AS owners
-        FROM user_games ug
+        FROM shareable_user_games ug
         INNER JOIN users u ON u.id = ug.user_id
         INNER JOIN guild_members gm
           ON gm.discord_user_id = u.discord_user_id
@@ -98,7 +98,7 @@ async function resolveScopeAppIds(discordUserId: string): Promise<{
     `
       WITH owner_counts AS (
         SELECT ug.app_id, COUNT(DISTINCT u.id)::int AS owners
-        FROM user_games ug
+        FROM shareable_user_games ug
         INNER JOIN users u ON u.id = ug.user_id
         INNER JOIN guild_members gm
           ON gm.discord_user_id = u.discord_user_id

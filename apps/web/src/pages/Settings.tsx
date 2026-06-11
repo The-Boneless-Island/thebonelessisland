@@ -176,16 +176,19 @@ export function SettingsPage({
         <h3 style={{ marginTop: 0, marginBottom: 8 }}>Privacy &amp; Library</h3>
         <p style={{ marginTop: 0, marginBottom: 8 }}>Steam library visibility</p>
         <select
-          value={steamVisibility}
+          value={steamVisibility === "public" ? "members" : steamVisibility}
           onChange={(event) => onSteamVisibilityChange(event.target.value as SteamVisibility)}
           style={{ ...islandInputStyle, width: "100%" }}
         >
-          <option value="private">Private (only you)</option>
-          <option value="members">Members only</option>
-          <option value="public">Public</option>
+          <option value="members">Crew-shared — visible to the crew</option>
+          <option value="private">Private — only you</option>
         </select>
+        <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12, opacity: 0.82 }}>
+          Crew-shared lets your library, playtime, and achievements appear in crew features
+          (what-can-we-play, round-ups, trending). Private hides all of it from everyone but you.
+        </p>
 
-        <p style={{ marginTop: 12, marginBottom: 8 }}>Exclude owned games from public visibility</p>
+        <p style={{ marginTop: 12, marginBottom: 8 }}>Hide individual games from the crew</p>
         <input
           value={ownedGameSearch}
           onChange={(event) => onOwnedGameSearchChange(event.target.value)}
@@ -193,7 +196,7 @@ export function SettingsPage({
           style={{ ...islandInputStyle, width: "100%" }}
         />
         <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12, opacity: 0.82 }}>
-          Library visibility and game list update automatically while you're online.
+          Checked games are hidden from every crew feature — including their achievements. Saved instantly.
         </p>
         {profileData?.steamId64 ? (
           <div

@@ -27,6 +27,20 @@ export type Recommendation = {
   blurb?: string;
 };
 
+export type GameModeFlags = {
+  isSinglePlayer: boolean;
+  isOnlineCoop: boolean;
+  isLanCoop: boolean;
+  isSharedSplitCoop: boolean;
+  isOnlinePvp: boolean;
+  isMmo: boolean;
+};
+
+export type GameNightAttendeeAvatar = {
+  displayName: string;
+  avatarUrl: string | null;
+};
+
 export type GameNight = {
   id: number;
   title: string;
@@ -34,9 +48,12 @@ export type GameNight = {
   createdByUserId: number;
   selectedGameName: string | null;
   selectedAppId: number | null;
+  selectedGameImage: string | null;
+  selectedGameModes: GameModeFlags | null;
   selectedAt: string | null;
   attendeeCount: number;
   currentUserAttending: boolean;
+  attendees: GameNightAttendeeAvatar[];
 };
 
 export type GameNightAttendee = {
@@ -53,8 +70,21 @@ export type GuildMember = {
   avatarUrl: string | null;
   roleNames: string[];
   inVoice: boolean;
+  voiceChannelId?: string | null;
   richPresenceText: string | null;
+  activityName?: string | null;
+  activityType?: number | null;
   presenceStatus: PresenceStatus | null;
+};
+
+export type SteamSummary = {
+  personaName: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  personaState: number | null;
+  inGame: string | null;
+  level: number | null;
+  accountCreated: string | null;
 };
 
 export type MeProfile = {
@@ -63,9 +93,17 @@ export type MeProfile = {
   featureOptIn: boolean;
   username: string;
   displayName: string;
+  globalName: string | null;
   avatarUrl: string | null;
+  bannerUrl: string | null;
+  accentColor: number | null;
+  premiumType: number | null;
+  profileBlurb: string | null;
+  joinedAtGuild: string | null;
+  premiumSince: string | null;
   steamId64: string | null;
   steamLastSyncedAt: string | null;
+  steam: SteamSummary | null;
   roleNames: string[];
   inVoice: boolean;
   richPresenceText: string;
@@ -98,6 +136,11 @@ export type CrewOwnedGame = {
   mpMaxPlayersApprox: number | null;
   maxPlayers: number | null;
   medianSessionMinutes: number | null;
+  priceFinalCents: number | null;
+  priceDiscountPct: number | null;
+  isFree: boolean;
+  releaseComingSoon: boolean;
+  releaseDateText: string | null;
   developers: string[];
   tags: string[];
   headerImageUrl: string | null;

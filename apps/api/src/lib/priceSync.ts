@@ -114,6 +114,11 @@ export async function syncWishlistPrices(): Promise<{ checked: number; updated: 
               price_final_cents = $4,
               price_discount_pct = $5,
               is_free = $6,
+              historical_low_cents = CASE
+                WHEN $4::integer IS NOT NULL AND $4::integer > 0
+                  THEN LEAST(COALESCE(historical_low_cents, $4::integer), $4::integer)
+                ELSE historical_low_cents
+              END,
               price_checked_at = NOW()
           WHERE app_id = $1
         `,

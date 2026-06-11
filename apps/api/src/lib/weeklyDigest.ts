@@ -113,7 +113,7 @@ export async function buildAndStoreWeeklyDigest(): Promise<DigestPayload> {
         g.name,
         g.header_image_url,
         SUM(ug.playtime_2weeks)::int AS crew_minutes_2weeks
-      FROM user_games ug
+      FROM shareable_user_games ug
       INNER JOIN games g ON g.app_id = ug.app_id
       WHERE ug.playtime_2weeks > 0
       GROUP BY ug.app_id, g.name, g.header_image_url
@@ -136,7 +136,7 @@ export async function buildAndStoreWeeklyDigest(): Promise<DigestPayload> {
         g.name,
         g.header_image_url,
         COUNT(DISTINCT uw.user_id)::int AS wishlisters
-      FROM user_wishlists uw
+      FROM shareable_user_wishlists uw
       INNER JOIN games g ON g.app_id = uw.app_id
       GROUP BY uw.app_id, g.name, g.header_image_url
       ORDER BY wishlisters DESC, uw.app_id ASC

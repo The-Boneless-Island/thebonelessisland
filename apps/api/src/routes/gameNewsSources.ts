@@ -104,7 +104,7 @@ gameNewsSourcesRouter.get("/candidates", async (_req, res) => {
     `
       WITH owner_counts AS (
         SELECT ug.app_id, COUNT(DISTINCT u.id)::int AS owners
-        FROM user_games ug
+        FROM shareable_user_games ug
         INNER JOIN users u ON u.id = ug.user_id
         INNER JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id AND gm.guild_id = $1 AND gm.in_guild = TRUE
         GROUP BY ug.app_id

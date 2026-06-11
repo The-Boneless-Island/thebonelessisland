@@ -19,8 +19,26 @@ const tokenResponseSchema = z.object({
 const discordUserSchema = z.object({
   id: z.string().min(1),
   username: z.string().min(1),
-  avatar: z.string().nullable()
+  avatar: z.string().nullable(),
+  global_name: z.string().nullable().optional(),
+  banner: z.string().nullable().optional(),
+  accent_color: z.number().nullable().optional(),
+  premium_type: z.number().nullable().optional()
 });
+
+// Discord CDN: animated avatars/banners use an `a_` hash prefix and are served
+// as .gif; everything else as .png. Always request an explicit size.
+function discordAvatarUrl(userId: string, hash: string | null): string | null {
+  if (!hash) return null;
+  const ext = hash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/avatars/${userId}/${hash}.${ext}?size=256`;
+}
+
+function discordBannerUrl(userId: string, hash: string | null | undefined): string | null {
+  if (!hash) return null;
+  const ext = hash.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/banners/${userId}/${hash}.${ext}?size=600`;
+}
 
 authRouter.get("/discord/login", (req, res) => {
   const state = randomBytes(16).toString("hex");
@@ -113,12 +131,27 @@ authRouter.get("/discord/callback", async (req, res) => {
 
     await db.query(
       `
-        INSERT INTO discord_profiles (user_id, username, avatar_url)
-        VALUES ($1, $2, $3)
+        INSERT INTO discord_profiles
+          (user_id, username, avatar_url, global_name, banner_url, accent_color, premium_type)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (user_id)
-        DO UPDATE SET username = EXCLUDED.username, avatar_url = EXCLUDED.avatar_url
+        DO UPDATE SET
+          username = EXCLUDED.username,
+          avatar_url = EXCLUDED.avatar_url,
+          global_name = EXCLUDED.global_name,
+          banner_url = EXCLUDED.banner_url,
+          accent_color = EXCLUDED.accent_color,
+          premium_type = EXCLUDED.premium_type
       `,
-      [userId, me.username, me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png` : null]
+      [
+        userId,
+        me.username,
+        discordAvatarUrl(me.id, me.avatar),
+        me.global_name ?? null,
+        discordBannerUrl(me.id, me.banner),
+        me.accent_color ?? null,
+        me.premium_type ?? null
+      ]
     );
 
     req.session!.userId = me.id;

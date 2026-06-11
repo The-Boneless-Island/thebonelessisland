@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
 import { IslandTag } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
+import { GameCover } from "../steamArt.js";
 
 type GameStore = {
   isSinglePlayer: boolean;
@@ -11,10 +12,28 @@ type GameStore = {
   isOnlinePvp: boolean;
   isMmo: boolean;
   mpMaxPlayersApprox: number | null;
+  priceInitialCents: number | null;
   priceFinalCents: number | null;
   priceDiscountPct: number | null;
   isFree: boolean;
+  releaseComingSoon: boolean;
   releaseDateText: string | null;
+  shortDescription: string | null;
+  screenshots: Array<{ thumb: string; full: string }>;
+  metacriticScore: number | null;
+  metacriticUrl: string | null;
+  platformWindows: boolean | null;
+  platformMac: boolean | null;
+  platformLinux: boolean | null;
+  controllerSupport: string | null;
+  historicalLowCents: number | null;
+};
+
+type CatalogueAchievement = {
+  displayName: string | null;
+  description: string | null;
+  iconUrl: string | null;
+  globalUnlockPct: number | null;
 };
 
 type GameOwner = {
@@ -43,6 +62,7 @@ type GameDetail = {
   name: string;
   headerImageUrl: string | null;
   store: GameStore;
+  achievementCatalogue: CatalogueAchievement[];
   owners: GameOwner[];
   achievements: GameAchievement[];
   news: GameNews[];
@@ -75,6 +95,12 @@ function formatNewsDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function metacriticColor(score: number): string {
+  if (score >= 75) return "#a3e635"; // green
+  if (score >= 50) return "#fde047"; // yellow
+  return "#fb7185"; // red
 }
 
 function memberColor(seed: string): string {
@@ -241,24 +267,18 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
           </div>
         ) : (
           <>
-            <div
+            <GameCover
+              appId={detail.appId}
+              storedUrl={detail.headerImageUrl}
+              variant="hero"
+              alt={detail.name}
               style={{
                 width: "100%",
                 aspectRatio: "460 / 215",
                 borderRadius: 10,
-                border: `1px solid ${islandTheme.color.cardBorder}`,
-                background: detail.headerImageUrl
-                  ? `url("${detail.headerImageUrl}") center/cover`
-                  : "linear-gradient(140deg, #0b1220, #132640)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 30,
-                color: islandTheme.color.textSubtle
+                border: `1px solid ${islandTheme.color.cardBorder}`
               }}
-            >
-              {detail.headerImageUrl ? "" : "🎮"}
-            </div>
+            />
 
             <div style={{ display: "grid", gap: 6 }}>
               <h2 className="island-display" style={{ margin: 0, fontSize: 22, fontWeight: 800, paddingRight: 36 }}>
@@ -268,10 +288,28 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
                 <span style={{ fontSize: 16, fontWeight: 800, color: islandTheme.color.primaryGlow }}>
                   {formatPrice(detail.store)}
                 </span>
+                {discount && typeof detail.store.priceInitialCents === "number" ? (
+                  <span
+                    className="island-mono"
+                    style={{
+                      fontSize: 13,
+                      color: islandTheme.color.textMuted,
+                      textDecoration: "line-through"
+                    }}
+                  >
+                    ${(detail.store.priceInitialCents / 100).toFixed(2)}
+                  </span>
+                ) : null}
                 {discount ? <IslandTag tone="success">-{discount}%</IslandTag> : null}
+                {detail.store.releaseComingSoon ? <IslandTag color="#a78bfa">Coming soon</IslandTag> : null}
                 {detail.store.releaseDateText ? (
                   <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
                     {detail.store.releaseDateText}
+                  </span>
+                ) : null}
+                {typeof detail.store.historicalLowCents === "number" ? (
+                  <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+                    ⬇ Low ${(detail.store.historicalLowCents / 100).toFixed(2)}
                   </span>
                 ) : null}
               </div>
@@ -300,6 +338,156 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
                   </span>
                 ))}
               </div>
+            )}
+
+            {(detail.store.metacriticScore != null ||
+              detail.store.platformWindows ||
+              detail.store.platformMac ||
+              detail.store.platformLinux ||
+              detail.store.controllerSupport) && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                {detail.store.metacriticScore != null ? (
+                  <a
+                    href={detail.store.metacriticUrl ?? undefined}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Metacritic"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "3px 9px",
+                      borderRadius: 6,
+                      fontSize: 13,
+                      fontWeight: 800,
+                      textDecoration: "none",
+                      color: "#0b1220",
+                      background: metacriticColor(detail.store.metacriticScore)
+                    }}
+                  >
+                    {detail.store.metacriticScore}
+                    <span style={{ fontSize: 10, fontWeight: 700, opacity: 0.8 }}>METACRITIC</span>
+                  </a>
+                ) : null}
+                {[
+                  detail.store.platformWindows ? "🪟" : null,
+                  detail.store.platformMac ? "🍎" : null,
+                  detail.store.platformLinux ? "🐧" : null
+                ]
+                  .filter(Boolean)
+                  .map((icon) => (
+                    <span key={icon} style={{ fontSize: 15 }}>
+                      {icon}
+                    </span>
+                  ))}
+                {detail.store.controllerSupport ? (
+                  <span
+                    className="island-mono"
+                    style={{ fontSize: 11, color: islandTheme.color.textMuted }}
+                    title={`Controller: ${detail.store.controllerSupport}`}
+                  >
+                    🎮 {detail.store.controllerSupport === "full" ? "Full controller" : "Partial controller"}
+                  </span>
+                ) : null}
+              </div>
+            )}
+
+            {detail.store.shortDescription ? (
+              <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: islandTheme.color.textSecondary }}>
+                {detail.store.shortDescription}
+              </p>
+            ) : null}
+
+            {detail.store.screenshots.length > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  overflowX: "auto",
+                  paddingBottom: 4,
+                  scrollbarWidth: "thin"
+                }}
+              >
+                {detail.store.screenshots.map((shot) => (
+                  <a
+                    key={shot.thumb}
+                    href={shot.full}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ flexShrink: 0 }}
+                  >
+                    <img
+                      src={shot.thumb}
+                      alt="Screenshot"
+                      loading="lazy"
+                      style={{
+                        height: 92,
+                        borderRadius: 8,
+                        border: `1px solid ${islandTheme.color.cardBorder}`,
+                        display: "block"
+                      }}
+                    />
+                  </a>
+                ))}
+              </div>
+            )}
+
+            {detail.achievementCatalogue.length > 0 && (
+              <Section title="Rarest achievements">
+                <div style={{ display: "grid", gap: 6 }}>
+                  {detail.achievementCatalogue.slice(0, 6).map((ach, i) => (
+                    <div
+                      key={`${ach.displayName}-${i}`}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        padding: "6px 8px",
+                        borderRadius: 8,
+                        background: islandTheme.color.panelMutedBg,
+                        border: `1px solid ${islandTheme.color.border}`
+                      }}
+                    >
+                      {ach.iconUrl ? (
+                        <img
+                          src={ach.iconUrl}
+                          alt=""
+                          width={28}
+                          height={28}
+                          loading="lazy"
+                          style={{ borderRadius: 6, flexShrink: 0 }}
+                        />
+                      ) : null}
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: islandTheme.color.textSecondary,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap"
+                        }}
+                        title={ach.description ?? undefined}
+                      >
+                        {ach.displayName ?? "Achievement"}
+                      </span>
+                      {typeof ach.globalUnlockPct === "number" ? (
+                        <span
+                          className="island-mono"
+                          style={{ flexShrink: 0, fontSize: 12, color: islandTheme.color.textMuted }}
+                        >
+                          {ach.globalUnlockPct < 10
+                            ? ach.globalUnlockPct.toFixed(1)
+                            : Math.round(ach.globalUnlockPct)}
+                          %
+                        </span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </Section>
             )}
 
             <Section title="Crew owners">

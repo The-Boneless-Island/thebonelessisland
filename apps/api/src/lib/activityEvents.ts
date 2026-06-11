@@ -1,5 +1,6 @@
 import { db } from "../db/client.js";
 import { broadcast } from "./eventBus.js";
+import { isGameShareableByUserId } from "./steamPrivacy.js";
 
 export type ActivityEventInput = {
   eventType: string;
@@ -25,6 +26,18 @@ export async function recordEvent(input: ActivityEventInput): Promise<void> {
       resolveInternalUserId(input.actorDiscordUserId ?? null),
       resolveInternalUserId(input.targetDiscordUserId ?? null)
     ]);
+
+    // Privacy (never-emit): a steam-derived, game-tied event for a game the
+    // actor has hidden (private library OR per-game exclusion) is never written.
+    // No latent row to leak even if read-time filters are later missed.
+    if (
+      input.targetAppId != null &&
+      actorId != null &&
+      (input.eventType.startsWith("steam.") || input.eventType.startsWith("achievement.steam"))
+    ) {
+      const shareable = await isGameShareableByUserId(actorId, input.targetAppId);
+      if (!shareable) return;
+    }
 
     await db.query(
       `

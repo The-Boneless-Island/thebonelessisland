@@ -12,6 +12,13 @@ type SteamAppDetails = {
     genres?: Array<{ description?: string }>;
     categories?: Array<{ id?: number; description?: string }>;
     header_image?: string;
+    short_description?: string;
+    background?: string;
+    background_raw?: string;
+    controller_support?: string;
+    screenshots?: Array<{ id?: number; path_thumbnail?: string; path_full?: string }>;
+    metacritic?: { score?: number; url?: string };
+    platforms?: { windows?: boolean; mac?: boolean; linux?: boolean };
     is_free?: boolean;
     price_overview?: {
       currency?: string;
@@ -25,6 +32,8 @@ type SteamAppDetails = {
     };
   };
 };
+
+export type GameScreenshot = { thumb: string; full: string };
 
 type CheapSharkGameResult = {
   thumb?: string;
@@ -371,6 +380,22 @@ export async function enrichGameMetadataFromSteam(appIds: number[]): Promise<voi
     const releaseDateText = data.release_date?.date?.trim() || null;
     const releaseDateParsed = parseSteamReleaseDate(releaseDateText);
 
+    // Rich media (migration 050) — same response, previously discarded.
+    const shortDescription = data.short_description?.trim() || null;
+    const backgroundUrl = (data.background_raw ?? data.background)?.trim() || null;
+    const controllerSupport = data.controller_support?.trim() || null;
+    const screenshots: GameScreenshot[] = (data.screenshots ?? [])
+      .map((s) => ({ thumb: s.path_thumbnail?.trim() ?? "", full: s.path_full?.trim() ?? "" }))
+      .filter((s) => s.thumb && s.full)
+      .slice(0, 6);
+    const screenshotsJson = screenshots.length > 0 ? JSON.stringify(screenshots) : null;
+    const metacriticScore =
+      typeof data.metacritic?.score === "number" ? data.metacritic.score : null;
+    const metacriticUrl = data.metacritic?.url?.trim() || null;
+    const platformWindows = data.platforms?.windows === true;
+    const platformMac = data.platforms?.mac === true;
+    const platformLinux = data.platforms?.linux === true;
+
     await db.query(
       `
         UPDATE games
@@ -403,6 +428,15 @@ export async function enrichGameMetadataFromSteam(appIds: number[]): Promise<voi
           release_coming_soon = $19::boolean,
           release_date_text = $20::text,
           release_date_parsed = $21::timestamptz,
+          short_description = $22::text,
+          screenshots = $23::jsonb,
+          background_url = $24::text,
+          metacritic_score = $25::integer,
+          metacritic_url = $26::text,
+          platform_windows = $27::boolean,
+          platform_mac = $28::boolean,
+          platform_linux = $29::boolean,
+          controller_support = $30::text,
           store_details_checked_at = NOW(),
           price_checked_at = NOW()
         WHERE app_id = $1
@@ -428,7 +462,16 @@ export async function enrichGameMetadataFromSteam(appIds: number[]): Promise<voi
         priceDiscountPct,
         comingSoon,
         releaseDateText,
-        releaseDateParsed
+        releaseDateParsed,
+        shortDescription,
+        screenshotsJson,
+        backgroundUrl,
+        metacriticScore,
+        metacriticUrl,
+        platformWindows,
+        platformMac,
+        platformLinux,
+        controllerSupport
       ]
     );
   }

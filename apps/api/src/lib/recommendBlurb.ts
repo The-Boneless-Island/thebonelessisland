@@ -64,7 +64,7 @@ export async function generateRecommendationBlurb(
     ),
     db.query<RecentPlayer>(
       `SELECT COALESCE(gm.display_name, gm.username, 'someone') AS display_name, ug.playtime_2weeks
-       FROM user_games ug
+       FROM shareable_user_games ug
        INNER JOIN users u ON u.id = ug.user_id
        LEFT JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id AND gm.in_guild = TRUE
        WHERE ug.app_id = $1 AND ug.playtime_2weeks > 0

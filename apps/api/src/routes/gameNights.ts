@@ -114,9 +114,17 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
     created_by_user_id: number;
     selected_game_name: string | null;
     selected_app_id: number | null;
+    selected_game_image: string | null;
+    selected_is_single_player: boolean | null;
+    selected_is_online_coop: boolean | null;
+    selected_is_lan_coop: boolean | null;
+    selected_is_shared_split_coop: boolean | null;
+    selected_is_online_pvp: boolean | null;
+    selected_is_mmo: boolean | null;
     selected_at: string | null;
     attendee_count: number;
     current_user_attending: boolean;
+    attendees: Array<{ displayName: string; avatarUrl: string | null }>;
   }>(
     `
       SELECT
@@ -126,9 +134,39 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
         gn.created_by_user_id,
         selected_game.name AS selected_game_name,
         gn.selected_app_id,
+        selected_game.header_image_url AS selected_game_image,
+        selected_game.is_single_player     AS selected_is_single_player,
+        selected_game.is_online_coop       AS selected_is_online_coop,
+        selected_game.is_lan_coop          AS selected_is_lan_coop,
+        selected_game.is_shared_split_coop AS selected_is_shared_split_coop,
+        selected_game.is_online_pvp        AS selected_is_online_pvp,
+        selected_game.is_mmo               AS selected_is_mmo,
         gn.selected_at,
         COUNT(gna.user_id)::int AS attendee_count,
-        COALESCE(BOOL_OR(gna.user_id = $1), false) AS current_user_attending
+        COALESCE(BOOL_OR(gna.user_id = $1), false) AS current_user_attending,
+        (
+          SELECT COALESCE(
+            JSON_AGG(
+              JSON_BUILD_OBJECT('displayName', a.display_name, 'avatarUrl', a.avatar_url)
+              ORDER BY a.display_name ASC
+            ),
+            '[]'::json
+          )
+          FROM (
+            SELECT
+              COALESCE(gm.display_name, gm.username, dp.username, 'islander') AS display_name,
+              COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url
+            FROM game_night_attendees gna2
+            INNER JOIN users u2 ON u2.id = gna2.user_id
+            LEFT JOIN guild_members gm
+              ON gm.discord_user_id = u2.discord_user_id
+             AND gm.guild_id = $2
+             AND gm.in_guild = TRUE
+            LEFT JOIN discord_profiles dp ON dp.user_id = u2.id
+            WHERE gna2.game_night_id = gn.id
+            LIMIT 12
+          ) a
+        ) AS attendees
       FROM game_nights gn
       LEFT JOIN games selected_game ON selected_game.app_id = gn.selected_app_id
       LEFT JOIN game_night_attendees gna ON gna.game_night_id = gn.id
@@ -138,13 +176,14 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
         gn.title,
         gn.scheduled_for,
         gn.created_by_user_id,
+        selected_game.app_id,
         selected_game.name,
         gn.selected_app_id,
         gn.selected_at
       ORDER BY gn.scheduled_for ASC
       LIMIT 25
     `,
-    [user.id]
+    [user.id, getGuildId()]
   );
 
   res.json({
@@ -155,9 +194,21 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
       createdByUserId: row.created_by_user_id,
       selectedGameName: row.selected_game_name,
       selectedAppId: row.selected_app_id,
+      selectedGameImage: row.selected_game_image,
+      selectedGameModes: row.selected_app_id
+        ? {
+            isSinglePlayer: Boolean(row.selected_is_single_player),
+            isOnlineCoop: Boolean(row.selected_is_online_coop),
+            isLanCoop: Boolean(row.selected_is_lan_coop),
+            isSharedSplitCoop: Boolean(row.selected_is_shared_split_coop),
+            isOnlinePvp: Boolean(row.selected_is_online_pvp),
+            isMmo: Boolean(row.selected_is_mmo)
+          }
+        : null,
       selectedAt: row.selected_at,
       attendeeCount: row.attendee_count,
-      currentUserAttending: row.current_user_attending
+      currentUserAttending: row.current_user_attending,
+      attendees: row.attendees
     }))
   });
 });

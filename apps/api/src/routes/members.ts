@@ -7,9 +7,54 @@ import { broadcast } from "../lib/eventBus.js";
 
 const PRESENCE_STATUSES = new Set(["online", "idle", "dnd", "offline"]);
 
+// Discord activity type -> verb. 0 Playing, 1 Streaming, 2 Listening, 3 Watching,
+// 5 Competing. (Type 4 Custom Status is filtered out at the bot before push.)
+function activityText(name: string | null, type: number | null): string | null {
+  if (!name) return null;
+  switch (type) {
+    case 1:
+      return `Streaming ${name}`;
+    case 2:
+      return `Listening to ${name}`;
+    case 3:
+      return `Watching ${name}`;
+    case 5:
+      return `Competing in ${name}`;
+    case 0:
+    default:
+      return `Playing ${name}`;
+  }
+}
+
+// Per-user GET /users/:id (bot token) — the only endpoint that returns a user's
+// global banner + accent_color. Used for lazy backfill on profile view.
+async function fetchDiscordUserBanner(
+  userId: string
+): Promise<{ bannerUrl: string | null; accentColor: number | null } | null> {
+  if (!env.DISCORD_BOT_TOKEN) return null;
+  const resp = await fetch(`https://discord.com/api/v10/users/${userId}`, {
+    headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` }
+  }).catch(() => null);
+  if (!resp?.ok) return null;
+  const data = (await resp.json().catch(() => null)) as {
+    banner?: string | null;
+    accent_color?: number | null;
+  } | null;
+  if (!data) return null;
+  const banner = data.banner ?? null;
+  const ext = banner?.startsWith("a_") ? "gif" : "png";
+  const bannerUrl = banner
+    ? `https://cdn.discordapp.com/banners/${userId}/${banner}.${ext}?size=600`
+    : null;
+  return { bannerUrl, accentColor: typeof data.accent_color === "number" ? data.accent_color : null };
+}
+
 type DiscordGuildMember = {
   nick?: string | null;
   roles?: string[];
+  joined_at?: string | null;
+  premium_since?: string | null;
+  avatar?: string | null; // guild-specific avatar hash
   user?: {
     id?: string;
     username?: string;
@@ -107,11 +152,33 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
       const username = member.user?.username?.trim();
       if (!id || !username) return null;
       const avatar = member.user?.avatar ?? null;
-      const avatarUrl = avatar ? `https://cdn.discordapp.com/avatars/${id}/${avatar}.png` : null;
-      const displayName = member.nick?.trim() || member.user?.global_name?.trim() || username;
+      const avatarExt = avatar?.startsWith("a_") ? "gif" : "png";
+      const avatarUrl = avatar
+        ? `https://cdn.discordapp.com/avatars/${id}/${avatar}.${avatarExt}?size=128`
+        : null;
+      const guildAvatar = member.avatar ?? null;
+      const guildAvatarExt = guildAvatar?.startsWith("a_") ? "gif" : "png";
+      const guildAvatarUrl = guildAvatar
+        ? `https://cdn.discordapp.com/guilds/${getGuildId()}/users/${id}/avatars/${guildAvatar}.${guildAvatarExt}?size=128`
+        : null;
+      const globalName = member.user?.global_name?.trim() || null;
+      const displayName = member.nick?.trim() || globalName || username;
       const roleIds = (member.roles ?? []).filter(Boolean);
       const roleNames = roleIds.map((roleId) => roleNameById.get(roleId) ?? `role:${roleId}`);
-      return { id, username, displayName, avatarUrl, roleIds, roleNames };
+      const joinedAtGuild = member.joined_at ?? null;
+      const premiumSince = member.premium_since ?? null;
+      return {
+        id,
+        username,
+        displayName,
+        globalName,
+        avatarUrl,
+        guildAvatarUrl,
+        roleIds,
+        roleNames,
+        joinedAtGuild,
+        premiumSince
+      };
     })
     .filter(
       (
@@ -120,9 +187,13 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
         id: string;
         username: string;
         displayName: string;
+        globalName: string | null;
         avatarUrl: string | null;
+        guildAvatarUrl: string | null;
         roleIds: string[];
         roleNames: string[];
+        joinedAtGuild: string | null;
+        premiumSince: string | null;
       } => Boolean(row)
     );
 
@@ -190,26 +261,34 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
             discord_user_id,
             username,
             display_name,
+            global_name,
             avatar_url,
+            guild_avatar_url,
             role_ids,
             role_names,
             in_voice,
             voice_channel_id,
             rich_presence_text,
+            joined_at_guild,
+            premium_since,
             in_guild,
             last_synced_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6::text[], $7::text[], $8, $9, $10, TRUE, NOW())
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9::text[], $10, $11, $12, $13::timestamptz, $14::timestamptz, TRUE, NOW())
           ON CONFLICT (guild_id, discord_user_id)
           DO UPDATE SET
             username = EXCLUDED.username,
             display_name = EXCLUDED.display_name,
+            global_name = EXCLUDED.global_name,
             avatar_url = EXCLUDED.avatar_url,
+            guild_avatar_url = EXCLUDED.guild_avatar_url,
             role_ids = EXCLUDED.role_ids,
             role_names = EXCLUDED.role_names,
             in_voice = EXCLUDED.in_voice,
             voice_channel_id = EXCLUDED.voice_channel_id,
             rich_presence_text = EXCLUDED.rich_presence_text,
+            joined_at_guild = EXCLUDED.joined_at_guild,
+            premium_since = EXCLUDED.premium_since,
             in_guild = TRUE,
             last_synced_at = NOW()
         `,
@@ -218,12 +297,16 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
           member.id,
           member.username,
           member.displayName,
+          member.globalName,
           member.avatarUrl,
+          member.guildAvatarUrl,
           member.roleIds,
           member.roleNames,
           inVoice,
           voiceChannelId,
-          richPresenceText
+          richPresenceText,
+          member.joinedAtGuild,
+          member.premiumSince
         ]
       );
     }
@@ -252,14 +335,18 @@ membersRouter.get("/", requireSession, async (_req, res) => {
     username: string;
     display_name: string | null;
     avatar_url: string | null;
+    guild_avatar_url: string | null;
     role_names: string[];
     in_voice: boolean;
+    voice_channel_id: string | null;
     rich_presence_text: string | null;
+    activity_name: string | null;
+    activity_type: number | null;
     presence_status: string | null;
   }>(
     `
-      SELECT discord_user_id, username, display_name, avatar_url, role_names,
-             in_voice, rich_presence_text, presence_status
+      SELECT discord_user_id, username, display_name, avatar_url, guild_avatar_url, role_names,
+             in_voice, voice_channel_id, rich_presence_text, activity_name, activity_type, presence_status
       FROM guild_members
       WHERE guild_id = $1 AND in_guild = TRUE
       ORDER BY username ASC
@@ -273,10 +360,14 @@ membersRouter.get("/", requireSession, async (_req, res) => {
       discordUserId: row.discord_user_id,
       username: row.username,
       displayName: row.display_name ?? row.username,
-      avatarUrl: row.avatar_url,
+      avatarUrl: row.guild_avatar_url ?? row.avatar_url,
       roleNames: row.role_names,
       inVoice: row.in_voice,
-      richPresenceText: row.rich_presence_text,
+      voiceChannelId: row.voice_channel_id,
+      // Precedence: live game/stream activity > voice text > nothing.
+      richPresenceText: activityText(row.activity_name, row.activity_type) ?? row.rich_presence_text,
+      activityName: row.activity_name,
+      activityType: row.activity_type,
       presenceStatus: row.presence_status
     }))
   });
@@ -301,14 +392,24 @@ membersRouter.post("/presence/:discordUserId", requireBotSecret, async (req, res
     res.status(400).json({ error: "status must be one of online|idle|dnd|offline" });
     return;
   }
+  const activityNameRaw = req.body?.activityName;
+  const activityName =
+    typeof activityNameRaw === "string" && activityNameRaw.trim().length > 0
+      ? activityNameRaw.trim().slice(0, 120)
+      : null;
+  const activityTypeRaw = req.body?.activityType;
+  const activityType = typeof activityTypeRaw === "number" ? activityTypeRaw : null;
 
   const result = await db.query(
     `
       UPDATE guild_members
-      SET presence_status = $1, last_synced_at = NOW()
+      SET presence_status = $1,
+          activity_name = $4,
+          activity_type = $5,
+          last_synced_at = NOW()
       WHERE guild_id = $2 AND discord_user_id = $3
     `,
-    [status, guildId, discordUserId]
+    [status, guildId, discordUserId, activityName, activityType]
   );
   broadcast("members-changed");
   res.json({ ok: true, updated: result.rowCount ?? 0 });
@@ -398,24 +499,64 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
   const baseResult = await db.query<{
     user_id: string;
     display_name: string | null;
+    global_name: string | null;
     username: string | null;
     avatar_url: string | null;
+    banner_url: string | null;
+    accent_color: number | null;
+    banner_checked_at: string | null;
+    profile_blurb: string | null;
+    role_names: string[] | null;
+    joined_at_guild: string | null;
+    premium_since: string | null;
     presence_status: string | null;
     in_voice: boolean | null;
     rich_presence_text: string | null;
+    activity_name: string | null;
+    activity_type: number | null;
     steam_id64: string | null;
+    steam_persona_name: string | null;
+    steam_avatar_url: string | null;
+    steam_profile_url: string | null;
+    steam_persona_state: number | null;
+    steam_game_extra_info: string | null;
+    steam_level: number | null;
+    steam_time_created: string | null;
     steam_visibility: string;
   }>(
     `
       SELECT
         u.id::text AS user_id,
         gm.display_name,
+        COALESCE(gm.global_name, dp.global_name) AS global_name,
         dp.username,
-        COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
+        COALESCE(gm.guild_avatar_url, gm.avatar_url, dp.avatar_url) AS avatar_url,
+        COALESCE(gm.banner_url, dp.banner_url) AS banner_url,
+        COALESCE(gm.accent_color, dp.accent_color) AS accent_color,
+        gm.banner_checked_at,
+        dp.profile_blurb,
+        gm.role_names,
+        gm.joined_at_guild,
+        gm.premium_since,
         gm.presence_status,
         gm.in_voice,
         gm.rich_presence_text,
+        gm.activity_name,
+        gm.activity_type,
         sl.steam_id64,
+        sl.persona_name AS steam_persona_name,
+        sl.steam_avatar_url,
+        sl.profile_url AS steam_profile_url,
+        sl.persona_state AS steam_persona_state,
+        CASE
+          WHEN sl.game_app_id IS NOT NULL AND EXISTS (
+            SELECT 1 FROM steam_game_exclusions e
+            WHERE e.user_id = u.id AND e.app_id = sl.game_app_id
+          ) THEN NULL
+          ELSE sl.game_extra_info
+        END AS steam_game_extra_info,
+        sl.steam_level,
+        sl.time_created AS steam_time_created,
         u.steam_visibility
       FROM users u
       LEFT JOIN discord_profiles dp ON dp.user_id = u.id
@@ -438,12 +579,45 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
   const steamLinked = Boolean(base.steam_id64);
   const steamHidden = base.steam_visibility === "private";
 
+  // Lazy banner/accent backfill: the bulk member sync can't see a user's global
+  // banner — only GET /users/:id returns it. Fetch best-effort on profile view,
+  // at most once a week per member (banner_checked_at gate). Mutates `base` so
+  // the response below reflects a fresh pull.
+  let bannerUrl = base.banner_url;
+  let accentColor = base.accent_color;
+  const bannerStale =
+    !base.banner_checked_at ||
+    Date.now() - new Date(base.banner_checked_at).getTime() > 7 * 24 * 60 * 60 * 1000;
+  if (env.DISCORD_BOT_TOKEN && bannerStale) {
+    const fetched = await fetchDiscordUserBanner(discordUserId);
+    if (fetched) {
+      bannerUrl = fetched.bannerUrl ?? bannerUrl;
+      accentColor = fetched.accentColor ?? accentColor;
+    }
+    await db.query(
+      `UPDATE guild_members SET banner_url = $3, accent_color = $4, banner_checked_at = NOW()
+       WHERE guild_id = $1 AND discord_user_id = $2`,
+      [guildId, discordUserId, fetched?.bannerUrl ?? null, fetched?.accentColor ?? accentColor ?? null]
+    );
+  }
+
   const [activityResult, nuggiesResult, topGamesResult, achievementsResult] = await Promise.all([
     db.query<{ event_type: string; created_at: string; payload: Record<string, unknown> | null }>(
       `
         SELECT ae.event_type, ae.created_at, ae.payload
         FROM activity_events ae
         WHERE ae.actor_user_id = $1
+          AND (
+            ae.target_app_id IS NULL
+            OR (ae.event_type NOT LIKE 'steam.%' AND ae.event_type NOT LIKE 'achievement.steam%')
+            OR (
+              (SELECT u2.steam_visibility FROM users u2 WHERE u2.id = $1) <> 'private'
+              AND NOT EXISTS (
+                SELECT 1 FROM steam_game_exclusions e
+                WHERE e.user_id = $1 AND e.app_id = ae.target_app_id
+              )
+            )
+          )
         ORDER BY ae.created_at DESC
         LIMIT 10
       `,
@@ -490,7 +664,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
               g.header_image_url,
               ug.playtime_minutes AS playtime_forever,
               ug.playtime_2weeks
-            FROM user_games ug
+            FROM shareable_user_games ug
             INNER JOIN games g ON g.app_id = ug.app_id
             WHERE ug.user_id = $1
             ORDER BY ug.playtime_minutes DESC, g.name ASC
@@ -507,7 +681,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
               g.name,
               p.completion_pct,
               SUM(COALESCE(p.achievements_unlocked, 0)) OVER () AS total_unlocked
-            FROM user_game_progress p
+            FROM shareable_user_game_progress p
             INNER JOIN games g ON g.app_id = p.app_id
             WHERE p.user_id = $1
               AND p.achievements_total > 0
@@ -528,15 +702,34 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
 
   res.json({
     discordUserId,
-    displayName: base.display_name ?? base.username ?? "Crew member",
+    displayName: base.display_name ?? base.global_name ?? base.username ?? "Crew member",
+    globalName: base.global_name,
     avatarUrl: base.avatar_url,
+    bannerUrl,
+    accentColor,
+    profileBlurb: base.profile_blurb,
+    roleNames: base.role_names ?? [],
+    joinedAtGuild: base.joined_at_guild,
+    premiumSince: base.premium_since,
     presence: {
       status: base.presence_status,
       inVoice: Boolean(base.in_voice),
-      richPresenceText: base.rich_presence_text
+      richPresenceText: activityText(base.activity_name, base.activity_type) ?? base.rich_presence_text
     },
     steamLinked,
     steamHidden,
+    steam:
+      steamLinked && !steamHidden
+        ? {
+            personaName: base.steam_persona_name,
+            avatarUrl: base.steam_avatar_url,
+            profileUrl: base.steam_profile_url,
+            personaState: base.steam_persona_state,
+            inGame: base.steam_game_extra_info,
+            level: base.steam_level,
+            accountCreated: base.steam_time_created
+          }
+        : null,
     topGames: topGamesResult.rows.map((row) => ({
       appId: row.app_id,
       name: row.name,

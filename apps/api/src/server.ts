@@ -30,6 +30,7 @@ import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
 import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
 import { syncWishlistPrices } from "./lib/priceSync.js";
+import { syncSteamPlayerSummaries } from "./lib/steamPlayerSync.js";
 import { buildAndStoreWeeklyDigest } from "./lib/weeklyDigest.js";
 import { getAISetting } from "./lib/serverSettings.js";
 import { db } from "./db/client.js";
@@ -281,6 +282,21 @@ async function bootstrap() {
         console.error("[steam] scheduled owned-games sync failed:", err);
       });
   }, 30 * 60 * 1000);
+
+  // Steam player-summary sync: one batched GetPlayerSummaries call refreshes
+  // every linked member's persona/avatar/in-game status/account age, plus a
+  // per-user Steam level pass. Runs shortly after boot, then every 15 minutes
+  // (in-game status is the freshness-sensitive field).
+  setTimeout(() => {
+    syncSteamPlayerSummaries()
+      .then(({ synced }) => console.log(`[steam] player-summary sync: ${synced} player(s)`))
+      .catch((err) => console.error("[steam] initial player-summary sync failed:", err));
+  }, 25_000);
+  setInterval(() => {
+    syncSteamPlayerSummaries()
+      .then(({ synced }) => console.log(`[steam] player-summary sync: ${synced} player(s)`))
+      .catch((err) => console.error("[steam] scheduled player-summary sync failed:", err));
+  }, 15 * 60 * 1000);
 
   // Weekly Tide digest: rebuilds the crew recap, then announces it once per
   // week via the bot outbox. buildAndStoreWeeklyDigest UPSERTs by week_start,

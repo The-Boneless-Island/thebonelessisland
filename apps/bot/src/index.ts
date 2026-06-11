@@ -543,10 +543,26 @@ const client = new Client({
 
 const lastPushedStatus = new Map<string, string>();
 
-async function pushPresence(discordUserId: string, status: string): Promise<void> {
+// First non-custom activity (Playing/Streaming/Listening/Watching/Competing).
+// Custom Status (type 4) carries no game name in .name, so we skip it.
+function extractActivity(
+  activities: ReadonlyArray<{ name?: string | null; type?: number | null }> | undefined
+): { activityName: string | null; activityType: number | null } {
+  const act = (activities ?? []).find((a) => a.type !== 4);
+  if (!act?.name) return { activityName: null, activityType: null };
+  return { activityName: act.name, activityType: typeof act.type === "number" ? act.type : null };
+}
+
+async function pushPresence(
+  discordUserId: string,
+  status: string,
+  activityName: string | null = null,
+  activityType: number | null = null
+): Promise<void> {
   if (!botApiSharedSecret) return;
-  if (lastPushedStatus.get(discordUserId) === status) return;
-  lastPushedStatus.set(discordUserId, status);
+  const dedupeKey = `${status}|${activityName ?? ""}|${activityType ?? ""}`;
+  if (lastPushedStatus.get(discordUserId) === dedupeKey) return;
+  lastPushedStatus.set(discordUserId, dedupeKey);
   try {
     await fetch(`${apiBase}/members/presence/${discordUserId}`, {
       method: "POST",
@@ -554,7 +570,7 @@ async function pushPresence(discordUserId: string, status: string): Promise<void
         "content-type": "application/json",
         "x-island-bot-secret": botApiSharedSecret
       },
-      body: JSON.stringify({ status })
+      body: JSON.stringify({ status, activityName, activityType })
     });
   } catch {
     // Best-effort. Next presence event will retry.
@@ -567,7 +583,8 @@ client.on(Events.PresenceUpdate, (_oldPresence, newPresence) => {
   const status = newPresence?.status;
   if (!userId || !status) return;
   if (newPresence.guild?.id && newPresence.guild.id !== guildId) return;
-  void pushPresence(userId, status);
+  const { activityName, activityType } = extractActivity(newPresence.activities);
+  void pushPresence(userId, status, activityName, activityType);
 });
 
 // ── Milestone announcer (outbox poller) ─────────────────────────────────────
@@ -784,7 +801,8 @@ client.once(Events.ClientReady, async (readyClient) => {
           let pushed = 0;
           for (const [, member] of members) {
             const status = member.presence?.status ?? "offline";
-            void pushPresence(member.id, status);
+            const { activityName, activityType } = extractActivity(member.presence?.activities);
+            void pushPresence(member.id, status, activityName, activityType);
             pushed += 1;
           }
           console.log(`[presence] initial sweep queued ${pushed} member(s)`);

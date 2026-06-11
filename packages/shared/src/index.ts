@@ -44,6 +44,11 @@ export type CrewOwnedGame = {
   mpMaxPlayersApprox: number | null;
   maxPlayers: number | null;
   medianSessionMinutes: number | null;
+  priceFinalCents: number | null;
+  priceDiscountPct: number | null;
+  isFree: boolean;
+  releaseComingSoon: boolean;
+  releaseDateText: string | null;
   developers: string[];
   tags: string[];
   headerImageUrl: string | null;

@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
 import { IslandCard, IslandTag } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
+import { coverUrl } from "../steamArt.js";
 import type { PageId } from "../types.js";
 
 type ProfileTopGame = {
@@ -24,10 +25,27 @@ type ProfileShowcase = {
   completionPct: number;
 };
 
+type SteamSummary = {
+  personaName: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  personaState: number | null;
+  inGame: string | null;
+  level: number | null;
+  accountCreated: string | null;
+};
+
 type IslanderProfile = {
   discordUserId: string;
   displayName: string;
+  globalName: string | null;
   avatarUrl: string | null;
+  bannerUrl: string | null;
+  accentColor: number | null;
+  profileBlurb: string | null;
+  roleNames: string[];
+  joinedAtGuild: string | null;
+  premiumSince: string | null;
   presence: {
     status: string | null;
     inVoice: boolean;
@@ -35,6 +53,7 @@ type IslanderProfile = {
   };
   steamLinked: boolean;
   steamHidden: boolean;
+  steam: SteamSummary | null;
   topGames: ProfileTopGame[];
   recentActivity: ProfileActivity[];
   nuggies: {
@@ -85,6 +104,18 @@ function memberColor(seed: string): string {
 
 function memberInitials(name: string): string {
   return (name || "??").trim().slice(0, 2).toUpperCase();
+}
+
+function accentHex(accentColor: number | null): string | null {
+  if (accentColor == null || !Number.isFinite(accentColor)) return null;
+  return `#${(accentColor & 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
+function formatJoinDate(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
 }
 
 function presenceTone(status: string | null): "success" | "warning" | "default" {
@@ -213,6 +244,14 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
   }
 
   const { presence, nuggies, achievements } = profile;
+  const accent = accentHex(profile.accentColor);
+  const joinDate = formatJoinDate(profile.joinedAtGuild);
+  const isBooster = Boolean(profile.premiumSince);
+  const bannerBackground = profile.bannerUrl
+    ? `url("${profile.bannerUrl}") center/cover`
+    : accent
+      ? `linear-gradient(135deg, ${accent}, ${islandTheme.color.panelMutedBg})`
+      : "linear-gradient(135deg, #132640, #0b1220)";
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
@@ -231,51 +270,99 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
         {backButton}
       </header>
 
-      <IslandCard style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-        {profile.avatarUrl ? (
-          <img
-            src={profile.avatarUrl}
-            alt={profile.displayName}
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: 999,
-              flexShrink: 0,
-              objectFit: "cover",
-              border: `2px solid ${islandTheme.color.cardBorder}`
-            }}
-          />
-        ) : (
-          <span
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: 999,
-              flexShrink: 0,
-              background: memberColor(profile.discordUserId || profile.displayName),
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontWeight: 800,
-              color: islandTheme.color.textDark,
-              fontSize: 24
-            }}
-          >
-            {memberInitials(profile.displayName)}
-          </span>
-        )}
-        <div style={{ flex: "1 1 220px", minWidth: 0, display: "grid", gap: 6 }}>
-          <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(24px, 4vw, 34px)", fontWeight: 800 }}>
-            {profile.displayName}
-          </h1>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <IslandTag tone={presenceTone(presence.status)}>{presence.status ?? "offline"}</IslandTag>
-            {presence.inVoice ? <IslandTag tone="info">🎧 IN VOICE</IslandTag> : null}
-            {nuggies.equippedTitle ? <IslandTag tone="warning">{nuggies.equippedTitle}</IslandTag> : null}
+      <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+        <div
+          aria-hidden={profile.bannerUrl ? undefined : true}
+          role={profile.bannerUrl ? "img" : undefined}
+          aria-label={profile.bannerUrl ? `${profile.displayName} banner` : undefined}
+          style={{ height: 104, background: bannerBackground }}
+        />
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            alignItems: "flex-end",
+            flexWrap: "wrap",
+            padding: "0 16px 16px",
+            marginTop: -36
+          }}
+        >
+          {profile.avatarUrl ? (
+            <img
+              src={profile.avatarUrl}
+              alt={profile.displayName}
+              style={{
+                width: 84,
+                height: 84,
+                borderRadius: 999,
+                flexShrink: 0,
+                objectFit: "cover",
+                border: `3px solid ${accent ?? islandTheme.color.panelBg}`,
+                background: islandTheme.color.panelBg
+              }}
+            />
+          ) : (
+            <span
+              style={{
+                width: 84,
+                height: 84,
+                borderRadius: 999,
+                flexShrink: 0,
+                background: memberColor(profile.discordUserId || profile.displayName),
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 800,
+                color: islandTheme.color.textDark,
+                fontSize: 28,
+                border: `3px solid ${accent ?? islandTheme.color.panelBg}`
+              }}
+            >
+              {memberInitials(profile.displayName)}
+            </span>
+          )}
+          <div style={{ flex: "1 1 220px", minWidth: 0, display: "grid", gap: 6, paddingBottom: 2 }}>
+            <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(22px, 4vw, 32px)", fontWeight: 800 }}>
+              {profile.displayName}
+            </h1>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <IslandTag tone={presenceTone(presence.status)}>{presence.status ?? "offline"}</IslandTag>
+              {presence.inVoice ? <IslandTag tone="info">🎧 IN VOICE</IslandTag> : null}
+              {isBooster ? <IslandTag color="#f472b6">💎 Booster</IslandTag> : null}
+              {nuggies.equippedTitle ? <IslandTag tone="warning">{nuggies.equippedTitle}</IslandTag> : null}
+            </div>
+            {presence.richPresenceText ? (
+              <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>{presence.richPresenceText}</div>
+            ) : null}
+            {profile.profileBlurb ? (
+              <p style={{ margin: "2px 0 0", fontSize: 13, lineHeight: 1.5, color: islandTheme.color.textSecondary }}>
+                {profile.profileBlurb}
+              </p>
+            ) : null}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+              {joinDate ? (
+                <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+                  ⚓ Islander since {joinDate}
+                </span>
+              ) : null}
+              {profile.roleNames.slice(0, 4).map((role) => (
+                <span
+                  key={role}
+                  className="island-mono"
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "2px 7px",
+                    borderRadius: 999,
+                    border: `1px solid ${accent ?? islandTheme.color.cardBorder}`,
+                    color: islandTheme.color.textSubtle
+                  }}
+                >
+                  {role}
+                </span>
+              ))}
+            </div>
           </div>
-          {presence.richPresenceText ? (
-            <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>{presence.richPresenceText}</div>
-          ) : null}
         </div>
       </IslandCard>
 
@@ -284,6 +371,8 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
         {nuggies.tier ? <SummaryStat label="Tier" value={nuggies.tier} /> : null}
         <SummaryStat label="Achievements" value={achievements.totalUnlocked.toLocaleString()} />
       </IslandCard>
+
+      {profile.steam ? <SteamSummaryCard steam={profile.steam} /> : null}
 
       {profile.steamHidden ? (
         <IslandCard style={{ padding: 28, textAlign: "center", display: "grid", gap: 8, justifyItems: "center" }}>
@@ -330,8 +419,8 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
                         borderRadius: 6,
                         flexShrink: 0,
                         border: `1px solid ${islandTheme.color.cardBorder}`,
-                        background: game.headerImageUrl
-                          ? `url("${game.headerImageUrl}") center/cover`
+                        background: coverUrl(game.appId, game.headerImageUrl)
+                          ? `url("${coverUrl(game.appId, game.headerImageUrl)}") center/cover`
                           : "linear-gradient(140deg, #0b1220, #132640)",
                         display: "flex",
                         alignItems: "center",
@@ -340,7 +429,7 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
                         color: islandTheme.color.textSubtle
                       }}
                     >
-                      {game.headerImageUrl ? "" : "🎮"}
+                      {coverUrl(game.appId, game.headerImageUrl) ? "" : "🎮"}
                     </div>
                     <span
                       style={{
@@ -475,6 +564,63 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
         )}
       </IslandCard>
     </div>
+  );
+}
+
+function SteamSummaryCard({ steam }: { steam: SteamSummary }) {
+  const accountYear = steam.accountCreated
+    ? (() => {
+        const d = new Date(steam.accountCreated);
+        return Number.isNaN(d.getTime()) ? null : d.getFullYear();
+      })()
+    : null;
+  const facts = [
+    typeof steam.level === "number" ? `Level ${steam.level}` : null,
+    accountYear ? `On Steam since ${accountYear}` : null
+  ].filter(Boolean);
+
+  return (
+    <IslandCard as="section" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+      {steam.avatarUrl ? (
+        <img
+          src={steam.avatarUrl}
+          alt={steam.personaName ?? "Steam avatar"}
+          style={{ width: 48, height: 48, borderRadius: 8, flexShrink: 0, objectFit: "cover" }}
+        />
+      ) : null}
+      <div style={{ flex: "1 1 200px", minWidth: 0, display: "grid", gap: 4 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: islandTheme.color.textPrimary }}>
+            {steam.personaName ?? "Steam"}
+          </span>
+          {steam.inGame ? <IslandTag tone="success">🎮 In-game · {steam.inGame}</IslandTag> : null}
+        </div>
+        {facts.length > 0 ? (
+          <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+            {facts.join(" · ")}
+          </span>
+        ) : null}
+      </div>
+      {steam.profileUrl ? (
+        <a
+          href={steam.profileUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="island-mono"
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: islandTheme.color.textSubtle,
+            textDecoration: "none",
+            padding: "6px 12px",
+            borderRadius: 999,
+            border: `1px solid ${islandTheme.color.cardBorder}`
+          }}
+        >
+          View on Steam ↗
+        </a>
+      ) : null}
+    </IslandCard>
   );
 }
 

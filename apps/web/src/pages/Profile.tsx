@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { IslandButton, IslandCard, islandInputStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
@@ -6,6 +6,107 @@ import { apiFetch } from "../api/client.js";
 import type { MeProfile, OwnedGameLite } from "../types.js";
 
 type SteamVisibility = "private" | "members" | "public";
+
+// One-time consent so "shared by default" stays trustworthy: a member who has
+// never acknowledged sharing sees a clear notice while Crew-shared.
+function SteamShareConsent({ visibility }: { visibility: SteamVisibility }) {
+  const [ack, setAck] = useState(() => {
+    try {
+      return window.localStorage.getItem("island.steamShareConsent") === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (visibility === "private" || ack) return null;
+  return (
+    <div
+      style={{
+        marginBottom: 10,
+        padding: "10px 12px",
+        borderRadius: 8,
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${islandTheme.color.primaryGlow}`,
+        display: "flex",
+        gap: 10,
+        alignItems: "center",
+        flexWrap: "wrap"
+      }}
+    >
+      <span style={{ fontSize: 13, flex: 1, minWidth: 200, lineHeight: 1.45 }}>
+        🔓 Your Steam library is <strong>shared with the crew</strong> — what you own, your playtime,
+        and achievements appear in crew features. Switch to Private or hide individual games below anytime.
+      </span>
+      <IslandButton
+        variant="secondary"
+        onClick={() => {
+          try {
+            window.localStorage.setItem("island.steamShareConsent", "1");
+          } catch {
+            /* ignore */
+          }
+          setAck(true);
+        }}
+      >
+        Got it
+      </IslandButton>
+    </div>
+  );
+}
+
+// Site-native "about me" — Discord does not expose the real bio via any API, so
+// the crew gets an editable blurb instead. Self-contained PATCH so it doesn't
+// need to thread through the parent's bulk save.
+function ProfileBlurbEditor({ initialBlurb, disabled }: { initialBlurb: string; disabled: boolean }) {
+  const [blurb, setBlurb] = useState(initialBlurb);
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState(false);
+
+  async function save() {
+    setSaving(true);
+    setSavedAt(false);
+    try {
+      const res = await apiFetch("/profile/me", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ profileBlurb: blurb })
+      });
+      if (res.ok) setSavedAt(true);
+    } catch {
+      // leave as-is; user can retry
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <IslandCard as="div" style={{ marginTop: 8 }}>
+      <h3 style={{ marginTop: 0, marginBottom: 4 }}>About you</h3>
+      <p style={{ marginTop: 0, marginBottom: 8, fontSize: 12, opacity: 0.82 }}>
+        A short blurb shown on your islander profile. Discord doesn't share bios, so this is your spot.
+      </p>
+      <textarea
+        value={blurb}
+        disabled={disabled}
+        maxLength={280}
+        onChange={(e) => {
+          setBlurb(e.target.value);
+          setSavedAt(false);
+        }}
+        placeholder="Couch co-op enjoyer. Will tower defense for snacks."
+        style={{ ...islandInputStyle, width: "100%", minHeight: 72, resize: "vertical", fontFamily: "inherit" }}
+      />
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+        <IslandButton variant="primary" onClick={save} disabled={disabled || saving}>
+          {saving ? "Saving…" : "Save blurb"}
+        </IslandButton>
+        <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+          {savedAt ? "Saved ✓" : `${blurb.length}/280`}
+        </span>
+      </div>
+    </IslandCard>
+  );
+}
 
 type ProfilePageProps = {
   profileData: MeProfile | null;
@@ -59,7 +160,24 @@ export function ProfilePage({
         Manage your personal account preferences and privacy options.
       </p>
 
-      <IslandCard as="div" style={{ marginTop: 8 }}>
+      <IslandCard as="div" style={{ marginTop: 8, padding: 0, overflow: "hidden" }}>
+        {profileData?.bannerUrl ? (
+          <div
+            role="img"
+            aria-label="Your Discord banner"
+            style={{ height: 88, background: `url("${profileData.bannerUrl}") center/cover` }}
+          />
+        ) : profileData?.accentColor != null ? (
+          <div
+            style={{
+              height: 56,
+              background: `linear-gradient(135deg, #${(profileData.accentColor & 0xffffff)
+                .toString(16)
+                .padStart(6, "0")}, ${islandTheme.color.panelMutedBg})`
+            }}
+          />
+        ) : null}
+        <div style={{ padding: 16 }}>
         <h3 style={{ marginTop: 0, marginBottom: 8 }}>Account</h3>
         <p style={{ marginTop: 0, marginBottom: 4 }}>
           <strong>Display Name:</strong> {profileData?.displayName ?? "Not signed in"}
@@ -67,6 +185,80 @@ export function ProfilePage({
         <p style={{ marginTop: 0, marginBottom: 0 }}>
           <strong>Discord Username:</strong> @{profileData?.username ?? "unknown"}
         </p>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
+          {profileData?.joinedAtGuild
+            ? (() => {
+                const d = new Date(profileData.joinedAtGuild);
+                const txt = Number.isNaN(d.getTime())
+                  ? null
+                  : d.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+                return txt ? (
+                  <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+                    ⚓ Islander since {txt}
+                  </span>
+                ) : null;
+              })()
+            : null}
+          {profileData?.premiumSince ? (
+            <span className="island-mono" style={{ fontSize: 12, color: "#f472b6" }}>
+              💎 Server Booster
+            </span>
+          ) : null}
+        </div>
+        {profileData?.steam ? (
+          <div
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              flexWrap: "wrap",
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: islandTheme.color.panelMutedBg,
+              border: `1px solid ${islandTheme.color.border}`
+            }}
+          >
+            {profileData.steam.avatarUrl ? (
+              <img
+                src={profileData.steam.avatarUrl}
+                alt=""
+                style={{ width: 36, height: 36, borderRadius: 6, objectFit: "cover" }}
+              />
+            ) : null}
+            <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+              <span style={{ fontSize: 13, fontWeight: 700 }}>
+                {profileData.steam.personaName ?? "Steam"}
+                {profileData.steam.inGame ? (
+                  <span style={{ color: islandTheme.color.successAccent, fontWeight: 600 }}>
+                    {" "}· 🎮 {profileData.steam.inGame}
+                  </span>
+                ) : null}
+              </span>
+              <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+                {[
+                  typeof profileData.steam.level === "number" ? `Level ${profileData.steam.level}` : null,
+                  profileData.steam.accountCreated
+                    ? `Since ${new Date(profileData.steam.accountCreated).getFullYear()}`
+                    : null
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+            {profileData.steam.profileUrl ? (
+              <a
+                href={profileData.steam.profileUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="island-mono"
+                style={{ marginLeft: "auto", fontSize: 12, color: islandTheme.color.primaryGlow, textDecoration: "none" }}
+              >
+                View on Steam ↗
+              </a>
+            ) : null}
+          </div>
+        ) : null}
         {profileData?.steamId64 ? (
           <p style={{ marginTop: 10, marginBottom: 0 }}>
             <IslandButton
@@ -83,7 +275,10 @@ export function ProfilePage({
             </IslandButton>
           </p>
         ) : null}
+        </div>
       </IslandCard>
+
+      <ProfileBlurbEditor initialBlurb={profileData?.profileBlurb ?? ""} disabled={!profileData} />
 
       {profileData && !profileData.nuggiesOptedOut && (
         <IslandCard as="div" style={{ marginTop: 8 }}>
@@ -106,18 +301,22 @@ export function ProfilePage({
 
       <IslandCard as="div" style={{ marginTop: 8 }}>
         <h3 style={{ marginTop: 0, marginBottom: 8 }}>Privacy & Library Preferences</h3>
+        <SteamShareConsent visibility={steamVisibility} />
         <p style={{ marginTop: 0, marginBottom: 8 }}>Steam library visibility</p>
         <select
-          value={steamVisibility}
+          value={steamVisibility === "public" ? "members" : steamVisibility}
           onChange={(event) => onSteamVisibilityChange(event.target.value as SteamVisibility)}
           style={{ ...islandInputStyle, width: "100%" }}
         >
-          <option value="private">Private (only you)</option>
-          <option value="members">Members only</option>
-          <option value="public">Public</option>
+          <option value="members">Crew-shared — visible to the crew</option>
+          <option value="private">Private — only you</option>
         </select>
+        <p style={{ marginTop: 8, marginBottom: 0, fontSize: 12, opacity: 0.82 }}>
+          Crew-shared lets your library, playtime, and achievements appear in crew features. Private
+          hides all of it from everyone but you.
+        </p>
 
-        <p style={{ marginTop: 12, marginBottom: 8 }}>Exclude owned games from public visibility</p>
+        <p style={{ marginTop: 12, marginBottom: 8 }}>Hide individual games from the crew</p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
             value={ownedGameSearch}

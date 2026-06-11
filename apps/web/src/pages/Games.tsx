@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
+import { GameCover, coverUrl } from "../steamArt.js";
+import { modePills } from "../gameModes.js";
 import type {
   CrewOwnedGame,
   CrewWishlistGame,
@@ -188,6 +190,7 @@ function pickCoverInitials(name: string): string {
 function SessionComposer(props: GamesPageProps) {
   const [mode, setMode] = useState<AIMode>("Tonight");
   const pick = useMemo(() => buildComposerPick(props), [props]);
+  const pickCover = coverUrl(pick?.appId, pick?.headerImageUrl);
   const composerRef = useRef<HTMLDivElement>(null);
   const { composerScrollNonce } = props;
 
@@ -230,8 +233,8 @@ function SessionComposer(props: GamesPageProps) {
         {/* Featured-banner treatment: the picked game gets the same wide
             art-with-gradient presentation as the home featured card. */}
         <div
-          role={pick?.headerImageUrl ? "img" : undefined}
-          aria-label={pick?.headerImageUrl ? pick.name : undefined}
+          role={pick ? "img" : undefined}
+          aria-label={pick ? pick.name : undefined}
           style={{
             minHeight: pick ? 120 : 88,
             borderRadius: 12,
@@ -240,13 +243,13 @@ function SessionComposer(props: GamesPageProps) {
             alignItems: "flex-end",
             padding: "12px 16px",
             overflow: "hidden",
-            background: pick?.headerImageUrl
-              ? `linear-gradient(135deg, rgba(8,16,34,0.88) 25%, rgba(8,16,34,0.45) 70%, rgba(8,16,34,0.15) 100%), url("${pick.headerImageUrl}") center / cover no-repeat`
+            background: pickCover
+              ? `linear-gradient(135deg, rgba(8,16,34,0.88) 25%, rgba(8,16,34,0.45) 70%, rgba(8,16,34,0.15) 100%), url("${pickCover}") center / cover no-repeat`
               : SESSION_COMPOSER_FALLBACK.cover
           }}
         >
           <div style={{ minWidth: 0 }}>
-            {!pick?.headerImageUrl && pick ? (
+            {!pickCover && pick ? (
               <div
                 className="island-mono"
                 style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", color: "rgba(255,255,255,0.55)", marginBottom: 2 }}
@@ -694,8 +697,8 @@ function PatchFeatured({ item, kind, ago }: { item: GameNewsItem; kind: PatchKin
           width: 44,
           height: 44,
           borderRadius: 10,
-          background: item.headerImageUrl
-            ? `center / cover no-repeat url(${JSON.stringify(item.headerImageUrl)})`
+          background: coverUrl(item.appId, item.headerImageUrl)
+            ? `center / cover no-repeat url(${JSON.stringify(coverUrl(item.appId, item.headerImageUrl))})`
             : islandTheme.color.panelMutedBg,
           display: "flex",
           alignItems: "center",
@@ -703,7 +706,7 @@ function PatchFeatured({ item, kind, ago }: { item: GameNewsItem; kind: PatchKin
           fontSize: 22
         }}
       >
-        {item.headerImageUrl ? null : PATCH_KIND_ICON[kind]}
+        {coverUrl(item.appId, item.headerImageUrl) ? null : PATCH_KIND_ICON[kind]}
       </div>
       <div>
         <div
@@ -797,8 +800,8 @@ function PatchRow({
           width: 32,
           height: 32,
           borderRadius: 8,
-          background: item.headerImageUrl
-            ? `center / cover no-repeat url(${JSON.stringify(item.headerImageUrl)})`
+          background: coverUrl(item.appId, item.headerImageUrl)
+            ? `center / cover no-repeat url(${JSON.stringify(coverUrl(item.appId, item.headerImageUrl))})`
             : islandTheme.color.panelMutedBg,
           display: "flex",
           alignItems: "center",
@@ -806,7 +809,7 @@ function PatchRow({
           fontSize: 16
         }}
       >
-        {item.headerImageUrl ? null : PATCH_KIND_ICON[kind]}
+        {coverUrl(item.appId, item.headerImageUrl) ? null : PATCH_KIND_ICON[kind]}
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1003,6 +1006,21 @@ function NightCard({
         boxShadow: isSelected ? "0 0 0 1px rgba(96,165,250,0.5), 0 6px 20px rgba(0,0,0,0.3)" : "none"
       }}
     >
+      {night.selectedAppId ? (
+        <GameCover
+          appId={night.selectedAppId}
+          storedUrl={night.selectedGameImage}
+          variant="header"
+          alt={night.selectedGameName ?? "Selected game"}
+          style={{
+            width: "100%",
+            aspectRatio: "460 / 215",
+            borderRadius: 10,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            marginBottom: 10
+          }}
+        />
+      ) : null}
       <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{night.title}</div>
       <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
         {formatNightDate(night.scheduledFor)}
@@ -1036,6 +1054,47 @@ function NightCard({
         <Pill tone="muted">{night.attendeeCount} crew</Pill>
       </div>
     </button>
+  );
+}
+
+function AttendeeAvatars({ attendees, total }: { attendees: GameNight["attendees"]; total: number }) {
+  if (!attendees || attendees.length === 0) return null;
+  const shown = attendees.slice(0, 8);
+  const overflow = total - shown.length;
+  return (
+    <div style={{ display: "flex", alignItems: "center" }}>
+      {shown.map((a, i) => (
+        <span
+          key={`${a.displayName}-${i}`}
+          title={a.displayName}
+          style={{
+            width: 26,
+            height: 26,
+            borderRadius: 999,
+            marginLeft: i === 0 ? 0 : -8,
+            border: `2px solid ${islandTheme.color.panelBg}`,
+            background: a.avatarUrl ? `url("${a.avatarUrl}") center/cover` : islandTheme.color.panelMutedBg,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 11,
+            fontWeight: 800,
+            color: islandTheme.color.textSubtle,
+            flexShrink: 0
+          }}
+        >
+          {a.avatarUrl ? "" : (a.displayName || "?").trim().slice(0, 1).toUpperCase()}
+        </span>
+      ))}
+      {overflow > 0 ? (
+        <span
+          className="island-mono"
+          style={{ marginLeft: 6, fontSize: 12, color: islandTheme.color.textMuted }}
+        >
+          +{overflow}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -1078,15 +1137,44 @@ function SelectedNightDetail({
           {currentUserAttending ? "Leave" : "RSVP"}
         </button>
       </div>
-      <div style={{ fontSize: 13, color: islandTheme.color.textSubtle }}>
-        {night.selectedGameName ? (
-          <>Tonight's pick: <strong>{night.selectedGameName}</strong></>
-        ) : (
-          <span style={{ color: islandTheme.color.textMuted }}>Host hasn't locked a game yet.</span>
-        )}
-      </div>
-      <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-        {night.attendeeCount} attending
+      {night.selectedAppId ? (
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <GameCover
+            appId={night.selectedAppId}
+            storedUrl={night.selectedGameImage}
+            variant="capsule"
+            alt={night.selectedGameName ?? "Selected game"}
+            style={{
+              width: 184,
+              aspectRatio: "460 / 215",
+              borderRadius: 10,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              flexShrink: 0
+            }}
+          />
+          <div style={{ display: "grid", gap: 6, minWidth: 0, flex: 1 }}>
+            <div style={{ fontSize: 13, color: islandTheme.color.textSubtle }}>
+              Tonight's pick: <strong style={{ color: islandTheme.color.textPrimary }}>{night.selectedGameName}</strong>
+            </div>
+            {modePills(night.selectedGameModes).length > 0 ? (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {modePills(night.selectedGameModes).map((p) => (
+                  <Pill key={p} tone="muted">
+                    {p}
+                  </Pill>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>Host hasn't locked a game yet.</div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <AttendeeAvatars attendees={night.attendees} total={night.attendeeCount} />
+        <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+          {night.attendeeCount} attending
+        </span>
       </div>
     </IslandCard>
   );
@@ -1110,22 +1198,6 @@ function formatNightDate(value: string): string {
     hour: "numeric",
     minute: "2-digit"
   });
-}
-
-function pickWishlistArt(game: CrewWishlistGame): string {
-  const haystack = [...game.tags, ...game.developers].map((value) => value.toLowerCase());
-  const has = (token: string) => haystack.some((tag) => tag.includes(token));
-  if (has("survival")) return "🪵";
-  if (has("horror")) return "👻";
-  if (has("racing")) return "🏎️";
-  if (has("strategy") || has("rts")) return "🏰";
-  if (has("rpg")) return "🗡️";
-  if (has("puzzle")) return "🧩";
-  if (has("co-op") || has("coop") || has("multiplayer")) return "🎯";
-  if (has("simulation") || has("life sim")) return "🌿";
-  if (has("space")) return "🚀";
-  if (has("platform")) return "🦋";
-  return "🎮";
 }
 
 function formatWishlistPrice(cents: number): string {
@@ -1177,7 +1249,7 @@ function GroupWishlist({ crewWishlist }: { crewWishlist: CrewWishlistGame[] }) {
 }
 
 function WishlistCard({ game, hypeScale }: { game: CrewWishlistGame; hypeScale: number }) {
-  const artFallback = pickWishlistArt(game);
+  const pills = modePills(game).slice(0, 2);
   return (
     <article
       style={{
@@ -1193,25 +1265,13 @@ function WishlistCard({ game, hypeScale }: { game: CrewWishlistGame; hypeScale: 
         alignItems: "center"
       }}
     >
-      <div
-        style={{
-          width: 60,
-          height: 60,
-          borderRadius: 10,
-          background: islandTheme.color.panelMutedBg,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 22,
-          color: islandTheme.color.textInverted,
-          backgroundImage: game.headerImageUrl ? `url("${game.headerImageUrl}")` : undefined,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          textShadow: game.headerImageUrl ? "0 1px 4px rgba(0,0,0,0.6)" : undefined
-        }}
-      >
-        {game.headerImageUrl ? "" : artFallback}
-      </div>
+      <GameCover
+        appId={game.appId}
+        storedUrl={game.headerImageUrl}
+        variant="header"
+        alt={game.name}
+        style={{ width: 60, height: 60, borderRadius: 10 }}
+      />
       <div style={{ minWidth: 0 }}>
         <div
           style={{
@@ -1228,6 +1288,28 @@ function WishlistCard({ game, hypeScale }: { game: CrewWishlistGame; hypeScale: 
           {game.name.startsWith("app-") ? `App ${game.appId}` : game.name}
         </div>
         <WishlistPriceBadge game={game} />
+        {pills.length > 0 ? (
+          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+            {pills.map((p) => (
+              <span
+                key={p}
+                className="island-mono"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  padding: "2px 6px",
+                  borderRadius: 999,
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  color: islandTheme.color.textMuted
+                }}
+              >
+                {p}
+              </span>
+            ))}
+          </div>
+        ) : null}
         <HypeBar count={game.hypeCount} scale={hypeScale} />
       </div>
     </article>

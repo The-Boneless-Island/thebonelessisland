@@ -235,16 +235,6 @@ export function App() {
       if (savedMemberSearch !== null) {
         setMemberSearch(savedMemberSearch);
       }
-      const savedExcludedIds = window.localStorage.getItem("island.excludedGameAppIds");
-      if (savedExcludedIds !== null) {
-        const parsed = JSON.parse(savedExcludedIds) as unknown;
-        if (Array.isArray(parsed)) {
-          const normalized = parsed
-            .map((value) => Number(value))
-            .filter((value) => Number.isInteger(value) && value > 0);
-          setExcludedOwnedGameAppIds(normalized);
-        }
-      }
     } catch {
       // Ignore local storage parse issues.
     }
@@ -257,10 +247,6 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("island.memberSearch", memberSearch);
   }, [memberSearch]);
-
-  useEffect(() => {
-    window.localStorage.setItem("island.excludedGameAppIds", JSON.stringify(excludedOwnedGameAppIds));
-  }, [excludedOwnedGameAppIds]);
 
   useEffect(() => {
     void (async () => {
@@ -665,8 +651,10 @@ export function App() {
         setProfileFeatureOptIn(profile.featureOptIn);
         if (profile.steamId64) {
           await loadOwnedGames(true);
+          await loadSteamExclusions();
         } else {
           setOwnedGames([]);
+          setExcludedOwnedGameAppIds([]);
         }
       }
       setProfileJson(JSON.stringify(data, null, 2));
@@ -1358,13 +1346,42 @@ export function App() {
     setPage("islander-profile");
   }
 
+  async function loadSteamExclusions() {
+    try {
+      const res = await apiFetch("/profile/steam-exclusions", { credentials: "include" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { appIds?: number[] };
+      const ids = Array.isArray(data.appIds)
+        ? data.appIds.filter((v) => Number.isInteger(v) && v > 0)
+        : [];
+      setExcludedOwnedGameAppIds(ids);
+    } catch {
+      // leave current state
+    }
+  }
+
+  // Server-persisted + enforced: toggling hides/shows the game across every crew
+  // surface (recommender, round-ups, achievements, activity). Optimistic update,
+  // revert on failure.
   function toggleExcludedOwnedGame(appId: number) {
-    setExcludedOwnedGameAppIds((current) => {
-      if (current.includes(appId)) {
-        return current.filter((value) => value !== appId);
+    const isExcluded = excludedOwnedGameAppIds.includes(appId);
+    setExcludedOwnedGameAppIds((current) =>
+      isExcluded ? current.filter((v) => v !== appId) : [...current, appId]
+    );
+    void (async () => {
+      try {
+        const res = await apiFetch(`/profile/steam-exclusions/${appId}`, {
+          method: isExcluded ? "DELETE" : "PUT",
+          credentials: "include"
+        });
+        if (!res.ok) throw new Error("toggle failed");
+      } catch {
+        // revert
+        setExcludedOwnedGameAppIds((current) =>
+          isExcluded ? [...current, appId] : current.filter((v) => v !== appId)
+        );
       }
-      return [...current, appId];
-    });
+    })();
   }
 
   async function loadGameNights(silent = false) {

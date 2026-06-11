@@ -10,6 +10,31 @@ type GamingNewsPageProps = {
   generalNews: GeneralNewsItem[];
 };
 
+// Source favicon from the article domain — no storage, Google's favicon proxy.
+function faviconUrl(url: string): string | null {
+  try {
+    const host = new URL(url).hostname;
+    return `https://www.google.com/s2/favicons?domain=${host}&sz=32`;
+  } catch {
+    return null;
+  }
+}
+
+function SourceFavicon({ url }: { url: string }) {
+  const src = faviconUrl(url);
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      width={14}
+      height={14}
+      loading="lazy"
+      style={{ borderRadius: 3, flexShrink: 0, verticalAlign: "middle" }}
+    />
+  );
+}
+
 export function GamingNewsPage({ generalNews }: GamingNewsPageProps) {
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -1001,6 +1026,7 @@ function NewsListRow({
             whiteSpace: "nowrap"
           }}
         >
+          <SourceFavicon url={item.url} />
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{item.sourceName}</span>
           {ago ? <span aria-hidden="true">·</span> : null}
           {ago ? <span>{ago}</span> : null}
@@ -1241,6 +1267,7 @@ function NewsArticleModal({
         )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <SourceFavicon url={item.url} />
           <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
             {item.sourceName}
           </span>

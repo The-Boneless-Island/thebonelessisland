@@ -5,6 +5,7 @@ import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
+import { syncAchievementSchema } from "../lib/steamAchievementSchema.js";
 import { ingestNewsForApps } from "../lib/gameNewsIngestion.js";
 import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
@@ -990,6 +991,11 @@ type CrewGameRow = {
   is_online_pvp: boolean;
   is_mmo: boolean;
   mp_max_players_approx: number | null;
+  price_final_cents: number | null;
+  price_discount_pct: number | null;
+  is_free: boolean;
+  release_coming_soon: boolean;
+  release_date_text: string | null;
   developers: string[];
   tags: string[];
   header_image_url: string | null;
@@ -1019,6 +1025,11 @@ steamRouter.get("/crew-games", async (req, res) => {
           g.is_online_pvp,
           g.is_mmo,
           g.mp_max_players_approx,
+          g.price_final_cents,
+          g.price_discount_pct,
+          g.is_free,
+          g.release_coming_soon,
+          g.release_date_text,
           g.developers,
           g.tags,
           g.header_image_url,
@@ -1034,7 +1045,7 @@ steamRouter.get("/crew-games", async (req, res) => {
             ),
             '[]'::json
           ) AS owners
-        FROM user_games ug
+        FROM shareable_user_games ug
         INNER JOIN games g ON g.app_id = ug.app_id
         INNER JOIN users u ON u.id = ug.user_id
         INNER JOIN guild_members gm
@@ -1079,6 +1090,11 @@ steamRouter.get("/crew-games", async (req, res) => {
       mpMaxPlayersApprox: row.mp_max_players_approx,
       maxPlayers: row.mp_max_players_approx,
       medianSessionMinutes: null,
+      priceFinalCents: row.price_final_cents,
+      priceDiscountPct: row.price_discount_pct,
+      isFree: row.is_free,
+      releaseComingSoon: row.release_coming_soon,
+      releaseDateText: row.release_date_text,
       developers: row.developers,
       tags: row.tags,
       headerImageUrl: row.header_image_url,
@@ -1169,7 +1185,7 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
             ),
             '[]'::json
           ) AS wishlisted_by
-        FROM user_wishlists uw
+        FROM shareable_user_wishlists uw
         INNER JOIN games g ON g.app_id = uw.app_id
         INNER JOIN users u ON u.id = uw.user_id
         INNER JOIN guild_members gm
@@ -1297,7 +1313,7 @@ steamRouter.get("/crew-achievements", async (_req, res) => {
           ),
           '[]'::json
         ) AS members
-      FROM user_game_progress p
+      FROM shareable_user_game_progress p
       INNER JOIN games g ON g.app_id = p.app_id
       INNER JOIN users u ON u.id = p.user_id
       INNER JOIN guild_members gm
@@ -1352,7 +1368,7 @@ steamRouter.get("/crew-trending", async (_req, res) => {
         COUNT(DISTINCT u.id) FILTER (WHERE ug.playtime_2weeks > 0)::int AS players,
         (
           SELECT COALESCE(gm2.display_name, gm2.username, dp2.username)
-          FROM user_games ug2
+          FROM shareable_user_games ug2
           INNER JOIN users u2 ON u2.id = ug2.user_id
           INNER JOIN guild_members gm2
             ON gm2.discord_user_id = u2.discord_user_id
@@ -1366,7 +1382,7 @@ steamRouter.get("/crew-trending", async (_req, res) => {
         ) AS top_player_name,
         (
           SELECT ug2.playtime_2weeks
-          FROM user_games ug2
+          FROM shareable_user_games ug2
           INNER JOIN users u2 ON u2.id = ug2.user_id
           INNER JOIN guild_members gm2
             ON gm2.discord_user_id = u2.discord_user_id
@@ -1377,7 +1393,7 @@ steamRouter.get("/crew-trending", async (_req, res) => {
           ORDER BY ug2.playtime_2weeks DESC
           LIMIT 1
         ) AS top_player_minutes
-      FROM user_games ug
+      FROM shareable_user_games ug
       INNER JOIN games g ON g.app_id = ug.app_id
       INNER JOIN users u ON u.id = ug.user_id
       INNER JOIN guild_members gm
@@ -1418,10 +1434,21 @@ type GameDetailRow = {
   is_online_pvp: boolean;
   is_mmo: boolean;
   mp_max_players_approx: number | null;
+  price_initial_cents: number | null;
   price_final_cents: number | null;
   price_discount_pct: number | null;
   is_free: boolean;
+  release_coming_soon: boolean;
   release_date_text: string | null;
+  short_description: string | null;
+  screenshots: Array<{ thumb: string; full: string }> | null;
+  metacritic_score: number | null;
+  metacritic_url: string | null;
+  platform_windows: boolean | null;
+  platform_mac: boolean | null;
+  platform_linux: boolean | null;
+  controller_support: string | null;
+  historical_low_cents: number | null;
 };
 
 type GameDetailOwnerRow = {
@@ -1470,10 +1497,21 @@ steamRouter.get("/game/:appId", async (req, res) => {
         g.is_online_pvp,
         g.is_mmo,
         g.mp_max_players_approx,
+        g.price_initial_cents,
         g.price_final_cents,
         g.price_discount_pct,
         g.is_free,
-        g.release_date_text
+        g.release_coming_soon,
+        g.release_date_text,
+        g.short_description,
+        g.screenshots,
+        g.metacritic_score,
+        g.metacritic_url,
+        g.platform_windows,
+        g.platform_mac,
+        g.platform_linux,
+        g.controller_support,
+        g.historical_low_cents
       FROM games g
       WHERE g.app_id = $1
     `,
@@ -1495,7 +1533,7 @@ steamRouter.get("/game/:appId", async (req, res) => {
         COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
         ug.playtime_minutes AS playtime_forever,
         ug.playtime_2weeks
-      FROM user_games ug
+      FROM shareable_user_games ug
       INNER JOIN users u ON u.id = ug.user_id
       INNER JOIN guild_members gm
         ON gm.discord_user_id = u.discord_user_id
@@ -1515,7 +1553,7 @@ steamRouter.get("/game/:appId", async (req, res) => {
         p.achievements_unlocked AS unlocked,
         p.achievements_total AS total,
         p.completion_pct
-      FROM user_game_progress p
+      FROM shareable_user_game_progress p
       INNER JOIN users u ON u.id = p.user_id
       INNER JOIN guild_members gm
         ON gm.discord_user_id = u.discord_user_id
@@ -1540,6 +1578,29 @@ steamRouter.get("/game/:appId", async (req, res) => {
     [appId]
   );
 
+  // Rarest achievements (with icons) from the cached schema. Fire-and-forget a
+  // schema sync when we have nothing cached so the next view is populated.
+  const achievementCatalogueResult = await db.query<{
+    display_name: string | null;
+    description: string | null;
+    icon_url: string | null;
+    global_unlock_pct: number | null;
+  }>(
+    `
+      SELECT display_name, description, icon_url, global_unlock_pct
+      FROM game_achievements
+      WHERE app_id = $1 AND hidden = FALSE AND icon_url IS NOT NULL
+      ORDER BY global_unlock_pct ASC NULLS LAST
+      LIMIT 8
+    `,
+    [appId]
+  );
+  if (achievementCatalogueResult.rows.length === 0) {
+    void syncAchievementSchema(appId).catch((error: unknown) => {
+      console.error("achievement schema sync failed", error);
+    });
+  }
+
   res.json({
     appId: game.app_id,
     name: game.name,
@@ -1552,11 +1613,28 @@ steamRouter.get("/game/:appId", async (req, res) => {
       isOnlinePvp: game.is_online_pvp,
       isMmo: game.is_mmo,
       mpMaxPlayersApprox: game.mp_max_players_approx,
+      priceInitialCents: game.price_initial_cents,
       priceFinalCents: game.price_final_cents,
       priceDiscountPct: game.price_discount_pct,
       isFree: game.is_free,
-      releaseDateText: game.release_date_text
+      releaseComingSoon: game.release_coming_soon,
+      releaseDateText: game.release_date_text,
+      shortDescription: game.short_description,
+      screenshots: Array.isArray(game.screenshots) ? game.screenshots : [],
+      metacriticScore: game.metacritic_score,
+      metacriticUrl: game.metacritic_url,
+      platformWindows: game.platform_windows,
+      platformMac: game.platform_mac,
+      platformLinux: game.platform_linux,
+      controllerSupport: game.controller_support,
+      historicalLowCents: game.historical_low_cents
     },
+    achievementCatalogue: achievementCatalogueResult.rows.map((row) => ({
+      displayName: row.display_name,
+      description: row.description,
+      iconUrl: row.icon_url,
+      globalUnlockPct: row.global_unlock_pct
+    })),
     owners: ownersResult.rows.map((row) => ({
       discordUserId: row.discord_user_id,
       displayName: row.display_name,

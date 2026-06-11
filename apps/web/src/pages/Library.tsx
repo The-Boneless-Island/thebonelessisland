@@ -3,6 +3,8 @@ import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { CrewOwnedGame, CrewOwner, PageId } from "../types.js";
 import GameDetailDrawer from "../components/GameDetailDrawer.js";
+import { coverUrl } from "../steamArt.js";
+import { formatCents } from "../gameModes.js";
 
 type LibraryPageProps = {
   crewGames: CrewOwnedGame[];
@@ -369,10 +371,12 @@ function LibRow({
   onPlan: (appId: number) => void;
   onDetails: (appId: number) => void;
 }) {
-  const cover = game.headerImageUrl
-    ? { backgroundImage: `url("${game.headerImageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" }
+  const coverSrc = coverUrl(game.appId, game.headerImageUrl);
+  const cover = coverSrc
+    ? { backgroundImage: `url("${coverSrc}")`, backgroundSize: "cover", backgroundPosition: "center" }
     : { background: pickCoverFor(category) };
-  const art = game.headerImageUrl ? "" : pickArtFor(category);
+  const art = coverSrc ? "" : pickArtFor(category);
+  const onSale = typeof game.priceDiscountPct === "number" && game.priceDiscountPct > 0;
 
   return (
     <div
@@ -405,9 +409,22 @@ function LibRow({
         <div style={{ fontSize: 14, fontWeight: 700 }}>
           {game.name}
           {mine ? <IslandTag tone="primary" style={{ marginLeft: 6 }}>★ MINE</IslandTag> : null}
+          {game.releaseComingSoon ? (
+            <IslandTag color="#a78bfa" style={{ marginLeft: 6 }}>SOON</IslandTag>
+          ) : null}
+          {onSale ? (
+            <IslandTag tone="success" style={{ marginLeft: 6 }}>-{game.priceDiscountPct}%</IslandTag>
+          ) : null}
         </div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
           {tagLabel(game, category)}
+          {game.releaseDateText ? (
+            <span style={{ color: islandTheme.color.textMuted }}> · {game.releaseDateText}</span>
+          ) : null}
+          {!game.isFree && typeof game.priceFinalCents === "number" ? (
+            <span style={{ color: islandTheme.color.textSubtle }}> · {formatCents(game.priceFinalCents)}</span>
+          ) : null}
+          {game.isFree ? <span style={{ color: islandTheme.color.primaryGlow }}> · Free</span> : null}
         </div>
       </div>
       <OwnerStack owners={game.owners} />
