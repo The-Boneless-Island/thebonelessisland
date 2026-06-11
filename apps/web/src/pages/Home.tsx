@@ -87,6 +87,7 @@ function HomePageInner({
           />
         </section>
         {featuredArticle && <FeaturedNewsCard item={featuredArticle} onNavigate={onNavigate} />}
+        <CrewTrending onNavigate={onNavigate} />
         <ActivityFeed events={activityEvents} onNavigate={onNavigate} />
         <DriftLog cards={newsCards} onNavigate={onNavigate} />
         <BotAndRitualRow onNavigate={onNavigate} />
@@ -325,6 +326,114 @@ function FeaturedNewsCard({
         </button>
       </div>
     </article>
+  );
+}
+
+// â"€â"€ Crew Trending (hot this week) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+type TrendingGame = {
+  appId: number;
+  name: string;
+  headerImageUrl: string | null;
+  totalMinutes2Weeks: number;
+  players: number;
+  topPlayer: { displayName: string; minutes: number } | null;
+};
+
+function CrewTrending({ onNavigate }: { onNavigate: (page: PageId) => void }) {
+  const [games, setGames] = useState<TrendingGame[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch("/steam/crew-trending")
+      .then(async (r) => {
+        if (!r.ok || cancelled) return;
+        const d = (await r.json().catch(() => null)) as { games?: TrendingGame[] } | null;
+        if (!cancelled) setGames(Array.isArray(d?.games) ? d.games : []);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Hide entirely on a quiet week (no trending data) so the home page stays tidy.
+  if (!loading && (!games || games.length === 0)) return null;
+
+  return (
+    <section style={{ display: "grid", gap: 14 }}>
+      <SectionHead
+        title="Hot this week on the island"
+        meta="What the crew's actually bingeing — playtime from the last fortnight."
+        action="Browse games →"
+        onAction={() => onNavigate("games")}
+      />
+      <IslandCard style={{ display: "flex", flexDirection: "column", gap: 8, padding: 14 }}>
+        {loading ? (
+          <div style={{ fontSize: 13, color: islandTheme.color.textMuted, padding: "8px 4px" }}>
+            Reading the tide charts…
+          </div>
+        ) : (
+          (games ?? []).map((game) => <TrendingRow key={game.appId} game={game} />)
+        )}
+      </IslandCard>
+    </section>
+  );
+}
+
+function TrendingRow({ game }: { game: TrendingGame }) {
+  const hours = (game.totalMinutes2Weeks / 60).toFixed(1);
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "92px minmax(0, 1fr) auto",
+        gap: 12,
+        alignItems: "center",
+        padding: "8px 10px",
+        borderRadius: 10,
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${islandTheme.color.cardBorder}`
+      }}
+    >
+      <div
+        style={{
+          width: 92,
+          height: 43,
+          borderRadius: 8,
+          background: game.headerImageUrl
+            ? `center / cover no-repeat url(${JSON.stringify(game.headerImageUrl)})`
+            : islandTheme.color.panelBg,
+          border: `1px solid ${islandTheme.color.cardBorder}`
+        }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {game.name}
+        </div>
+        {game.topPlayer ? (
+          <div
+            style={{
+              fontSize: 11,
+              color: islandTheme.color.textMuted,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis"
+            }}
+          >
+            led by {game.topPlayer.displayName}
+          </div>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.1 }}>
+        <span className="island-display" style={{ fontSize: 16, fontWeight: 800, color: "#fbbf77" }}>
+          {hours}h
+        </span>
+        <span className="island-mono" style={{ fontSize: 9, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          {game.players === 1 ? "1 player" : `${game.players} players`}
+        </span>
+      </div>
+    </div>
   );
 }
 

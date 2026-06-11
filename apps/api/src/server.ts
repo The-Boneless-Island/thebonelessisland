@@ -26,6 +26,7 @@ import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
 import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
+import { syncWishlistPrices } from "./lib/priceSync.js";
 import { forumsRouter } from "./routes/forums.js";
 import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
@@ -204,6 +205,20 @@ async function bootstrap() {
       console.error("[members] scheduled sync failed:", err);
     });
   }, 60_000);
+
+  // Wishlist price sync: refreshes sale prices on wishlisted games via
+  // CheapShark so the Games wishlist card can flag active discounts. Runs
+  // shortly after boot, then daily.
+  setTimeout(() => {
+    syncWishlistPrices().catch((err) => {
+      console.error("[priceSync] initial wishlist price sync failed:", err);
+    });
+  }, 10_000);
+  setInterval(() => {
+    syncWishlistPrices().catch((err) => {
+      console.error("[priceSync] scheduled wishlist price sync failed:", err);
+    });
+  }, 24 * 60 * 60 * 1000);
 
   app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);

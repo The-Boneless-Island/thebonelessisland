@@ -1115,6 +1115,10 @@ function pickWishlistArt(game: CrewWishlistGame): string {
   return "🎮";
 }
 
+function formatWishlistPrice(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
+}
+
 function GroupWishlist({ crewWishlist }: { crewWishlist: CrewWishlistGame[] }) {
   const visible = crewWishlist.slice(0, 12);
   const maxHype = visible.reduce((max, game) => Math.max(max, game.hypeCount), 0);
@@ -1210,10 +1214,58 @@ function WishlistCard({ game, hypeScale }: { game: CrewWishlistGame; hypeScale: 
         >
           {game.name.startsWith("app-") ? `App ${game.appId}` : game.name}
         </div>
+        <WishlistPriceBadge game={game} />
         <HypeBar count={game.hypeCount} scale={hypeScale} />
       </div>
     </article>
   );
+}
+
+function WishlistPriceBadge({ game }: { game: CrewWishlistGame }) {
+  const onSale = typeof game.priceDiscountPct === "number" && game.priceDiscountPct > 0;
+
+  if (onSale) {
+    return (
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <span
+          className="island-mono"
+          style={{
+            ...islandTagStyle({ color: islandTheme.color.successAccent }),
+            fontWeight: 700
+          }}
+        >
+          -{game.priceDiscountPct}%
+        </span>
+        {typeof game.priceFinalCents === "number" ? (
+          <span style={{ fontSize: 12, fontWeight: 700, color: islandTheme.color.textPrimary }}>
+            {formatWishlistPrice(game.priceFinalCents)}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (game.isFree) {
+    return (
+      <div style={{ marginTop: 6 }}>
+        <span className="island-mono" style={islandTagStyle({ color: islandTheme.color.primaryGlow })}>
+          Free
+        </span>
+      </div>
+    );
+  }
+
+  if (typeof game.priceFinalCents === "number") {
+    return (
+      <div style={{ marginTop: 6 }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: islandTheme.color.textSubtle }}>
+          {formatWishlistPrice(game.priceFinalCents)}
+        </span>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function HypeBar({ count, scale }: { count: number; scale: number }) {

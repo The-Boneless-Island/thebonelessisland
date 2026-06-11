@@ -6,6 +6,7 @@ export type PageId =
   | "community"
   | "community-forums"
   | "community-leaderboard"
+  | "crew-achievements"
   | "nuggies"
   | "nuggies-casino"
   | "nuggies-history"

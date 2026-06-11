@@ -1105,3 +1105,161 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
     console.error("crew-wishlist enrichment failed", error);
   });
 });
+
+type CrewAchievementMemberJson = {
+  discordUserId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  unlocked: number;
+  total: number;
+  completionPct: number;
+};
+
+type CrewAchievementRow = {
+  app_id: number;
+  name: string;
+  header_image_url: string | null;
+  member_count: number;
+  crew_unlocked: number;
+  crew_total: number;
+  members: CrewAchievementMemberJson[];
+};
+
+steamRouter.get("/crew-achievements", async (_req, res) => {
+  if (!getGuildId()) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+
+  const result = await db.query<CrewAchievementRow>(
+    `
+      SELECT
+        g.app_id,
+        g.name,
+        g.header_image_url,
+        COUNT(DISTINCT u.id)::int AS member_count,
+        COALESCE(SUM(p.achievements_unlocked), 0)::int AS crew_unlocked,
+        MAX(p.achievements_total)::int AS crew_total,
+        COALESCE(
+          JSON_AGG(
+            JSONB_BUILD_OBJECT(
+              'discordUserId', u.discord_user_id,
+              'displayName', COALESCE(gm.display_name, gm.username, dp.username),
+              'avatarUrl', COALESCE(gm.avatar_url, dp.avatar_url),
+              'unlocked', p.achievements_unlocked,
+              'total', p.achievements_total,
+              'completionPct', p.completion_pct
+            )
+            ORDER BY p.completion_pct DESC, COALESCE(gm.display_name, gm.username, dp.username) ASC
+          ),
+          '[]'::json
+        ) AS members
+      FROM user_game_progress p
+      INNER JOIN games g ON g.app_id = p.app_id
+      INNER JOIN users u ON u.id = p.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $1
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE p.achievements_total > 0
+      GROUP BY g.app_id, g.name, g.header_image_url
+      HAVING COUNT(DISTINCT u.id) >= 1
+      ORDER BY member_count DESC, crew_unlocked DESC, g.name ASC
+      LIMIT 60
+    `,
+    [getGuildId()]
+  );
+
+  res.json({
+    games: result.rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      headerImageUrl: row.header_image_url,
+      crewUnlocked: row.crew_unlocked,
+      crewTotal: row.crew_total,
+      members: row.members
+    }))
+  });
+});
+
+type CrewTrendingRow = {
+  app_id: number;
+  name: string;
+  header_image_url: string | null;
+  total_minutes_2weeks: number;
+  players: number;
+  top_player_name: string | null;
+  top_player_minutes: number | null;
+};
+
+steamRouter.get("/crew-trending", async (_req, res) => {
+  if (!getGuildId()) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+
+  const result = await db.query<CrewTrendingRow>(
+    `
+      SELECT
+        g.app_id,
+        g.name,
+        g.header_image_url,
+        COALESCE(SUM(ug.playtime_2weeks), 0)::int AS total_minutes_2weeks,
+        COUNT(DISTINCT u.id) FILTER (WHERE ug.playtime_2weeks > 0)::int AS players,
+        (
+          SELECT COALESCE(gm2.display_name, gm2.username, dp2.username)
+          FROM user_games ug2
+          INNER JOIN users u2 ON u2.id = ug2.user_id
+          INNER JOIN guild_members gm2
+            ON gm2.discord_user_id = u2.discord_user_id
+           AND gm2.guild_id = $1
+           AND gm2.in_guild = TRUE
+          LEFT JOIN discord_profiles dp2 ON dp2.user_id = u2.id
+          WHERE ug2.app_id = g.app_id
+            AND ug2.playtime_2weeks > 0
+          ORDER BY ug2.playtime_2weeks DESC
+          LIMIT 1
+        ) AS top_player_name,
+        (
+          SELECT ug2.playtime_2weeks
+          FROM user_games ug2
+          INNER JOIN users u2 ON u2.id = ug2.user_id
+          INNER JOIN guild_members gm2
+            ON gm2.discord_user_id = u2.discord_user_id
+           AND gm2.guild_id = $1
+           AND gm2.in_guild = TRUE
+          WHERE ug2.app_id = g.app_id
+            AND ug2.playtime_2weeks > 0
+          ORDER BY ug2.playtime_2weeks DESC
+          LIMIT 1
+        ) AS top_player_minutes
+      FROM user_games ug
+      INNER JOIN games g ON g.app_id = ug.app_id
+      INNER JOIN users u ON u.id = ug.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $1
+       AND gm.in_guild = TRUE
+      GROUP BY g.app_id, g.name, g.header_image_url
+      HAVING COALESCE(SUM(ug.playtime_2weeks), 0) > 0
+      ORDER BY total_minutes_2weeks DESC, g.name ASC
+      LIMIT 6
+    `,
+    [getGuildId()]
+  );
+
+  res.json({
+    games: result.rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      headerImageUrl: row.header_image_url,
+      totalMinutes2Weeks: row.total_minutes_2weeks,
+      players: row.players,
+      topPlayer:
+        row.top_player_name != null
+          ? { displayName: row.top_player_name, minutes: row.top_player_minutes ?? 0 }
+          : null
+    }))
+  });
+});

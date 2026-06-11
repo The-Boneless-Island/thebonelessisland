@@ -19,6 +19,7 @@ const ForumsPage = lazy(() => import("./pages/Forums.js").then((m) => ({ default
 const ProfilePage = lazy(() => import("./pages/Profile.js").then((m) => ({ default: m.ProfilePage })));
 const SettingsPage = lazy(() => import("./pages/Settings.js").then((m) => ({ default: m.SettingsPage })));
 const CommunityLeaderboardPage = lazy(() => import("./pages/CommunityLeaderboard.js"));
+const CrewAchievementsPage = lazy(() => import("./pages/CrewAchievements.js"));
 const NuggiesHistoryPage = lazy(() => import("./pages/NuggiesHistory.js"));
 import { ToastHost, ToastQueueProvider, useToastQueue, useToastsFromStatus } from "./system/toast.js";
 import { ActivityRefetchProvider } from "./system/activityContext.js";
@@ -1605,6 +1606,10 @@ export function App() {
 
       {page === "community-leaderboard" ? (
         <CommunityLeaderboardPage onNavigate={setPage} />
+      ) : null}
+
+      {page === "crew-achievements" ? (
+        <CrewAchievementsPage onNavigate={setPage} />
       ) : null}
 
       {page === "nuggies" ? <AchievementsPage onProfileChanged={() => void loadProfile(true)} /> : null}
