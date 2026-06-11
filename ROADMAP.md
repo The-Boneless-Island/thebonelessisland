@@ -5,24 +5,36 @@ the site. Derived from a full live-vs-mock audit of the repo (2026-06-10, every
 high-impact claim verified at `file:line`). Work top-down: blockers → go-live →
 performance → expansion → delight. Check items off as they land.
 
-## Status — 2026-06-10 implementation pass (uncommitted, on branch claude/gracious-matsumoto-916f07)
+## Status — 2026-06-10 implementation (committed, branch claude/gracious-matsumoto-916f07)
 
-A 19-agent parallel pass shipped **all of P0, P1, P2(non-structural), and P4**. Repo
-typechecks clean (web + api `tsc --noEmit`) and `vite build` succeeds; route
-code-splitting verified (Admin is now its own 138 kB chunk, out of the initial bundle).
-26 files changed, 2 new pages added. **Not yet committed — review the diff first.**
+Worked through the entire roadmap across 5 verified commits. Every pass: web + api
+`tsc --noEmit` clean and `vite build` green before commit.
 
-- ✅ **P0** — all three blockers fixed (general-news auth, two `fetch()` fixes, DEPLOY.md). *Remaining manual step: flip `API_BASE_URL` in the box's live `.env` to `http://api:3000`.*
+| Commit | Scope |
+|--------|-------|
+| `c550301` | P0 blockers + P1 go-live + P2 (non-structural) + P4 delight |
+| `3f88378` | P3 appdetails build — migration 045 capability/price columns, real recommender, honest Library |
+| `f1febd7` | Steam achievements surface, "Hot this week" trending, wishlist sale radar, GHA buildx cache |
+| `9ba8f4f` | Sunday Tide Check digest, islander profiles, game detail drawer |
+| `724b92d` | SSE event stream (members/nights), polling kept as lighter fallback |
+
+- ✅ **P0** — general-news auth, two `fetch()` fixes, DEPLOY.md. *Manual step left: flip `API_BASE_URL` to `http://api:3000` in the box's live `.env`.*
 - ✅ **P1** — ComingSoon pages, Steam unlink, StreamDrawer→presence, Community rewire + Clips/Clubs cut, dead-chrome sweep, Topbar search removed, Admin truth pass.
-- ✅ **P2 (non-structural)** — code-split, member-sync→server cron, featured memo + staleness gate, crew-games/wishlist respond-then-enrich, vote dead-code purge, sync-recent cooldown, setState equality guards.
-- ✅ **P4** — auto day/night (3-way), confetti on claim/buy, mobile breakpoints, Library PLAN seed, Nuggie chat polish, toast glow-up, time-aware hero.
-- ⏸️ **Deferred (need sign-off / out of autonomous scope):** P3 appdetails migration build (runs DB migrations on the live box — locked contracts in `project_news_appdetails_plan.md`), P3 expansion features (Steam achievements surface, Sunday Tide Check, "Hot this week" trending, wishlist sale radar, Steam-unlock activity diffs, game detail drawer, islander profiles), P2 SSE event stream, P2 GHA buildx cache.
+- ✅ **P2** — code-split, member-sync→server cron, featured memo + staleness gate, crew-games/wishlist respond-then-enrich, vote dead-code purge, sync-recent cooldown, setState guards, **GHA buildx cache**, **SSE event stream**.
+- ✅ **P3** — appdetails build (045), Steam achievements surface, Tide Check digest, trending card, wishlist sale radar, islander profiles, game detail drawer.
+- ✅ **P4** — auto day/night, confetti, mobile breakpoints, Library PLAN seed, Nuggie chat polish, toast glow-up, time-aware hero.
 
-Known follow-ups surfaced during the pass (small, non-blocking):
-- `GET /nuggies/me` does not expose a `dailyAmount` field, so the Achievements claim button reads "Claim Daily Nuggies" (no number). Add the field to show the amount.
-- Community crew-card "Profile" buttons are disabled with a "coming soon" tooltip (no profile page yet → P3 islander profiles).
-- Community game-night RSVP is a read-only status pill (no refresh callback in props); wiring join/leave needs App-owned state.
-- Home "Open in Discord" falls back to in-app navigation (no guild-id env var reachable from the web build); add `VITE_DISCORD_GUILD_ID` to make it a real deep link.
+**Deliberately NOT done (need your call):**
+- **Irreversible DB column drops** — the old plan's migrations 046/047 physically `DROP COLUMN` (legacy `min/max_players`, `median_session_minutes`, dead `game_news` AI cols) on the live DB. Code no longer relies on them; dropping is a separate, reviewed, one-way migration. *(Note: migration number 046 was used here for `weekly_digests`; if the de-AI plan resumes, renumber its drops to 048+.)*
+- **News-pipeline de-AI redesign** — phases 3–6 of `project_news_appdetails_plan.md` (mechanical radar, strip AI curation, `games-news`→`gaming-news` rename). Its own initiative, see `project_news_redesign.md`.
+- **Steam-unlock activity diffs** — small; skipped only because it needs describer edits across Home/Community/bot. Easy follow-up.
+
+Deploy notes / small follow-ups:
+- Run migrations 045 + 046 on next deploy (the runner applies them in order; both are additive `ADD COLUMN` / `CREATE TABLE`).
+- SSE: if Cloudflare buffers `/events`, add a no-buffer rule for that path; the polling fallback keeps the UI correct regardless.
+- `GET /nuggies/me` lacks a `dailyAmount` field → Achievements claim button shows no number. Add the field to surface it.
+- Add `VITE_DISCORD_GUILD_ID` to make Home's "Open in Discord" a real deep link (currently falls back to in-app nav).
+- Game-night RSVP from the Community crew page is still a read-only pill (join/leave there needs App-owned state).
 
 ---
 
