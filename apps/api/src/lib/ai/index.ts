@@ -18,7 +18,10 @@ export const PROVIDER_DEFAULTS: Record<SupportedProvider, string> = {
   // Flash Lite is ~30× cheaper than Sonnet and sufficient for structured JSON
   // curation work — set as the default for fresh installs that pick Gemini.
   gemini: "gemini-2.5-flash-lite",
-  bedrock: "anthropic.claude-haiku-4-5"
+  // Bedrock Claude must be invoked via a cross-region inference profile, not the
+  // bare on-demand id. This default makes the blank-model case work; admins can
+  // still override with any Bedrock model/profile id (incl. Nova).
+  bedrock: "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 };
 
 export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai", "gemini", "bedrock"];

@@ -32,6 +32,13 @@ export class BedrockProvider implements AIProvider {
         content: [{ text: m.content }]
       }));
 
+    // Amazon Nova 2 models run reasoning by DEFAULT. Every call this app makes is
+    // short structured output with a small maxTokens budget (blurbs ~80, chat
+    // ~256, the admin test just 10) — with reasoning on, the model spends that
+    // budget thinking and the answer comes back empty/truncated. Turn it off for
+    // Nova so the budget goes to the actual response. Claude has no such field.
+    const isNova = this.model.toLowerCase().includes("nova");
+
     const res = await this.client.send(
       new ConverseCommand({
         modelId: this.model,
@@ -40,7 +47,8 @@ export class BedrockProvider implements AIProvider {
         inferenceConfig: {
           maxTokens: opts?.maxTokens ?? 1024,
           ...(typeof opts?.temperature === "number" ? { temperature: opts.temperature } : {})
-        }
+        },
+        ...(isNova ? { additionalModelRequestFields: { reasoningConfig: { type: "disabled" } } } : {})
       })
     );
 
@@ -68,19 +76,19 @@ export class BedrockProvider implements AIProvider {
   }
 }
 
-// Per-million-token prices ($USD) keyed by Bedrock model id. This is a
-// cost-estimate signal, not a ground-truth invoice. Claude Haiku numbers are
-// published; Nova numbers are approximate and should be verified in the
-// Bedrock console.
-const BEDROCK_PRICING: Record<string, { in: number; out: number }> = {
-  "anthropic.claude-haiku-4-5": { in: 1.0, out: 5.0 },
-  "amazon.nova-micro-v1:0": { in: 0.035, out: 0.14 } /* approx — verify in Bedrock console */,
-  "amazon.nova-lite-v1:0": { in: 0.06, out: 0.24 } /* approx — verify in Bedrock console */,
-  "amazon.nova-pro-v1:0": { in: 0.8, out: 3.2 } /* approx — verify in Bedrock console */
-};
-
+// Per-million-token prices ($USD) for the cost-estimate signal (not a
+// ground-truth invoice). Matched by model FAMILY substring so it works for the
+// real ids — bare (anthropic.claude-haiku-4-5), dated, and cross-region
+// inference-profile forms (e.g. global.anthropic.claude-haiku-4-5-20251001-v1:0,
+// global.amazon.nova-2-lite-v1:0). Claude Haiku numbers are published; Nova
+// numbers are approximate — verify in the Bedrock console.
 function estimateBedrockCostUsd(model: string, usage: { input: number; output: number }): number {
-  const price = BEDROCK_PRICING[model];
+  const m = model.toLowerCase();
+  let price: { in: number; out: number } | null = null;
+  if (m.includes("claude-haiku")) price = { in: 1.0, out: 5.0 };
+  else if (m.includes("nova-micro")) price = { in: 0.035, out: 0.14 } /* approx */;
+  else if (m.includes("nova-lite")) price = { in: 0.06, out: 0.24 } /* approx; covers nova-2-lite */;
+  else if (m.includes("nova-pro")) price = { in: 0.8, out: 3.2 } /* approx */;
   if (!price) return 0;
   return (usage.input * price.in + usage.output * price.out) / 1_000_000;
 }
