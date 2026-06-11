@@ -12,6 +12,7 @@ installRedactor();
 import { activityRouter } from "./routes/activity.js";
 import { aiChatRouter } from "./routes/aiChat.js";
 import { authRouter } from "./routes/auth.js";
+import { digestRouter } from "./routes/digest.js";
 import { gameNewsRouter } from "./routes/gameNews.js";
 import { gameNewsSourcesRouter } from "./routes/gameNewsSources.js";
 import { generalNewsRouter } from "./routes/generalNews.js";
@@ -27,6 +28,9 @@ import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
 import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
 import { syncWishlistPrices } from "./lib/priceSync.js";
+import { buildAndStoreWeeklyDigest } from "./lib/weeklyDigest.js";
+import { getAISetting } from "./lib/serverSettings.js";
+import { db } from "./db/client.js";
 import { forumsRouter } from "./routes/forums.js";
 import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
@@ -96,6 +100,7 @@ app.use("/auth", authLimiter, authRouter);
 app.use("/ai", aiLimiter, aiChatRouter);
 app.use("/steam", steamLimiter, steamRouter);
 
+app.use("/digest", defaultLimiter, digestRouter);
 app.use("/profile", defaultLimiter, profileRouter);
 app.use("/recommendations", defaultLimiter, recommendationRouter);
 app.use("/game-nights", defaultLimiter, gameNightRouter);
@@ -219,6 +224,52 @@ async function bootstrap() {
       console.error("[priceSync] scheduled wishlist price sync failed:", err);
     });
   }, 24 * 60 * 60 * 1000);
+
+  // Weekly Tide digest: rebuilds the crew recap, then announces it once per
+  // week via the bot outbox. buildAndStoreWeeklyDigest UPSERTs by week_start,
+  // so we run it on a 7-day interval (plus once shortly after boot) and only
+  // post to Discord when the returned weekStart differs from the last one we
+  // announced — guarding against duplicate posts across restarts within a week.
+  let lastPostedDigestWeek: string | null = null;
+  const runWeeklyDigest = async () => {
+    const digest = await buildAndStoreWeeklyDigest();
+    if (digest.weekStart === lastPostedDigestWeek) {
+      return;
+    }
+    const topPlayed = digest.played[0];
+    const lines = [
+      "**Tide check — this week on the island**",
+      `🗓️ ${digest.attendance.totalRsvps} RSVPs across ${digest.attendance.nights.length} game night${digest.attendance.nights.length === 1 ? "" : "s"}`,
+    ];
+    if (topPlayed) {
+      lines.push(`🎮 Most played: ${topPlayed.name} (${topPlayed.crewMinutes2Weeks} crew minutes)`);
+    }
+    if (digest.queued.length > 0) {
+      lines.push(`🌊 In the queue: ${digest.queued[0].name}${digest.queued.length > 1 ? ` +${digest.queued.length - 1} more` : ""}`);
+    }
+    const summary = lines.join("\n");
+
+    const channelId = getAISetting("milestone_channel_id");
+    const payload: { summary: string; channelId?: string } = { summary };
+    if (channelId) {
+      payload.channelId = channelId;
+    }
+    await db.query(
+      `INSERT INTO bot_announcements (kind, payload) VALUES ('tide.weekly', $1::jsonb)`,
+      [JSON.stringify(payload)]
+    );
+    lastPostedDigestWeek = digest.weekStart;
+  };
+  setTimeout(() => {
+    runWeeklyDigest().catch((err) => {
+      console.error("[tide] initial weekly digest failed:", err);
+    });
+  }, 15_000);
+  setInterval(() => {
+    runWeeklyDigest().catch((err) => {
+      console.error("[tide] scheduled weekly digest failed:", err);
+    });
+  }, 7 * 24 * 60 * 60 * 1000);
 
   app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);

@@ -2,6 +2,7 @@ import { memo, useMemo, useState, type ReactNode } from "react";
 import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { CrewOwnedGame, CrewOwner, PageId } from "../types.js";
+import GameDetailDrawer from "../components/GameDetailDrawer.js";
 
 type LibraryPageProps = {
   crewGames: CrewOwnedGame[];
@@ -123,6 +124,7 @@ function LibraryPageImpl({ crewGames, currentDiscordUserId, onNavigate, onPlan }
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<LibFilter>("all");
   const [sort, setSort] = useState<SortMode>("owned");
+  const [openAppId, setOpenAppId] = useState<number | null>(null);
 
   const enriched = useMemo(
     () =>
@@ -262,6 +264,7 @@ function LibraryPageImpl({ crewGames, currentDiscordUserId, onNavigate, onPlan }
               category={entry.category}
               mine={entry.mine}
               onPlan={onPlan}
+              onDetails={setOpenAppId}
             />
           ))
         ) : (
@@ -270,6 +273,8 @@ function LibraryPageImpl({ crewGames, currentDiscordUserId, onNavigate, onPlan }
           </div>
         )}
       </IslandCard>
+
+      <GameDetailDrawer appId={openAppId} onClose={() => setOpenAppId(null)} />
     </div>
   );
 }
@@ -313,12 +318,14 @@ function LibRow({
   game,
   category,
   mine,
-  onPlan
+  onPlan,
+  onDetails
 }: {
   game: CrewOwnedGame;
   category: LibCategory;
   mine: boolean;
   onPlan: (appId: number) => void;
+  onDetails: (appId: number) => void;
 }) {
   const cover = game.headerImageUrl
     ? { backgroundImage: `url("${game.headerImageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" }
@@ -387,7 +394,7 @@ function LibRow({
         </button>
         <button
           type="button"
-          onClick={() => window.open(`https://store.steampowered.com/app/${game.appId}`, "_blank", "noopener")}
+          onClick={() => onDetails(game.appId)}
           className="island-btn island-mono"
           style={{
             background: "transparent",

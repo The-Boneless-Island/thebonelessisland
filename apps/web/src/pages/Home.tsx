@@ -1799,14 +1799,12 @@ function BotAndRitualRow({ onNavigate }: { onNavigate: (page: PageId) => void })
       />
       <CtaCard
         accent={islandTheme.palette.sandWarmAccent}
-        eyebrow="Live on the island"
-        title="Who showed up today"
-        body="The activity feed tracks who's been around and what got played — no digest, no emails, just the real log of island life as it happens."
-        ctaLabel="Jump to activity →"
+        eyebrow="Sunday ritual"
+        title="Tide check"
+        body="Your weekly island recap — who showed up, what got played, what is queued. The tide rolls in every Sunday with the week's attendance, playtime, and wishlist drift."
+        ctaLabel="Read this week's tide →"
         primary={false}
-        onCta={() => {
-          document.getElementById("activity")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }}
+        onCta={() => onNavigate("tide-check")}
       />
     </section>
   );

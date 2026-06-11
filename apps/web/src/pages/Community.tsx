@@ -11,6 +11,7 @@ type CommunityPageProps = {
   guildMembers: GuildMember[];
   gameNights: GameNight[];
   onNavigate: (page: PageId) => void;
+  openProfile: (discordUserId: string) => void;
 };
 
 type ForumCategory = {
@@ -28,7 +29,7 @@ type ForumCategory = {
   } | null;
 };
 
-function CommunityPageInner({ isAdmin, activityEvents, guildMembers, gameNights, onNavigate }: CommunityPageProps) {
+function CommunityPageInner({ isAdmin, activityEvents, guildMembers, gameNights, onNavigate, openProfile }: CommunityPageProps) {
   const [nuggiesLeaderboard, setNuggiesLeaderboard] = useState<NuggiesLeaderboardEntry[]>([]);
   const [forums, setForums] = useState<ForumCategory[] | null>(null);
 
@@ -52,7 +53,7 @@ function CommunityPageInner({ isAdmin, activityEvents, guildMembers, gameNights,
   return (
     <div style={{ display: "grid", gap: 24 }}>
       <Hero />
-      <CrewCarousel members={guildMembers} isAdmin={isAdmin} onNavigate={onNavigate} />
+      <CrewCarousel members={guildMembers} isAdmin={isAdmin} onNavigate={onNavigate} openProfile={openProfile} />
       <ActivitySection events={activityEvents} />
       <ForumsRow forums={forums} />
       <EventsAndLeaderboardsRow gameNights={gameNights} nuggiesLeaderboard={nuggiesLeaderboard} />
@@ -106,11 +107,13 @@ function memberPresenceText(m: GuildMember): string {
 function CrewCarousel({
   members,
   isAdmin,
-  onNavigate
+  onNavigate,
+  openProfile
 }: {
   members: GuildMember[];
   isAdmin: boolean;
   onNavigate: (page: PageId) => void;
+  openProfile: (discordUserId: string) => void;
 }) {
   const onlineCount = members.filter(
     (m) => m.inVoice || m.presenceStatus === "online" || m.presenceStatus === "idle" || m.presenceStatus === "dnd"
@@ -137,7 +140,7 @@ function CrewCarousel({
           }}
         >
           {members.map((m) => (
-            <CrewCard key={m.discordUserId} member={m} isAdmin={isAdmin} onNavigate={onNavigate} />
+            <CrewCard key={m.discordUserId} member={m} isAdmin={isAdmin} onNavigate={onNavigate} openProfile={openProfile} />
           ))}
         </div>
       )}
@@ -148,11 +151,13 @@ function CrewCarousel({
 function CrewCard({
   member,
   isAdmin,
-  onNavigate
+  onNavigate,
+  openProfile
 }: {
   member: GuildMember;
   isAdmin: boolean;
   onNavigate: (page: PageId) => void;
+  openProfile: (discordUserId: string) => void;
 }) {
   const status = memberStatus(member);
   const color = communityColorFor(member.discordUserId);
@@ -271,18 +276,17 @@ function CrewCard({
           <button
             type="button"
             className="island-btn"
-            disabled
-            title="Member profiles are coming soon"
+            onClick={() => openProfile(member.discordUserId)}
             style={{
               flex: 1,
               background: islandTheme.color.panelMutedBg,
               border: `1px solid ${islandTheme.color.cardBorder}`,
-              color: islandTheme.color.textMuted,
+              color: islandTheme.color.textSubtle,
               padding: "5px 8px",
               borderRadius: 999,
               fontSize: 10,
               fontWeight: 700,
-              cursor: "not-allowed",
+              cursor: "pointer",
               font: "inherit"
             }}
           >

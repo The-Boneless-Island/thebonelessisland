@@ -21,6 +21,8 @@ const SettingsPage = lazy(() => import("./pages/Settings.js").then((m) => ({ def
 const CommunityLeaderboardPage = lazy(() => import("./pages/CommunityLeaderboard.js"));
 const CrewAchievementsPage = lazy(() => import("./pages/CrewAchievements.js"));
 const NuggiesHistoryPage = lazy(() => import("./pages/NuggiesHistory.js"));
+const TideCheckPage = lazy(() => import("./pages/TideCheck.js"));
+const IslanderProfilePage = lazy(() => import("./pages/IslanderProfile.js"));
 import { ToastHost, ToastQueueProvider, useToastQueue, useToastsFromStatus } from "./system/toast.js";
 import { ActivityRefetchProvider } from "./system/activityContext.js";
 import { AchievementCelebration, useCelebrationQueue } from "./system/celebration.js";
@@ -87,6 +89,7 @@ export function App() {
   const lastGameNightsRef = useRef<string | null>(null);
   const lastSelectedNightRef = useRef<string | null>(null);
   const [page, setPage] = useState<PageId>("home");
+  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [composerScrollNonce, setComposerScrollNonce] = useState(0);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [results, setResults] = useState<Recommendation[]>([]);
@@ -1265,6 +1268,11 @@ export function App() {
     toastQueue.pushToast(`Planning around ${game?.name ?? "this game"}`, "info");
   }
 
+  function openProfile(discordUserId: string) {
+    setSelectedProfileId(discordUserId);
+    setPage("islander-profile");
+  }
+
   function toggleExcludedOwnedGame(appId: number) {
     setExcludedOwnedGameAppIds((current) => {
       if (current.includes(appId)) {
@@ -1593,7 +1601,16 @@ export function App() {
           guildMembers={guildMembers}
           gameNights={gameNights}
           onNavigate={setPage}
+          openProfile={openProfile}
         />
+      ) : null}
+
+      {page === "tide-check" ? (
+        <TideCheckPage onNavigate={setPage} />
+      ) : null}
+
+      {page === "islander-profile" ? (
+        <IslanderProfilePage targetDiscordUserId={selectedProfileId} onNavigate={setPage} />
       ) : null}
 
       {page === "games-news" ? (

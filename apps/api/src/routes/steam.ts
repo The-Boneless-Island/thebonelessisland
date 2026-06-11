@@ -1263,3 +1263,174 @@ steamRouter.get("/crew-trending", async (_req, res) => {
     }))
   });
 });
+
+type GameDetailRow = {
+  app_id: number;
+  name: string;
+  header_image_url: string | null;
+  is_single_player: boolean;
+  is_online_coop: boolean;
+  is_lan_coop: boolean;
+  is_shared_split_coop: boolean;
+  is_online_pvp: boolean;
+  is_mmo: boolean;
+  mp_max_players_approx: number | null;
+  price_final_cents: number | null;
+  price_discount_pct: number | null;
+  is_free: boolean;
+  release_date_text: string | null;
+};
+
+type GameDetailOwnerRow = {
+  discord_user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  playtime_forever: number;
+  playtime_2weeks: number;
+};
+
+type GameDetailAchievementRow = {
+  display_name: string;
+  unlocked: number;
+  total: number;
+  completion_pct: number;
+};
+
+type GameDetailNewsRow = {
+  title: string;
+  url: string;
+  published_at: string;
+};
+
+steamRouter.get("/game/:appId", async (req, res) => {
+  if (!getGuildId()) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+
+  const appId = Number(req.params.appId);
+  if (!Number.isInteger(appId) || appId <= 0) {
+    res.status(400).json({ error: "appId must be a positive integer" });
+    return;
+  }
+
+  const gameResult = await db.query<GameDetailRow>(
+    `
+      SELECT
+        g.app_id,
+        g.name,
+        g.header_image_url,
+        g.is_single_player,
+        g.is_online_coop,
+        g.is_lan_coop,
+        g.is_shared_split_coop,
+        g.is_online_pvp,
+        g.is_mmo,
+        g.mp_max_players_approx,
+        g.price_final_cents,
+        g.price_discount_pct,
+        g.is_free,
+        g.release_date_text
+      FROM games g
+      WHERE g.app_id = $1
+    `,
+    [appId]
+  );
+  const game = gameResult.rows[0];
+  if (!game) {
+    res.status(404).json({ error: "Game not found" });
+    return;
+  }
+
+  const guildId = getGuildId();
+
+  const ownersResult = await db.query<GameDetailOwnerRow>(
+    `
+      SELECT
+        u.discord_user_id,
+        COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
+        COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
+        ug.playtime_minutes AS playtime_forever,
+        ug.playtime_2weeks
+      FROM user_games ug
+      INNER JOIN users u ON u.id = ug.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $2
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE ug.app_id = $1
+      ORDER BY ug.playtime_minutes DESC, display_name ASC
+    `,
+    [appId, guildId]
+  );
+
+  const achievementsResult = await db.query<GameDetailAchievementRow>(
+    `
+      SELECT
+        COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
+        p.achievements_unlocked AS unlocked,
+        p.achievements_total AS total,
+        p.completion_pct
+      FROM user_game_progress p
+      INNER JOIN users u ON u.id = p.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $2
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE p.app_id = $1
+        AND p.achievements_total > 0
+      ORDER BY p.completion_pct DESC, display_name ASC
+    `,
+    [appId, guildId]
+  );
+
+  const newsResult = await db.query<GameDetailNewsRow>(
+    `
+      SELECT title, url, published_at
+      FROM game_news
+      WHERE app_id = $1
+      ORDER BY published_at DESC
+      LIMIT 5
+    `,
+    [appId]
+  );
+
+  res.json({
+    appId: game.app_id,
+    name: game.name,
+    headerImageUrl: game.header_image_url,
+    store: {
+      isSinglePlayer: game.is_single_player,
+      isOnlineCoop: game.is_online_coop,
+      isLanCoop: game.is_lan_coop,
+      isSharedSplitCoop: game.is_shared_split_coop,
+      isOnlinePvp: game.is_online_pvp,
+      isMmo: game.is_mmo,
+      mpMaxPlayersApprox: game.mp_max_players_approx,
+      priceFinalCents: game.price_final_cents,
+      priceDiscountPct: game.price_discount_pct,
+      isFree: game.is_free,
+      releaseDateText: game.release_date_text
+    },
+    owners: ownersResult.rows.map((row) => ({
+      discordUserId: row.discord_user_id,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+      playtimeForever: row.playtime_forever,
+      playtime2Weeks: row.playtime_2weeks
+    })),
+    achievements: achievementsResult.rows.map((row) => ({
+      displayName: row.display_name,
+      unlocked: row.unlocked,
+      total: row.total,
+      completionPct: row.completion_pct
+    })),
+    news: newsResult.rows.map((row) => ({
+      title: row.title,
+      url: row.url,
+      publishedAt: row.published_at
+    }))
+  });
+});

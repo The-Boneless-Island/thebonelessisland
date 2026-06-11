@@ -615,6 +615,29 @@ type AchievementUnlockedPayload = {
   emoji: string;
 };
 
+type TideWeeklyPayload = {
+  summary: string;
+  channelId?: string;
+};
+
+async function processTideWeekly(payload: TideWeeklyPayload): Promise<void> {
+  // The API already built the markdown summary; post it verbatim to the
+  // milestone channel (reuse milestone_channel_id like achievement/milestone
+  // announcements, allowing payload.channelId to override).
+  const channelId = payload.channelId ?? (await getCachedSetting("milestone_channel_id"));
+  if (!channelId) return;
+  if (!payload.summary) return;
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (channel && channel.isSendable()) {
+      await channel.send(payload.summary);
+    }
+  } catch (err) {
+    console.error("[tide] channel post failed", err);
+  }
+}
+
 async function processAchievementUnlocked(payload: AchievementUnlockedPayload): Promise<void> {
   const enabled = await getCachedSetting("achievement_announcements_enabled");
   if (enabled !== "true") return;
@@ -715,6 +738,8 @@ async function processPendingAnnouncements(): Promise<void> {
           await processMilestoneAnnouncement(row.payload as MilestonePayload);
         } else if (row.kind === "achievement.unlocked") {
           await processAchievementUnlocked(row.payload as AchievementUnlockedPayload);
+        } else if (row.kind === "tide.weekly") {
+          await processTideWeekly(row.payload as TideWeeklyPayload);
         }
       } catch (err) {
         console.error(`[announcements] handler failed for row ${row.id}`, err);

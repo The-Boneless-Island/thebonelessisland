@@ -324,3 +324,241 @@ membersRouter.post("/sync", requireSession, async (_req, res) => {
     throw error;
   }
 });
+
+// ── GET /members/:discordUserId/profile ──────────────────────────────────────
+// Aggregated islander profile (CONTRACT P). Session-gated like the other member
+// reads. Honors users.steam_visibility: when the target hid their library
+// (visibility = 'private'), steamHidden is true and the steam-derived sections
+// (topGames / achievements) are omitted.
+
+// Nuggie rank tiers (lifetime-earned thresholds, ascending). Mirrors
+// MILESTONE_TIERS in lib/nuggiesAchievements.ts; the highest threshold the
+// user's lifetime-earned crosses is their tier. Kept local to avoid coupling
+// this read route to the achievements engine.
+const NUGGIE_TIERS: Array<{ threshold: number; label: string }> = [
+  { threshold: 500, label: "TUTORIAL ISLAND" },
+  { threshold: 2_000, label: "SIDEKICK" },
+  { threshold: 5_000, label: "REGULAR" },
+  { threshold: 15_000, label: "RISING STAR" },
+  { threshold: 40_000, label: "A-LISTER" },
+  { threshold: 100_000, label: "KING OF THE HILL" },
+  { threshold: 250_000, label: "BIG BOSS" },
+  { threshold: 750_000, label: "MR. WORLDWIDE" }
+];
+
+function nuggieTierFor(lifetimeEarned: number): string | null {
+  let tier: string | null = null;
+  for (const t of NUGGIE_TIERS) {
+    if (lifetimeEarned >= t.threshold) tier = t.label;
+  }
+  return tier;
+}
+
+// Short human summary for a recent activity event. No reusable server-side
+// helper exists (routes/activity.ts builds its label client-side), so map the
+// known event-type prefixes to a one-liner.
+function summarizeEvent(eventType: string, payload: Record<string, unknown>): string {
+  const gameName = typeof payload.gameName === "string" ? payload.gameName : null;
+  const label = typeof payload.label === "string" ? payload.label : null;
+  if (eventType.startsWith("achievement.")) {
+    return label ? `Unlocked ${label}` : "Unlocked an achievement";
+  }
+  if (eventType.startsWith("milestone.")) {
+    return label ? `Reached ${label}` : "Reached a new milestone";
+  }
+  if (eventType === "game_night.game_picked") {
+    return gameName ? `Picked ${gameName} for game night` : "Picked a game for game night";
+  }
+  if (eventType.startsWith("game_night.")) {
+    return "Joined a game night";
+  }
+  if (eventType.startsWith("steam.")) {
+    return gameName ? `Played ${gameName}` : "Steam activity";
+  }
+  if (eventType.startsWith("news.")) {
+    return gameName ? `${gameName} news` : "Patch notes";
+  }
+  return "Activity on the island";
+}
+
+membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) => {
+  const guildId = getGuildId();
+  if (!guildId) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+  const discordUserId = String(req.params.discordUserId ?? "");
+  if (!/^\d{15,25}$/.test(discordUserId)) {
+    res.status(400).json({ error: "Invalid discord user id" });
+    return;
+  }
+
+  const baseResult = await db.query<{
+    user_id: string;
+    display_name: string | null;
+    username: string | null;
+    avatar_url: string | null;
+    presence_status: string | null;
+    in_voice: boolean | null;
+    rich_presence_text: string | null;
+    steam_id64: string | null;
+    steam_visibility: string;
+  }>(
+    `
+      SELECT
+        u.id::text AS user_id,
+        gm.display_name,
+        dp.username,
+        COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
+        gm.presence_status,
+        gm.in_voice,
+        gm.rich_presence_text,
+        sl.steam_id64,
+        u.steam_visibility
+      FROM users u
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      LEFT JOIN steam_links sl ON sl.user_id = u.id
+      LEFT JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $2
+       AND gm.in_guild = TRUE
+      WHERE u.discord_user_id = $1
+    `,
+    [discordUserId, guildId]
+  );
+  const base = baseResult.rows[0];
+  if (!base) {
+    res.status(404).json({ error: "Member not found" });
+    return;
+  }
+
+  const userId = BigInt(base.user_id);
+  const steamLinked = Boolean(base.steam_id64);
+  const steamHidden = base.steam_visibility === "private";
+
+  const [activityResult, nuggiesResult, topGamesResult, achievementsResult] = await Promise.all([
+    db.query<{ event_type: string; created_at: string; payload: Record<string, unknown> | null }>(
+      `
+        SELECT ae.event_type, ae.created_at, ae.payload
+        FROM activity_events ae
+        WHERE ae.actor_user_id = $1
+        ORDER BY ae.created_at DESC
+        LIMIT 10
+      `,
+      [userId]
+    ),
+    db.query<{
+      balance: string | null;
+      lifetime_earned: string;
+      title_name: string | null;
+    }>(
+      `
+        SELECT
+          nb.balance,
+          COALESCE((
+            SELECT SUM(amount) FROM nuggies_transactions
+            WHERE user_id = $1 AND amount > 0
+          ), 0)::text AS lifetime_earned,
+          t.name AS title_name
+        FROM (SELECT $1::bigint AS uid) _
+        LEFT JOIN nuggies_balances nb ON nb.user_id = _.uid
+        LEFT JOIN LATERAL (
+          SELECT s.name
+          FROM nuggies_inventory i
+          INNER JOIN nuggies_shop_items s ON s.id = i.item_id
+          WHERE i.user_id = _.uid AND i.equipped = TRUE AND s.item_type = 'title'
+          LIMIT 1
+        ) t ON TRUE
+      `,
+      [userId]
+    ),
+    steamHidden
+      ? Promise.resolve({ rows: [] as Array<{ app_id: number; name: string; header_image_url: string | null; playtime_forever: number; playtime_2weeks: number }> })
+      : db.query<{
+          app_id: number;
+          name: string;
+          header_image_url: string | null;
+          playtime_forever: number;
+          playtime_2weeks: number;
+        }>(
+          `
+            SELECT
+              g.app_id,
+              g.name,
+              g.header_image_url,
+              ug.playtime_minutes AS playtime_forever,
+              ug.playtime_2weeks
+            FROM user_games ug
+            INNER JOIN games g ON g.app_id = ug.app_id
+            WHERE ug.user_id = $1
+            ORDER BY ug.playtime_minutes DESC, g.name ASC
+            LIMIT 6
+          `,
+          [userId]
+        ),
+    steamHidden
+      ? Promise.resolve({ rows: [] as Array<{ total_unlocked: string; app_id: number; name: string; completion_pct: number }> })
+      : db.query<{ total_unlocked: string; app_id: number; name: string; completion_pct: number }>(
+          `
+            SELECT
+              p.app_id,
+              g.name,
+              p.completion_pct,
+              SUM(COALESCE(p.achievements_unlocked, 0)) OVER () AS total_unlocked
+            FROM user_game_progress p
+            INNER JOIN games g ON g.app_id = p.app_id
+            WHERE p.user_id = $1
+              AND p.achievements_total > 0
+            ORDER BY p.completion_pct DESC NULLS LAST, g.name ASC
+            LIMIT 6
+          `,
+          [userId]
+        )
+  ]);
+
+  const nuggiesRow = nuggiesResult.rows[0];
+  const balance = parseInt(nuggiesRow?.balance ?? "0", 10);
+  const lifetimeEarned = parseInt(nuggiesRow?.lifetime_earned ?? "0", 10);
+
+  const totalUnlocked = achievementsResult.rows[0]
+    ? parseInt(achievementsResult.rows[0].total_unlocked, 10)
+    : 0;
+
+  res.json({
+    discordUserId,
+    displayName: base.display_name ?? base.username ?? "Crew member",
+    avatarUrl: base.avatar_url,
+    presence: {
+      status: base.presence_status,
+      inVoice: Boolean(base.in_voice),
+      richPresenceText: base.rich_presence_text
+    },
+    steamLinked,
+    steamHidden,
+    topGames: topGamesResult.rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      headerImageUrl: row.header_image_url,
+      playtimeForever: row.playtime_forever,
+      playtime2Weeks: row.playtime_2weeks
+    })),
+    recentActivity: activityResult.rows.map((row) => ({
+      eventType: row.event_type,
+      createdAt: row.created_at,
+      summary: summarizeEvent(row.event_type, row.payload ?? {})
+    })),
+    nuggies: {
+      balance,
+      tier: nuggieTierFor(lifetimeEarned),
+      equippedTitle: nuggiesRow?.title_name ?? null
+    },
+    achievements: {
+      totalUnlocked,
+      showcase: achievementsResult.rows.map((row) => ({
+        appId: row.app_id,
+        name: row.name,
+        completionPct: row.completion_pct
+      }))
+    }
+  });
+});

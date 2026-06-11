@@ -13,6 +13,8 @@ export type PageId =
   | "nuggies-milestones"
   | "profile"
   | "settings"
+  | "tide-check"
+  | "islander-profile"
   | "admin";
 
 export type Recommendation = {

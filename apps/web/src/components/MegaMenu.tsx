@@ -29,6 +29,7 @@ const NAV_GROUPS: NavGroup[] = [
     defaultId: "community",
     children: [
       { id: "community", label: "Members", description: "Who's on the island right now" },
+      { id: "tide-check", label: "Sunday Tide Check", description: "This week's crew digest — what we played and queued" },
       { id: "community-forums", label: "Forums", description: "Island discussions and crew talk" },
       { id: "community-leaderboard", label: "Leaderboard", description: "Top Nuggies holders" },
       { id: "crew-achievements", label: "Crew Achievements", description: "Achievement progress across the crew" }
@@ -47,7 +48,7 @@ const NAV_GROUPS: NavGroup[] = [
 ];
 
 const GAMES_GROUP_IDS: PageId[] = ["games", "library", "games-news"];
-const COMMUNITY_GROUP_IDS: PageId[] = ["community", "community-forums", "community-leaderboard", "crew-achievements"];
+const COMMUNITY_GROUP_IDS: PageId[] = ["community", "tide-check", "community-forums", "community-leaderboard", "crew-achievements"];
 const NUGGIES_GROUP_IDS: PageId[] = ["nuggies", "nuggies-casino", "nuggies-history", "nuggies-milestones"];
 
 function groupIsActive(group: NavGroup, page: PageId): boolean {
