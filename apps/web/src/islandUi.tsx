@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
 import { islandTheme } from "./theme.js";
 
 export type IslandButtonVariant = "primary" | "secondary" | "danger";
@@ -800,4 +800,34 @@ export function memberColor(seed: string): string {
 export function accentHex(accentColor: number | null | undefined): string | null {
   if (accentColor == null || !Number.isFinite(accentColor)) return null;
   return `#${(accentColor & 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
+/**
+ * Animate a number toward its new value (ease-out, ~600ms). Use for balances
+ * and counters that change live (SSE nuggies-changed) so updates read as
+ * motion instead of a snap. Skips animation under prefers-reduced-motion.
+ */
+export function useCountUp(target: number, durationMs = 600): number {
+  const [display, setDisplay] = useState(target);
+  const prevRef = useRef(target);
+  useEffect(() => {
+    const from = prevRef.current;
+    prevRef.current = target;
+    if (from === target) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setDisplay(target);
+      return;
+    }
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(Math.round(from + (target - from) * eased));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, durationMs]);
+  return display;
 }

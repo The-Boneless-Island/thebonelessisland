@@ -4,7 +4,7 @@ import { useRefetchActivity } from "../system/activityContext.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { usePushToast } from "../system/toast.js";
 import { ConfettiBurst } from "../system/celebration.js";
-import { IslandButton, IslandCard, IslandEmptyState, IslandSkeletonCard } from "../islandUi.js";
+import { IslandButton, IslandCard, IslandEmptyState, IslandSkeletonCard, useCountUp } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
@@ -89,6 +89,8 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
 
   const refetchActivity = useRefetchActivity();
   const pushToast = usePushToast();
+  // Count-up instead of snapping when the balance changes (claim, buy, SSE).
+  const animatedBalance = useCountUp(me?.balance ?? 0);
 
   const load = useCallback(async () => {
     const [meRes, shopRes, lbRes] = await Promise.all([
@@ -357,7 +359,7 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
               <NuggieCoin size={16} /> Nuggies Balance
             </div>
             <div style={{ fontSize: "clamp(2rem, 5vw, 3rem)", fontWeight: 800, lineHeight: 1, color: islandTheme.color.textPrimary }}>
-              ₦{fmt(me.balance)}
+              ₦{fmt(animatedBalance)}
               <span style={{ fontSize: "0.45em", fontWeight: 400, color: islandTheme.color.textMuted, marginLeft: "0.4em" }}>Nuggies</span>
             </div>
             {myRank && !me.optedOut && (

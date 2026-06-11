@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { apiFetch } from "../api/client.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { LOGO_BG_URL } from "../assets.js";
-import { IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, islandInputStyle } from "../islandUi.js";
+import { IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, islandInputStyle, useCountUp } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { islandTheme } from "../theme.js";
@@ -704,6 +704,8 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   }, [claimedToday]);
 
   const balance = balanceOverride ?? baseBalance;
+  // Count-up instead of snapping when the balance changes (claim, SSE update).
+  const animatedBalance = useCountUp(balance ?? 0);
 
   async function handleClaim() {
     if (claiming || claimedToday) return;
@@ -754,7 +756,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
           className="island-display"
           style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1, color: islandTheme.color.nuggieGold }}
         >
-          {balance !== undefined && !optedOut ? `₦${balance.toLocaleString()}` : "—"}
+          {balance !== undefined && !optedOut ? `₦${animatedBalance.toLocaleString()}` : "—"}
         </span>
         <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           available

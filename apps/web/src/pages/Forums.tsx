@@ -1620,6 +1620,7 @@ function ComposeView({
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   useEffect(() => {
     if (title || body) sessionStorage.setItem(draftKey, JSON.stringify({ title, body }));
@@ -1666,18 +1667,57 @@ function ComposeView({
             style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14 }}
           />
         </label>
-        <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-          <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
-            Body
-          </span>
-          <textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={10}
-            placeholder="Lay out your thoughts. Markdown-ish: *italic*, **bold**, > quote, ```code```"
-            style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
-          />
-        </label>
+        <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+              Body
+            </span>
+            <button
+              type="button"
+              className="island-btn"
+              onClick={() => setShowPreview((v) => !v)}
+              disabled={!showPreview && body.trim().length === 0}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: islandTheme.color.primaryGlow,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: "pointer",
+                padding: 0,
+                font: "inherit",
+                opacity: !showPreview && body.trim().length === 0 ? 0.5 : 1
+              }}
+            >
+              {showPreview ? "✎ Edit" : "👁 Preview"}
+            </button>
+          </div>
+          {showPreview ? (
+            <div
+              style={{
+                minHeight: 180,
+                padding: "10px 14px",
+                borderRadius: 10,
+                border: `1px dashed ${islandTheme.color.cardBorder}`,
+                background: islandTheme.color.panelMutedBg,
+                fontSize: 14,
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word"
+              }}
+            >
+              {renderForumBody(body)}
+            </div>
+          ) : (
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={10}
+              placeholder="Lay out your thoughts. Markdown-ish: *italic*, **bold**, > quote, ```code```"
+              style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
+            />
+          )}
+        </div>
         {error ? (
           <p style={{ margin: "0 0 10px", fontSize: 12, color: islandTheme.color.dangerText }}>{error}</p>
         ) : null}

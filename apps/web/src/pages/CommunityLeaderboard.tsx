@@ -61,6 +61,8 @@ export default function CommunityLeaderboardPage({ onNavigate }: CommunityLeader
         </a>
       </header>
 
+      {!loading && leaderboard.length >= 3 ? <Podium top={leaderboard.slice(0, 3)} /> : null}
+
       <IslandCard style={{ padding: 0, overflow: "hidden" }}>
         {loading ? (
           <div style={{ padding: "20px 16px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
@@ -71,9 +73,90 @@ export default function CommunityLeaderboardPage({ onNavigate }: CommunityLeader
             No islanders on the ladder yet. Go earn some Nuggies!
           </div>
         ) : (
-          leaderboard.map((entry, i) => <LeaderRow key={entry.discordUserId} entry={entry} firstRow={i === 0} />)
+          (leaderboard.length >= 3 ? leaderboard.slice(3) : leaderboard).map((entry, i) => (
+            <LeaderRow key={entry.discordUserId} entry={entry} firstRow={i === 0} />
+          ))
         )}
+        {!loading && leaderboard.length === 3 ? (
+          <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+            The podium is the whole ladder so far. Room at the bottom!
+          </div>
+        ) : null}
       </IslandCard>
+    </div>
+  );
+}
+
+// Top-3 podium: gold center and elevated, silver left, bronze right.
+const PODIUM_SLOTS = [
+  { rank: 2, medal: "🥈", avatar: 56, step: 56, color: "#cbd5e1" },
+  { rank: 1, medal: "🥇", avatar: 76, step: 88, color: islandTheme.color.nuggieGold },
+  { rank: 3, medal: "🥉", avatar: 56, step: 40, color: "#d4956a" }
+] as const;
+
+function Podium({ top }: { top: NuggiesLeaderboardEntry[] }) {
+  const byRank = new Map(top.map((e) => [e.rank, e]));
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1.2fr 1fr", gap: 10, alignItems: "end", padding: "8px 4px 0" }}>
+      {PODIUM_SLOTS.map((slot) => {
+        const entry = byRank.get(slot.rank) ?? top[slot.rank - 1];
+        if (!entry) return <div key={slot.rank} />;
+        return (
+          <div key={slot.rank} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, minWidth: 0 }}>
+            <span style={{ fontSize: slot.rank === 1 ? 26 : 20, lineHeight: 1 }} aria-hidden="true">{slot.medal}</span>
+            {entry.avatarUrl ? (
+              <img
+                src={entry.avatarUrl}
+                alt={entry.username}
+                width={slot.avatar}
+                height={slot.avatar}
+                style={{ borderRadius: 999, border: `3px solid ${slot.color}`, boxShadow: `0 0 18px ${slot.color}55` }}
+              />
+            ) : (
+              <div
+                style={{
+                  width: slot.avatar,
+                  height: slot.avatar,
+                  borderRadius: 999,
+                  background: islandTheme.color.panelMutedBg,
+                  border: `3px solid ${slot.color}`,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontWeight: 800,
+                  color: islandTheme.color.textMuted
+                }}
+              >
+                {entry.username.slice(0, 2).toUpperCase()}
+              </div>
+            )}
+            <div style={{ fontWeight: 800, fontSize: slot.rank === 1 ? 15 : 13, maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {entry.username}
+            </div>
+            <span className="island-mono" style={{ fontSize: 12, fontWeight: 700, color: islandTheme.color.nuggieGold }}>
+              ₦{entry.balance.toLocaleString()}
+            </span>
+            <div
+              aria-hidden="true"
+              style={{
+                width: "100%",
+                height: slot.step,
+                borderRadius: "10px 10px 0 0",
+                background: `linear-gradient(180deg, ${slot.color}66, ${slot.color}18)`,
+                border: `1px solid ${slot.color}44`,
+                borderBottom: "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+              }}
+            >
+              <span className="island-display" style={{ fontSize: 20, fontWeight: 800, color: slot.color }}>
+                {slot.rank}
+              </span>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
