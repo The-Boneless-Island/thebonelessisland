@@ -4,7 +4,7 @@ import { useRefetchActivity } from "../system/activityContext.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { usePushToast } from "../system/toast.js";
 import { ConfettiBurst } from "../system/celebration.js";
-import { IslandButton, IslandCard } from "../islandUi.js";
+import { IslandButton, IslandCard, IslandEmptyState, IslandSkeletonCard } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
@@ -192,9 +192,15 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
   }
 
   if (loading) {
+    // Render the page silhouette immediately instead of blocking on a spinner.
     return (
-      <div style={{ padding: 32, textAlign: "center", color: islandTheme.color.textMuted }}>
-        Loading Nuggies…
+      <div style={{ display: "grid", gap: 12 }} aria-busy="true" aria-label="Loading Nuggies">
+        <div className="bi-nuggies-top">
+          <IslandSkeletonCard lines={4} />
+          <IslandSkeletonCard lines={4} />
+        </div>
+        <IslandSkeletonCard lines={6} />
+        <IslandSkeletonCard lines={5} />
       </div>
     );
   }
@@ -202,7 +208,11 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
   if (!me) {
     return (
       <IslandCard>
-        <p style={{ margin: 0 }}>Could not load Nuggies data. Are you logged in?</p>
+        <IslandEmptyState
+          pose="shrug"
+          title="Couldn't load your Nuggies"
+          body="The tide didn't bring your balance back. Refresh the page, or check that you're still logged in."
+        />
       </IslandCard>
     );
   }

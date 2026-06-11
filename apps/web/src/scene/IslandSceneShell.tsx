@@ -656,6 +656,10 @@ function SceneGlobalStyles() {
           from { transform: translateX(0); }
           to { transform: translateX(120vw); }
         }
+        @keyframes islandSkeletonPulse {
+          0%, 100% { opacity: 0.45; }
+          50% { opacity: 0.9; }
+        }
 
         /* ── Occasional shooting star (night flourish) ── */
         .island-shooting-star {

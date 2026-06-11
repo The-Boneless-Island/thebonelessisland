@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
-import { IslandCard } from "../islandUi.js";
+import { IslandCard, IslandEmptyState, IslandSkeleton, IslandSkeletonCard } from "../islandUi.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import {
   MILESTONES,
@@ -92,9 +92,13 @@ export function MilestonesPage() {
   }, [load]);
 
   if (loading) {
+    // Render the page silhouette immediately instead of blocking on a spinner.
     return (
-      <div style={{ padding: 32, textAlign: "center", color: islandTheme.color.textMuted }}>
-        Loading milestones…
+      <div style={{ display: "grid", gap: 12 }} aria-busy="true" aria-label="Loading milestones">
+        <IslandSkeletonCard lines={2} />
+        <IslandSkeleton height={10} radius={999} />
+        <IslandSkeletonCard lines={5} />
+        <IslandSkeletonCard lines={5} />
       </div>
     );
   }
@@ -102,7 +106,11 @@ export function MilestonesPage() {
   if (!me) {
     return (
       <IslandCard>
-        <p style={{ margin: 0 }}>Could not load milestones. Are you logged in?</p>
+        <IslandEmptyState
+          pose="shrug"
+          title="Couldn't load milestones"
+          body="The ladder didn't come back from the server. Refresh the page, or check that you're still logged in."
+        />
       </IslandCard>
     );
   }

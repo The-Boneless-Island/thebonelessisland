@@ -1,6 +1,6 @@
 import { useState, useEffect, memo } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandCard, islandTagStyle } from "../islandUi.js";
+import { IslandCard, IslandSkeletonRow, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
 import type { ActivityEvent, GameNight, GuildMember, NuggiesLeaderboardEntry, PageId } from "../types.js";
@@ -573,8 +573,10 @@ function EventsAndLeaderboardsRow({
         <SectionHead title="Nuggies · top islanders" meta="Most Nuggies earned on the island." action="Full leaderboard →" onAction={() => onNavigate("community-leaderboard")} />
         <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
           {nuggiesLeaderboard.length === 0 ? (
-            <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-              Leaderboard loading…
+            <div style={{ display: "grid", gap: 12, padding: "14px 16px" }} aria-busy="true" aria-label="Loading leaderboard">
+              <IslandSkeletonRow />
+              <IslandSkeletonRow />
+              <IslandSkeletonRow />
             </div>
           ) : (
             nuggiesLeaderboard.map((entry, i) => (

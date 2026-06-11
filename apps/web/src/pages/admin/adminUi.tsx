@@ -2,7 +2,7 @@
 // every admin page composes the same building blocks.
 
 import type { CSSProperties, ReactNode } from "react";
-import { IslandCard, islandTagStyle } from "../../islandUi.js";
+import { IslandCard, IslandSkeletonCard, islandTagStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import { SettingCard } from "../../components/SettingCard.js";
 import { SETTING_META } from "./settingMeta.js";
@@ -300,9 +300,11 @@ export function InlineSettings({ keys, settings, onSave, title = "Settings" }: I
 
   if (settings === null) {
     return (
-      <IslandCard style={{ padding: 18 }}>
-        <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>Loading settings…</div>
-      </IslandCard>
+      <div style={{ display: "grid", gap: 12 }} aria-busy="true" aria-label="Loading settings">
+        {metas.slice(0, 3).map((m) => (
+          <IslandSkeletonCard key={m.key} lines={3} />
+        ))}
+      </div>
     );
   }
 

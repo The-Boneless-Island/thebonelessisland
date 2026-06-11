@@ -29,6 +29,7 @@ import { NuggiesSignalProvider } from "./system/nuggiesSignal.js";
 import { AchievementCelebration, useCelebrationQueue } from "./system/celebration.js";
 import { islandCopy, islandTheme } from "./theme.js";
 import { Topbar } from "./components/Topbar.js";
+import { QuickSwitcher } from "./components/QuickSwitcher.js";
 import {
   isSteamOnboardingSkipped,
   setSteamOnboardingSkipped,
@@ -52,15 +53,6 @@ import type {
   Recommendation,
   ServerSetting
 } from "./types.js";
-
-function ComingSoonPage({ title, description }: { title: string; description: string }) {
-  return (
-    <div style={{ paddingTop: 10 }}>
-      <h1 style={{ fontFamily: "inherit", fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>{title}</h1>
-      <p style={{ margin: 0, fontSize: 15, opacity: 0.7 }}>{description}</p>
-    </div>
-  );
-}
 
 function PageLoadingFallback() {
   return (
@@ -124,6 +116,7 @@ export function App() {
   const [newsCards, setNewsCards] = useState<NewsCard[]>([]);
   const [serverSettings, setServerSettings] = useState<ServerSetting[] | null>(null);
   const [steamOnboardingOpen, setSteamOnboardingOpen] = useState(false);
+  const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const [tagline, setTagline] = useState<string>("");
   const toastQueue = useToastQueue();
   useToastsFromStatus(status, toastQueue.pushToast);
@@ -454,6 +447,19 @@ export function App() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
   }, [page]);
+
+  // Ctrl/Cmd+K opens the quick switcher from anywhere.
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setQuickSwitchOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!selectedNightId) return;
@@ -1577,8 +1583,18 @@ export function App() {
         isAdmin={isAdmin}
         tagline={tagline}
         onLogout={() => void logout()}
+        onOpenSearch={() => setQuickSwitchOpen(true)}
       />
       <div className="bi-topbar-spacer" aria-hidden="true" />
+      <QuickSwitcher
+        open={quickSwitchOpen}
+        onClose={() => setQuickSwitchOpen(false)}
+        isAdmin={isAdmin}
+        guildMembers={guildMembers}
+        crewGames={crewGames}
+        onNavigate={setPage}
+        onOpenProfile={openProfile}
+      />
       <SteamOnboardingModal
         open={steamOnboardingOpen}
         onClose={() => setSteamOnboardingOpen(false)}

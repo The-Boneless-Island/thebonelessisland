@@ -615,6 +615,125 @@ export function IslandStatusPill({ tone, children, style, ...props }: IslandStat
   );
 }
 
+// ── Skeletons ─────────────────────────────────────────────────────────────────
+// Shimmering glass placeholders shown while data loads. The pulse animation is
+// defined globally (islandSkeletonPulse) and disabled under reduced motion.
+
+type IslandSkeletonProps = HTMLAttributes<HTMLDivElement> & {
+  width?: number | string;
+  height?: number | string;
+  radius?: number;
+};
+
+export function IslandSkeleton({ width = "100%", height = 14, radius = 6, style, ...props }: IslandSkeletonProps) {
+  return (
+    <div
+      {...props}
+      aria-hidden="true"
+      style={{
+        width,
+        height,
+        borderRadius: radius,
+        background: islandTheme.color.panelMutedBg,
+        animation: "islandSkeletonPulse 1.4s ease-in-out infinite",
+        ...style
+      }}
+    />
+  );
+}
+
+/** A text-shaped skeleton row: avatar circle + two lines. */
+export function IslandSkeletonRow({ style, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      {...props}
+      aria-hidden="true"
+      style={{ display: "grid", gridTemplateColumns: "36px 1fr", gap: 10, alignItems: "center", ...style }}
+    >
+      <IslandSkeleton width={36} height={36} radius={999} />
+      <div style={{ display: "grid", gap: 6 }}>
+        <IslandSkeleton width="55%" height={12} />
+        <IslandSkeleton width="80%" height={10} />
+      </div>
+    </div>
+  );
+}
+
+/** A card-shaped skeleton: title line + body block. */
+export function IslandSkeletonCard({ lines = 3, style, ...props }: HTMLAttributes<HTMLDivElement> & { lines?: number }) {
+  return (
+    <section {...props} aria-hidden="true" style={{ ...islandCardStyle, display: "grid", gap: 10, ...style }}>
+      <IslandSkeleton width="40%" height={14} />
+      {Array.from({ length: lines }, (_, i) => (
+        <IslandSkeleton key={i} width={`${90 - i * 12}%`} height={11} />
+      ))}
+    </section>
+  );
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+// One component for every "nothing here" moment: mascot art slot + island-
+// voiced copy + optional action. Art defaults to a silhouette placeholder until
+// the real nugget mascot set lands (see /public/mascot/).
+
+export type IslandMascotPose = "wave" | "snooze" | "shrug" | "diver" | "crown";
+
+const MASCOT_SRC: Record<IslandMascotPose, string> = {
+  wave: "/mascot/nugget-wave.svg",
+  snooze: "/mascot/nugget-snooze.svg",
+  shrug: "/mascot/nugget-shrug.svg",
+  diver: "/mascot/nugget-diver.svg",
+  crown: "/mascot/nugget-crown.svg"
+};
+
+type IslandEmptyStateProps = {
+  pose?: IslandMascotPose;
+  title: string;
+  body?: ReactNode;
+  action?: ReactNode;
+  compact?: boolean;
+  style?: CSSProperties;
+};
+
+export function IslandEmptyState({ pose = "wave", title, body, action, compact = false, style }: IslandEmptyStateProps) {
+  const size = compact ? 56 : 88;
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+        gap: 8,
+        padding: compact ? "18px 16px" : "30px 20px",
+        ...style
+      }}
+    >
+      <img
+        src={MASCOT_SRC[pose]}
+        alt=""
+        aria-hidden="true"
+        width={size}
+        height={size}
+        style={{ display: "block", opacity: 0.92 }}
+        onError={(e) => {
+          // Mascot art not shipped yet — hide the slot rather than show a broken image.
+          e.currentTarget.style.display = "none";
+        }}
+      />
+      <div style={{ fontSize: compact ? 13 : 15, fontWeight: 700, color: islandTheme.color.textPrimary }}>
+        {title}
+      </div>
+      {body ? (
+        <div style={{ fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5, maxWidth: "46ch" }}>
+          {body}
+        </div>
+      ) : null}
+      {action ? <div style={{ marginTop: 6 }}>{action}</div> : null}
+    </div>
+  );
+}
+
 // ── IslandTag ─────────────────────────────────────────────────────────────────
 
 type IslandTagTone = "default" | "primary" | "success" | "warning" | "danger" | "info";

@@ -11,9 +11,10 @@ type TopbarProps = {
   isAdmin: boolean;
   tagline?: string;
   onLogout: () => void;
+  onOpenSearch?: () => void;
 };
 
-export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }: TopbarProps) {
+export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, onOpenSearch }: TopbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -68,6 +69,31 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }
         <Brand onNavigate={onNavigate} tagline={tagline} />
         <MegaMenu page={page} onNavigate={onNavigate} isAdmin={isAdmin} />
         <div style={{ flex: 1, minWidth: 12 }} />
+        {onOpenSearch ? (
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            aria-label="Open quick switcher (Ctrl+K)"
+            title="Quick switcher (Ctrl+K)"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 12px",
+              borderRadius: 999,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              background: islandTheme.color.panelMutedBg,
+              color: islandTheme.color.textMuted,
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 13,
+              flexShrink: 0
+            }}
+          >
+            <SearchIcon />
+            <span className="island-mono" style={{ fontSize: 12, letterSpacing: "0.04em" }}>Ctrl K</span>
+          </button>
+        ) : null}
         <div style={{ position: "relative", display: "flex", flexShrink: 0 }}>
           <UserTrigger
             buttonRef={triggerRef}
@@ -262,6 +288,15 @@ function PresenceDot({ inVoice, size }: { inVoice: boolean; size: number }) {
         border: `2px solid ${islandTheme.color.panelBg}`
       }}
     />
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <circle cx="7" cy="7" r="4.5" />
+      <line x1="10.5" y1="10.5" x2="14" y2="14" />
+    </svg>
   );
 }
 

@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProper
 import { apiFetch } from "../api/client.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { LOGO_BG_URL } from "../assets.js";
-import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
+import { IslandCard, IslandEmptyState, IslandTag, islandInputStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { islandTheme } from "../theme.js";
@@ -876,9 +876,12 @@ function FriendsOnline({
         {display.length ? (
           display.map((m) => <CrewRow key={m.discordUserId} member={m} />)
         ) : (
-          <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-            Quiet shoreline right now. Crew sync runs every minute.
-          </p>
+          <IslandEmptyState
+            pose="snooze"
+            compact
+            title="Quiet shoreline right now"
+            body="Crew sync runs every minute — friends show up here the moment they're online."
+          />
         )}
       </div>
       <button
