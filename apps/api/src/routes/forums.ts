@@ -80,7 +80,7 @@ async function fetchPosts(threadId: bigint, viewerUserId: bigint | null): Promis
        p.id, p.thread_id, p.body, p.is_op, p.is_deleted, p.edited_at, p.created_at,
        u.discord_user_id AS author_discord_id,
        dp.username AS author_username,
-       dp.display_name AS author_display_name,
+       COALESCE(dp.global_name, dp.username) AS author_display_name,
        dp.avatar_url AS author_avatar_url,
        (SELECT COUNT(*)::text FROM forum_post_reactions WHERE post_id = p.id) AS reaction_count,
        EXISTS (
@@ -133,7 +133,7 @@ forumsRouter.get("/categories", requireSession, async (_req, res) => {
        lt.title AS last_thread_title,
        lt.slug AS last_thread_slug,
        COALESCE(lt.last_reply_at, lt.created_at) AS last_activity_at,
-       ldp.display_name AS last_user_display,
+       COALESCE(ldp.global_name, ldp.username) AS last_user_display,
        ldp.avatar_url AS last_user_avatar
      FROM forum_categories c
      LEFT JOIN LATERAL (
@@ -200,9 +200,9 @@ forumsRouter.get("/categories/:slug/threads", requireSession, async (req, res) =
        t.created_at, t.last_reply_at,
        u.discord_user_id AS author_discord_id,
        dp.username AS author_username,
-       dp.display_name AS author_display_name,
+       COALESCE(dp.global_name, dp.username) AS author_display_name,
        dp.avatar_url AS author_avatar_url,
-       ldp.display_name AS last_user_display,
+       COALESCE(ldp.global_name, ldp.username) AS last_user_display,
        ldp.avatar_url AS last_user_avatar
      FROM forum_threads t
      INNER JOIN users u ON u.id = t.author_user_id
@@ -371,7 +371,7 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
             t.view_count, t.reply_count, t.created_at, t.updated_at,
             u.discord_user_id AS author_discord_id,
             dp.username AS author_username,
-            dp.display_name AS author_display_name,
+            COALESCE(dp.global_name, dp.username) AS author_display_name,
             dp.avatar_url AS author_avatar_url,
             c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent
      FROM forum_threads t
@@ -815,9 +815,9 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
            u.discord_user_id AS author_discord_id,
            dp.username AS author_username,
-           dp.display_name AS author_display_name,
+           COALESCE(dp.global_name, dp.username) AS author_display_name,
            dp.avatar_url AS author_avatar_url,
-           ldp.display_name AS last_user_display,
+           COALESCE(ldp.global_name, ldp.username) AS last_user_display,
            ldp.avatar_url AS last_user_avatar
     FROM forum_threads t
     INNER JOIN forum_categories c ON c.id = t.category_id
@@ -884,11 +884,11 @@ forumsRouter.get("/stats", requireSession, async (_req, res) => {
          (SELECT COUNT(*)::text FROM forum_posts WHERE is_deleted = FALSE AND created_at > NOW() - INTERVAL '1 day') AS today_posts`
     ),
     db.query<{ display_name: string; avatar_url: string | null; post_count: string }>(
-      `SELECT dp.display_name, dp.avatar_url, COUNT(*)::text AS post_count
+      `SELECT COALESCE(dp.global_name, dp.username) AS display_name, dp.avatar_url, COUNT(*)::text AS post_count
        FROM forum_posts p
        INNER JOIN discord_profiles dp ON dp.user_id = p.author_user_id
        WHERE p.is_deleted = FALSE
-       GROUP BY dp.display_name, dp.avatar_url
+       GROUP BY COALESCE(dp.global_name, dp.username), dp.avatar_url
        ORDER BY COUNT(*) DESC
        LIMIT 5`
     ),
@@ -930,7 +930,7 @@ forumsRouter.get("/recent", requireSession, async (_req, res) => {
   }>(
     `SELECT t.id, t.title, t.slug, t.is_pinned, t.is_locked, t.reply_count, t.created_at, t.last_reply_at,
             c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
-            dp.display_name AS author_display, dp.avatar_url AS author_avatar
+            COALESCE(dp.global_name, dp.username) AS author_display, dp.avatar_url AS author_avatar
      FROM forum_threads t
      INNER JOIN forum_categories c ON c.id = t.category_id
      INNER JOIN discord_profiles dp ON dp.user_id = t.author_user_id
@@ -1057,12 +1057,12 @@ forumsRouter.get("/admin/reports", requireSession, requireParentRole, async (_re
     target_display: string | null;
   }>(
     `SELECT r.id, r.reason, r.status, r.created_at, r.post_id, r.thread_id,
-            dp.display_name AS reporter_display,
+            COALESCE(dp.global_name, dp.username) AS reporter_display,
             dp.username AS reporter_username,
             t.title AS thread_title,
             t.slug AS thread_slug,
             CASE WHEN p.is_deleted THEN '[deleted]' ELSE p.body END AS post_body,
-            tdp.display_name AS target_display
+            COALESCE(tdp.global_name, tdp.username) AS target_display
      FROM forum_reports r
      INNER JOIN discord_profiles dp ON dp.user_id = r.reporter_user_id
      LEFT JOIN forum_posts p ON p.id = r.post_id
@@ -1153,9 +1153,9 @@ forumsRouter.get("/admin/bans", requireSession, requireParentRole, async (_req, 
     reason: string; expires_at: string | null; created_at: string;
     banned_by: string;
   }>(
-    `SELECT b.user_id, u.discord_user_id, dp.display_name, dp.avatar_url,
+    `SELECT b.user_id, u.discord_user_id, COALESCE(dp.global_name, dp.username) AS display_name, dp.avatar_url,
             b.reason, b.expires_at, b.created_at,
-            bdp.display_name AS banned_by
+            COALESCE(bdp.global_name, bdp.username) AS banned_by
      FROM forum_user_bans b
      INNER JOIN users u ON u.id = b.user_id
      INNER JOIN discord_profiles dp ON dp.user_id = b.user_id
@@ -1231,10 +1231,10 @@ forumsRouter.get("/admin/mod-log", requireSession, requireParentRole, async (_re
     target_user_display: string | null;
   }>(
     `SELECT l.id, l.action, l.notes, l.created_at,
-            mdp.display_name AS mod_display,
+            COALESCE(mdp.global_name, mdp.username) AS mod_display,
             t.title AS target_thread_title, t.id::text AS target_thread_id,
             l.target_post_id::text AS target_post_id,
-            tudp.display_name AS target_user_display
+            COALESCE(tudp.global_name, tudp.username) AS target_user_display
      FROM forum_mod_log l
      INNER JOIN discord_profiles mdp ON mdp.user_id = l.moderator_user_id
      LEFT JOIN forum_threads t ON t.id = l.target_thread_id
