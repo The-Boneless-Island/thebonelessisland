@@ -99,8 +99,8 @@ authRouter.get("/discord/callback", async (req, res) => {
   }
   const codeVerifier = req.session?.codeVerifier;
 
-  try {
-    const tokenResp = await fetch("https://discord.com/api/oauth2/token", {
+  const exchangeToken = (withPkce: boolean) =>
+    fetch("https://discord.com/api/oauth2/token", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -110,9 +110,19 @@ authRouter.get("/discord/callback", async (req, res) => {
         code: String(code),
         redirect_uri: env.DISCORD_REDIRECT_URI,
         // PKCE: bind the code to the verifier minted at /login.
-        ...(codeVerifier ? { code_verifier: codeVerifier } : {})
+        ...(withPkce && codeVerifier ? { code_verifier: codeVerifier } : {})
       })
     });
+
+  try {
+    // Try PKCE first. Discord's web-flow PKCE support is undocumented, so if it
+    // rejects the code_verifier, transparently retry once without it. A 4xx
+    // rejection does not consume the auth code, so the fallback can only help —
+    // it never breaks login. Remove the fallback once PKCE is confirmed in prod.
+    let tokenResp = await exchangeToken(true);
+    if (!tokenResp.ok && codeVerifier) {
+      tokenResp = await exchangeToken(false);
+    }
 
     if (!tokenResp.ok) {
       res.status(401).json({ error: "OAuth token exchange failed" });
