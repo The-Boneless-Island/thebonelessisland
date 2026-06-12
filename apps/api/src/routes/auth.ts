@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import express from "express";
 import { z } from "zod";
 import { env } from "../config.js";
@@ -6,6 +6,29 @@ import { db } from "../db/client.js";
 
 const discordScope = encodeURIComponent("identify guilds.members.read");
 export const authRouter = express.Router();
+
+// Cookie name must match the one configured in server.ts so logout clears the
+// right cookie (the __Host- prefix in prod is part of the name).
+const SESSION_COOKIE_NAME =
+  process.env.NODE_ENV === "production" ? "__Host-island_session" : "island_session";
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// express-session's regenerate/save/destroy are callback-based; promisify so the
+// OAuth handler can await them in order (fixation defense: regenerate the
+// pre-login session id once the user is authenticated).
+function regenerateSession(req: express.Request): Promise<void> {
+  return new Promise((resolve, reject) =>
+    req.session.regenerate((err) => (err ? reject(err) : resolve()))
+  );
+}
+function saveSession(req: express.Request): Promise<void> {
+  return new Promise((resolve, reject) =>
+    req.session.save((err) => (err ? reject(err) : resolve()))
+  );
+}
 
 function redirectWithAuthError(res: express.Response, reason: string) {
   const separator = env.WEB_ORIGIN.includes("?") ? "&" : "?";
@@ -41,15 +64,24 @@ function discordBannerUrl(userId: string, hash: string | null | undefined): stri
 }
 
 authRouter.get("/discord/login", (req, res) => {
+  // state defends the OAuth round-trip against CSRF; PKCE (S256) additionally
+  // binds the auth code to this browser so an intercepted code can't be
+  // redeemed elsewhere. PKCE is now recommended for confidential clients too
+  // (RFC 9700 / OAuth 2.1); client_secret is still sent at token exchange.
   const state = randomBytes(16).toString("hex");
-  req.session!.oauthState = state;
+  const codeVerifier = base64UrlEncode(randomBytes(32));
+  const codeChallenge = base64UrlEncode(createHash("sha256").update(codeVerifier).digest());
+  req.session.oauthState = state;
+  req.session.codeVerifier = codeVerifier;
   const redirect = [
     "https://discord.com/oauth2/authorize",
     `?client_id=${env.DISCORD_CLIENT_ID}`,
     "&response_type=code",
     `&redirect_uri=${encodeURIComponent(env.DISCORD_REDIRECT_URI)}`,
     `&scope=${discordScope}`,
-    `&state=${state}`
+    `&state=${state}`,
+    `&code_challenge=${codeChallenge}`,
+    "&code_challenge_method=S256"
   ].join("");
   res.redirect(redirect);
 });
@@ -65,6 +97,7 @@ authRouter.get("/discord/callback", async (req, res) => {
     res.status(400).json({ error: "Invalid OAuth callback state" });
     return;
   }
+  const codeVerifier = req.session?.codeVerifier;
 
   try {
     const tokenResp = await fetch("https://discord.com/api/oauth2/token", {
@@ -75,7 +108,9 @@ authRouter.get("/discord/callback", async (req, res) => {
         client_secret: env.DISCORD_CLIENT_SECRET,
         grant_type: "authorization_code",
         code: String(code),
-        redirect_uri: env.DISCORD_REDIRECT_URI
+        redirect_uri: env.DISCORD_REDIRECT_URI,
+        // PKCE: bind the code to the verifier minted at /login.
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {})
       })
     });
 
@@ -97,8 +132,7 @@ authRouter.get("/discord/callback", async (req, res) => {
     const me = discordUserSchema.parse(await meResp.json());
 
     if (!env.DISCORD_GUILD_ID) {
-      req.session = null;
-      redirectWithAuthError(res, "guild_not_configured");
+      req.session.destroy(() => redirectWithAuthError(res, "guild_not_configured"));
       return;
     }
 
@@ -109,8 +143,7 @@ authRouter.get("/discord/callback", async (req, res) => {
       }
     );
     if (!guildMemberResp.ok) {
-      req.session = null;
-      redirectWithAuthError(res, "not_in_guild");
+      req.session.destroy(() => redirectWithAuthError(res, "not_in_guild"));
       return;
     }
 
@@ -154,8 +187,13 @@ authRouter.get("/discord/callback", async (req, res) => {
       ]
     );
 
-    req.session!.userId = me.id;
-    delete req.session!.oauthState;
+    // Regenerate the session id now that the user is authenticated (drops the
+    // pre-login id that carried oauthState/codeVerifier — session fixation
+    // defense), then stamp identity + creation time and persist before redirect.
+    await regenerateSession(req);
+    req.session.userId = me.id;
+    req.session.createdAt = Date.now();
+    await saveSession(req);
     res.redirect(env.WEB_ORIGIN);
   } catch (error) {
     console.error("OAuth callback failed", error);
@@ -164,6 +202,13 @@ authRouter.get("/discord/callback", async (req, res) => {
 });
 
 authRouter.post("/logout", (req, res) => {
-  req.session = null;
-  res.json({ ok: true });
+  req.session.destroy(() => {
+    res.clearCookie(SESSION_COOKIE_NAME, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production"
+    });
+    res.json({ ok: true });
+  });
 });

@@ -1,6 +1,8 @@
-import cookieSession from "cookie-session";
+import connectPgSimple from "connect-pg-simple";
 import cors from "cors";
 import express from "express";
+import session from "express-session";
+import helmet from "helmet";
 import { ZodError } from "zod";
 import { env } from "./config.js";
 import { installRedactor } from "./lib/logger.js";
@@ -32,7 +34,7 @@ import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
 import { syncWishlistPrices } from "./lib/priceSync.js";
 import { syncSteamPlayerSummaries } from "./lib/steamPlayerSync.js";
 import { buildAndStoreWeeklyDigest } from "./lib/weeklyDigest.js";
-import { getAISetting } from "./lib/serverSettings.js";
+import { getAISetting, getGuildId } from "./lib/serverSettings.js";
 import { db } from "./db/client.js";
 import { forumsRouter } from "./routes/forums.js";
 import { FORUM_UPLOAD_DIR, sweepOrphanUploads } from "./lib/forumUploads.js";
@@ -59,6 +61,33 @@ const app = express();
 // would share the proxy's IP and collapse the rate-limit buckets.
 app.set("trust proxy", 1);
 
+const isProd = process.env.NODE_ENV === "production";
+
+// Defense-in-depth security headers on the API host. Caddy already sets the
+// shared SPA-facing headers (nosniff, X-Frame-Options, Referrer-Policy,
+// Permissions-Policy) on both hosts and Cloudflare owns HSTS, so those are
+// disabled here to avoid duplicate/conflicting headers — helmet adds the rest.
+// CORP is set to same-site so the SPA (apex) can embed upload images served
+// from the API subdomain; COEP stays off (it would break cross-origin CDN art).
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: false,
+      directives: {
+        defaultSrc: ["'none'"],
+        frameAncestors: ["'none'"],
+        baseUri: ["'none'"]
+      }
+    },
+    crossOriginResourcePolicy: { policy: "same-site" },
+    crossOriginEmbedderPolicy: false,
+    strictTransportSecurity: false,
+    xFrameOptions: false,
+    xContentTypeOptions: false,
+    referrerPolicy: false
+  })
+);
+
 app.use(
   cors({
     origin: env.WEB_ORIGIN,
@@ -67,41 +96,123 @@ app.use(
 );
 app.use(express.json());
 
-// Session cookie hardening:
-//   keys[]     — first signs new cookies, all verify existing ones. Lets
-//                you set SESSION_SECRET_PREVIOUS during rotation so users
-//                stay logged in across a secret change.
-//   secure     — HTTPS-only in prod. Auto-off in dev so localhost works.
-//   sameSite   — 'lax' blocks CSRF on state-changing requests while still
-//                allowing OAuth redirects from Discord.
-//   httpOnly   — JS can't read the cookie → XSS can't exfiltrate session.
-//   maxAge     — explicit 30-day expiry caps session theft window.
-const sessionKeys = [env.SESSION_SECRET];
+// CSP violation reports from the SPA's Report-Only policy (set at Caddy).
+// Mounted before the session + CSRF middleware so unauthenticated, possibly
+// cross-site browser reports aren't blocked. Logged only — no DB, no storage.
+app.post(
+  "/csp-reports",
+  defaultLimiter,
+  express.json({
+    type: ["application/csp-report", "application/reports+json", "application/json"],
+    limit: "16kb"
+  }),
+  (req, res) => {
+    try {
+      console.warn("[csp-report]", JSON.stringify(req.body).slice(0, 1000));
+    } catch {
+      // ignore malformed report bodies
+    }
+    res.status(204).end();
+  }
+);
+
+// Server-side session store hardening:
+//   store      — Postgres-backed (connect-pg-simple): sessions are rows, so a
+//                ban / guild-removal can revoke them instantly (see the sweep
+//                in bootstrap) and they survive secret rotation.
+//   secret[]   — first signs new cookies, all verify existing ones, so
+//                SESSION_SECRET_PREVIOUS keeps users logged in across rotation.
+//   name       — __Host- prefix in prod (requires Secure + Path=/ + no Domain).
+//   secure     — HTTPS-only in prod; off in dev so localhost works.
+//   sameSite   — 'lax' blocks cross-site CSRF while allowing OAuth redirects.
+//   rolling    — every response resets maxAge → 30-day idle timeout.
+// Session fixation is closed by regenerate-on-login (routes/auth.ts) and the
+// 90-day absolute cap below.
+const sessionSecrets = [env.SESSION_SECRET];
 if (process.env.SESSION_SECRET_PREVIOUS) {
-  sessionKeys.push(process.env.SESSION_SECRET_PREVIOUS);
+  sessionSecrets.push(process.env.SESSION_SECRET_PREVIOUS);
 }
 if (env.SESSION_SECRET.length < 32) {
   console.warn("[security] SESSION_SECRET shorter than 32 chars — rotate to a strong random value before prod.");
 }
+const PgSessionStore = connectPgSimple(session);
 app.use(
-  cookieSession({
-    name: "island_session",
-    keys: sessionKeys,
-    sameSite: "lax",
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    maxAge: 30 * 24 * 60 * 60 * 1000,
+  session({
+    store: new PgSessionStore({
+      pool: db,
+      tableName: "session",
+      createTableIfMissing: false // table is owned by migration 062
+    }),
+    name: isProd ? "__Host-island_session" : "island_session",
+    secret: sessionSecrets,
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
+    cookie: {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 30 * 24 * 60 * 60 * 1000
+    }
   })
 );
 
+// Absolute session lifetime cap. rolling:true never expires an active session
+// on its own, so stamp createdAt at login and hard-destroy anything older than
+// 90 days regardless of activity.
+const MAX_SESSION_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+app.use((req, _res, next) => {
+  const createdAt = req.session?.createdAt;
+  if (typeof createdAt === "number" && Date.now() - createdAt > MAX_SESSION_AGE_MS) {
+    req.session.destroy(() => next());
+    return;
+  }
+  next();
+});
+
+// CSRF defense. SameSite=lax alone is not sufficient (OWASP 2025), so verify
+// request provenance on every state-changing request: modern browsers send
+// Sec-Fetch-Site; fall back to Origin for legacy UAs. Bot/server callers
+// authenticate with a shared-secret header (not forgeable cross-site) and are
+// exempt. Never fail open.
+const CSRF_SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+app.use((req, res, next) => {
+  if (CSRF_SAFE_METHODS.has(req.method)) {
+    next();
+    return;
+  }
+  const botSecret = req.get("x-island-bot-secret");
+  if (botSecret && env.BOT_API_SHARED_SECRET && botSecret === env.BOT_API_SHARED_SECRET) {
+    next();
+    return;
+  }
+  const secFetchSite = req.get("sec-fetch-site");
+  if (secFetchSite) {
+    if (secFetchSite === "same-origin" || secFetchSite === "same-site") {
+      next();
+      return;
+    }
+    res.status(403).json({ error: "Cross-site request blocked" });
+    return;
+  }
+  const origin = req.get("origin");
+  if (origin && origin === env.WEB_ORIGIN) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "Origin verification failed" });
+});
+
 // Set when runMigrations() throws during a dev boot (prod exits instead).
-// Surfaced on /health so a drifted schema is visible to anyone checking the
-// endpoint, not just whoever happens to scroll the boot logs.
+// Surfaced on /health as a boolean only — the full error stays in the boot
+// logs (banner). Exposing the raw migration error to unauthenticated callers
+// leaks schema/internal detail, so /health reports just ok/failed.
 let migrationFailure: string | null = null;
 
 app.get("/health", (_req, res) => {
   if (migrationFailure !== null) {
-    res.json({ ok: false, migrations: "failed", migrationError: migrationFailure });
+    res.json({ ok: false, migrations: "failed" });
     return;
   }
   res.json({ ok: true, migrations: "ok" });
@@ -183,6 +294,29 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
   console.error(error);
   res.status(500).json({ error: "Internal server error" });
 });
+
+// Revoke sessions for members who are no longer in the guild (left or banned).
+// Sessions are rows, so this is a single sweep; run right after each member
+// sync so a removed member loses access within ~60s without a server restart.
+// Guild membership is the source of truth — guild_members retains last-known
+// state on a failed sync, so this never mass-logs-out on a transient error.
+async function revokeDepartedSessions() {
+  const guildId = getGuildId();
+  if (!guildId) return;
+  await db.query(
+    `
+      DELETE FROM "session" s
+      WHERE (s.sess->>'userId') IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM guild_members gm
+          WHERE gm.discord_user_id = s.sess->>'userId'
+            AND gm.guild_id = $1
+            AND gm.in_guild = TRUE
+        )
+    `,
+    [guildId]
+  );
+}
 
 // Run migrations + load settings before accepting requests
 async function bootstrap() {
@@ -297,6 +431,7 @@ async function bootstrap() {
   setTimeout(() => {
     syncGuildMembers()
       .then(() => broadcast("members-changed"))
+      .then(() => revokeDepartedSessions())
       .catch((err) => {
         console.error("[members] initial sync failed:", err);
       });
@@ -304,6 +439,7 @@ async function bootstrap() {
   setInterval(() => {
     syncGuildMembers()
       .then(() => broadcast("members-changed"))
+      .then(() => revokeDepartedSessions())
       .catch((err) => {
         console.error("[members] scheduled sync failed:", err);
       });

@@ -43,6 +43,17 @@ bonelessisland.com {
 	tls /certs/origin-cert.pem /certs/origin-key.pem
 	import security_headers
 
+	# Content-Security-Policy shipped Report-Only first: violations POST to the
+	# API's /csp-reports endpoint instead of being blocked. Flip the header name
+	# to `Content-Security-Policy` (enforcing) once a week of prod reports comes
+	# back clean — see SITE_MODERNIZATION_PLAN.md §9. img-src enumerates the
+	# Discord + Steam art hosts; style-src 'unsafe-inline' is required for React
+	# inline styles (script-src stays strict — Vite emits no inline scripts).
+	header {
+		Content-Security-Policy-Report-Only "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.discordapp.com https://steamcdn-a.akamaihd.net https://*.steamstatic.com https://store.steampowered.com https://media.steampowered.com https://api.bonelessisland.com; connect-src 'self' https://api.bonelessisland.com; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; report-uri https://api.bonelessisland.com/csp-reports; report-to csp"
+		Reporting-Endpoints `csp="https://api.bonelessisland.com/csp-reports"`
+	}
+
 	root * /srv
 	encode zstd gzip
 
