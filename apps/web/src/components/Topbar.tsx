@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
 import type { MeProfile, PageId } from "../types.js";
 import { UserMenu } from "./UserMenu.js";
@@ -68,7 +69,7 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, 
           minWidth: 0
         }}
       >
-        <Brand onNavigate={onNavigate} tagline={tagline} />
+        <Brand tagline={tagline} />
         <MegaMenu page={page} onNavigate={onNavigate} isAdmin={isAdmin} />
         <div style={{ flex: 1, minWidth: 12 }} />
         {onOpenSearch ? (
@@ -123,11 +124,11 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, 
   );
 }
 
-function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; tagline?: string }) {
+function Brand({ tagline }: { tagline?: string }) {
   return (
-    <button
-      type="button"
-      onClick={() => onNavigate("home")}
+    <Link
+      to="/"
+      aria-label="The Boneless Island — home"
       style={{
         display: "flex",
         alignItems: "center",
@@ -139,6 +140,8 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
         cursor: "pointer",
         font: "inherit",
         textAlign: "left",
+        textDecoration: "none",
+        color: "inherit",
         flexShrink: 0,
         minWidth: 0,
         maxWidth: 320
@@ -190,7 +193,7 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
           {tagline || "crew at the shoreline"}
         </div>
       </div>
-    </button>
+    </Link>
   );
 }
 

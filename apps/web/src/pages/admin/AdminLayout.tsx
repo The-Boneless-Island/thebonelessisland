@@ -1,9 +1,10 @@
-// Admin shell: persistent sidebar + header with unified search. Active page is
-// mirrored to the URL hash (#/admin/<page>[#anchor-ish via state]) so admin
-// views are deep-linkable and the browser back button works.
+// Admin shell: persistent sidebar + header with unified search. The active page
+// is a real URL path (/admin and /admin/<page>) so admin views are deep-linkable,
+// survive refresh, and the browser back button works.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { islandTheme } from "../../theme.js";
 import {
   ADMIN_NAV_GROUPS,
@@ -13,24 +14,16 @@ import {
   type AdminSearchResult
 } from "./adminNav.js";
 
-const HASH_PREFIX = "#/admin/";
+const ADMIN_PREFIX = "/admin/";
 
-export function pageIdFromHash(): AdminPageId {
-  if (typeof window === "undefined") return "dashboard";
-  const hash = window.location.hash;
-  if (!hash.startsWith(HASH_PREFIX)) return "dashboard";
-  const id = hash.slice(HASH_PREFIX.length).split("/")[0] as AdminPageId;
+export function pageIdFromPath(pathname: string): AdminPageId {
+  if (!pathname.startsWith(ADMIN_PREFIX)) return "dashboard";
+  const id = pathname.slice(ADMIN_PREFIX.length).split("/")[0] as AdminPageId;
   return ADMIN_PAGES[id] ? id : "dashboard";
 }
 
-function writeHash(page: AdminPageId, replace = false) {
-  const next = page === "dashboard" ? "#/admin" : `${HASH_PREFIX}${page}`;
-  if (window.location.hash === next) return;
-  if (replace) {
-    window.history.replaceState(null, "", next);
-  } else {
-    window.history.pushState(null, "", next);
-  }
+function adminPath(page: AdminPageId): string {
+  return page === "dashboard" ? "/admin" : `${ADMIN_PREFIX}${page}`;
 }
 
 type AdminLayoutProps = {
@@ -38,37 +31,27 @@ type AdminLayoutProps = {
 };
 
 export function AdminLayout({ renderPage }: AdminLayoutProps) {
-  const [page, setPage] = useState<AdminPageId>(() => pageIdFromHash());
+  const location = useLocation();
+  const routerNavigate = useNavigate();
+  const page = pageIdFromPath(location.pathname);
   const pendingAnchor = useRef<string | null>(null);
+  // Bumped on every navigate-with-anchor so the anchor-scroll effect fires even
+  // when the section is unchanged (jumping to an anchor on the current page).
+  const [anchorNonce, setAnchorNonce] = useState(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Sync initial hash + react to back/forward.
-  useEffect(() => {
-    writeHash(page, true);
-    const onPop = () => setPage(pageIdFromHash());
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Leaving the admin area entirely: drop the admin hash so a later refresh
-  // doesn't bounce back into admin unexpectedly.
-  useEffect(() => () => {
-    if (window.location.hash.startsWith("#/admin")) {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-  }, []);
-
-  const navigate = useCallback((next: AdminPageId, anchor?: string) => {
-    pendingAnchor.current = anchor ?? null;
-    setPage((current) => {
-      if (current !== next) writeHash(next);
-      return next;
-    });
-    if (!anchor) {
-      window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
-    }
-  }, []);
+  const navigate = useCallback(
+    (next: AdminPageId, anchor?: string) => {
+      pendingAnchor.current = anchor ?? null;
+      if (anchor) setAnchorNonce((n) => n + 1);
+      const path = adminPath(next);
+      if (location.pathname !== path) routerNavigate(path);
+      if (!anchor) {
+        window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+      }
+    },
+    [routerNavigate, location.pathname]
+  );
 
   // After the target page paints, scroll to + flash the requested anchor.
   useEffect(() => {
@@ -88,7 +71,7 @@ export function AdminLayout({ renderPage }: AdminLayoutProps) {
         window.setTimeout(() => el.classList.remove("bi-anchor-flash"), 2400);
       });
     });
-  }, [page]);
+  }, [page, anchorNonce]);
 
   // "/" focuses search (unless typing in an input already).
   useEffect(() => {

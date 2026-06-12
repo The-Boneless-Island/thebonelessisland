@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
+import { pathForPage } from "../lib/routes.js";
 import type { PageId } from "../types.js";
 
 type NavChild = {
@@ -124,15 +126,14 @@ export function MegaMenu({ page, onNavigate, isAdmin }: MegaMenuProps) {
         />
       ))}
       {isAdmin && (
-        <button
-          type="button"
-          onClick={() => onNavigate("admin")}
-          style={navButtonStyle(page === "admin")}
+        <Link
+          to="/admin"
+          style={{ ...navButtonStyle(page === "admin"), textDecoration: "none" }}
           onMouseEnter={(e) => { if (page !== "admin") e.currentTarget.style.background = islandTheme.color.secondary; }}
           onMouseLeave={(e) => { if (page !== "admin") e.currentTarget.style.background = "transparent"; }}
         >
           Admin
-        </button>
+        </Link>
       )}
     </nav>
   );
@@ -174,16 +175,15 @@ function DesktopGroupItem({
 
   return (
     <div style={{ position: "relative" }} onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-      <button
-        type="button"
-        onClick={() => onNavigate(group.defaultId)}
-        style={navButtonStyle(active)}
+      <Link
+        to={pathForPage(group.defaultId)}
+        style={{ ...navButtonStyle(active), textDecoration: "none" }}
         onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = islandTheme.color.secondary; }}
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = active ? "rgba(37, 99, 235, 0.22)" : "transparent"; }}
       >
         {group.label}
         <ChevronSmall open={open} />
-      </button>
+      </Link>
 
       {open && (
         <div
@@ -206,14 +206,16 @@ function DesktopGroupItem({
           {group.children.map((child) => {
             const childActive = currentPage === child.id;
             return (
-              <button
+              <Link
                 key={child.id}
-                type="button"
-                onClick={() => { onNavigate(child.id); setOpen(false); }}
+                to={pathForPage(child.id)}
+                onClick={(e) => { if (child.badge) { e.preventDefault(); return; } setOpen(false); }}
                 style={{
                   display: "block",
                   width: "100%",
                   textAlign: "left",
+                  textDecoration: "none",
+                  color: "inherit",
                   background: childActive ? "rgba(37, 99, 235, 0.18)" : "transparent",
                   border: "none",
                   borderRadius: 10,
@@ -258,7 +260,7 @@ function DesktopGroupItem({
                 <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.4 }}>
                   {child.description}
                 </div>
-              </button>
+              </Link>
             );
           })}
         </div>

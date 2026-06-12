@@ -1,4 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { IslandButton, IslandCard, IslandEmptyState, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
@@ -65,63 +66,49 @@ type ForumsPageProps = {
 
 const FEED_PAGE_SIZE = 30;
 
-// ── Hash routing ────────────────────────────────────────────────────────────
-// Forum views are URL-addressable via the hash so threads/posts are shareable
-// (permalinks), announce-able (Discord) and notification-linkable. Grammar:
-//   #/forums
-//   #/forums/category/<slug>
-//   #/forums/thread/<id>[/post/<postId>]
-//   #/forums/compose/<slug>[/<type>]
-function parseForumHash(): ForumView {
-  const h = typeof window === "undefined" ? "" : window.location.hash;
+// ── Path routing ────────────────────────────────────────────────────────────
+// Forum views are real URL paths so threads/posts are shareable (permalinks),
+// announce-able (Discord) and notification-linkable, and survive refresh.
+// Grammar (under the /forums route):
+//   /forums
+//   /forums/category/<slug>
+//   /forums/thread/<id>[/post/<postId>]
+//   /forums/compose/<slug>[/<type>]
+function parseForumView(pathname: string): ForumView {
+  const rest = pathname.replace(/^\/forums\/?/, "");
   let m: RegExpExecArray | null;
-  if ((m = /^#\/forums\/thread\/(\d+)(?:\/post\/(\d+))?/.exec(h))) {
+  if ((m = /^thread\/(\d+)(?:\/post\/(\d+))?/.exec(rest))) {
     return { mode: "thread", threadId: Number(m[1]), postId: m[2] ? Number(m[2]) : undefined };
   }
-  if ((m = /^#\/forums\/category\/([a-z0-9-]+)/.exec(h))) return { mode: "category", slug: m[1] };
-  if ((m = /^#\/forums\/compose\/([a-z0-9-]+)(?:\/(discussion|memory|recommendation|resource))?/.exec(h))) {
+  if ((m = /^category\/([a-z0-9-]+)/.exec(rest))) return { mode: "category", slug: m[1] };
+  if ((m = /^compose\/([a-z0-9-]+)(?:\/(discussion|memory|recommendation|resource))?/.exec(rest))) {
     return { mode: "compose", categorySlug: m[1], type: m[2] as ForumThreadType | undefined };
   }
   return { mode: "home" };
 }
 
-function forumHash(view: ForumView): string {
+function forumPath(view: ForumView): string {
   switch (view.mode) {
-    case "thread": return `#/forums/thread/${view.threadId}${view.postId ? `/post/${view.postId}` : ""}`;
-    case "category": return `#/forums/category/${view.slug}`;
-    case "compose": return `#/forums/compose/${view.categorySlug}${view.type ? `/${view.type}` : ""}`;
-    default: return "#/forums";
+    case "thread": return `/forums/thread/${view.threadId}${view.postId ? `/post/${view.postId}` : ""}`;
+    case "category": return `/forums/category/${view.slug}`;
+    case "compose": return `/forums/compose/${view.categorySlug}${view.type ? `/${view.type}` : ""}`;
+    default: return "/forums";
   }
 }
 
 export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
-  const [view, setView] = useState<ForumView>(() => parseForumHash());
+  const location = useLocation();
+  const routerNavigate = useNavigate();
+  // The URL is the source of truth — the view is derived from the path, so
+  // browser back/forward and notification deep-links re-drive it automatically.
+  const view = useMemo(() => parseForumView(location.pathname), [location.pathname]);
 
-  const navigate = useCallback((next: ForumView) => {
-    setView(next);
-    const hash = forumHash(next);
-    if (typeof window !== "undefined" && window.location.hash !== hash) {
-      window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${hash}`);
-    }
-    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
-  }, []);
-
-  // External hash changes (notification click, browser nav) re-drive the view.
-  useEffect(() => {
-    const onHash = () => setView(parseForumHash());
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-
-  // Ensure the URL carries the current view on first mount (so a bare #/forums
-  // becomes a real address and permalinks resolve).
-  useEffect(() => {
-    const hash = forumHash(view);
-    if (typeof window !== "undefined" && !window.location.hash.startsWith("#/forums")) {
-      window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${hash}`);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const navigate = useCallback(
+    (next: ForumView) => {
+      routerNavigate(forumPath(next));
+    },
+    [routerNavigate]
+  );
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
@@ -1618,8 +1605,7 @@ function ThreadView({
   }
 
   function copyPermalink(postId: number) {
-    const base = `${window.location.origin}${window.location.pathname}${window.location.search}`;
-    const url = `${base}#/forums/thread/${threadId}/post/${postId}`;
+    const url = `${window.location.origin}/forums/thread/${threadId}/post/${postId}`;
     void navigator.clipboard?.writeText(url).then(() => {
       setCopied(postId);
       window.setTimeout(() => setCopied((c) => (c === postId ? null : c)), 1500);
@@ -1982,7 +1968,7 @@ function PostCard({
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12, color: islandTheme.color.textMuted, gap: 12, flexWrap: "wrap" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               <a
-                href={`#/forums/thread/${post.threadId}/post/${post.id}`}
+                href={`/forums/thread/${post.threadId}/post/${post.id}`}
                 onClick={(e) => { e.preventDefault(); onCopyLink(); }}
                 title="Copy link to this post"
                 style={{ color: islandTheme.color.textMuted, textDecoration: "none", fontWeight: 700 }}

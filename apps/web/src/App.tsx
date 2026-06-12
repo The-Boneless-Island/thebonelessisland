@@ -1,6 +1,15 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ScrollRestoration, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
 import { LoginScreen } from "./pages/LoginScreen.js";
+import { NotFoundPage } from "./pages/NotFound.js";
+import {
+  islanderIdFromPath,
+  pageFromPath,
+  pathForForumThread,
+  pathForIslander,
+  pathForPage
+} from "./lib/routes.js";
 
 // Route-level code splitting: each routed page is lazy-loaded so its bundle is
 // only fetched when the page is first rendered. Named-export pages are mapped to
@@ -81,16 +90,14 @@ export function App() {
   const lastGuildMembersRef = useRef<string | null>(null);
   const lastGameNightsRef = useRef<string | null>(null);
   const lastSelectedNightRef = useRef<string | null>(null);
-  // Deep links use the URL hash: #/admin/<page> and #/library?… land the
-  // session on that page instead of home.
-  const [page, setPage] = useState<PageId>(() => {
-    if (typeof window === "undefined") return "home";
-    if (window.location.hash.startsWith("#/admin")) return "admin";
-    if (window.location.hash.startsWith("#/library")) return "library";
-    if (window.location.hash.startsWith("#/forums")) return "community-forums";
-    return "home";
-  });
-  const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  // Routing: the URL is the source of truth. `page` is derived from the path so
+  // refresh / back-forward / shared links all land on the right page; navigation
+  // goes through the router via navigateToPage. `null` page → unknown path → 404.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const page = pageFromPath(location.pathname);
+  const navigateToPage = useCallback((next: PageId) => navigate(pathForPage(next)), [navigate]);
+  const selectedProfileId = islanderIdFromPath(location.pathname);
   const [composerScrollNonce, setComposerScrollNonce] = useState(0);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [results, setResults] = useState<Recommendation[]>([]);
@@ -281,8 +288,7 @@ export function App() {
     setAuthError(authErrorMessage);
     params.delete("authError");
     const nextQuery = params.toString();
-    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
-    window.history.replaceState({}, "", nextUrl);
+    navigate(`${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`, { replace: true });
   }, []);
 
   useEffect(() => {
@@ -312,8 +318,7 @@ export function App() {
     params.delete("steam");
     params.delete("steamReason");
     const nextQuery = params.toString();
-    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
-    window.history.replaceState({}, "", nextUrl);
+    navigate(`${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`, { replace: true });
   }, []);
 
   useEffect(() => {
@@ -358,6 +363,30 @@ export function App() {
       isCancelled = true;
     };
   }, []);
+
+  // Auth-aware deep links. When a logged-out visitor hits a protected path, stash
+  // the intended destination so we can return them to it after the Discord OAuth
+  // round-trip (which is a full-page redirect, so sessionStorage carries it).
+  useEffect(() => {
+    if (isAuthenticated === false && location.pathname !== "/") {
+      sessionStorage.setItem("returnTo", location.pathname + location.search);
+    }
+  }, [isAuthenticated, location.pathname, location.search]);
+
+  // After login lands the SPA back at "/", resume the stashed deep link. Reject
+  // anything that isn't a same-origin path (no protocol-relative "//evil.com").
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    const returnTo = sessionStorage.getItem("returnTo");
+    if (!returnTo) return;
+    sessionStorage.removeItem("returnTo");
+    const current = location.pathname + location.search;
+    if (returnTo.startsWith("/") && !returnTo.startsWith("//") && returnTo !== current) {
+      navigate(returnTo, { replace: true });
+    }
+    // Only fire when auth flips true; intentionally not depending on location.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
 
   // Server-sent events give near-instant freshness for member presence and
   // game-night changes. This is additive on top of the polling fallbacks below —
@@ -429,14 +458,10 @@ export function App() {
   useEffect(() => {
     // Wait for the profile before bouncing — otherwise an admin deep link
     // gets redirected home during the auth bootstrap.
-    if (profileData && !isAdmin && page === "admin") {
-      setPage("home");
+    if (profileData && !isAdmin && location.pathname.startsWith("/admin")) {
+      navigate("/", { replace: true });
     }
-  }, [profileData, isAdmin, page]);
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "instant" });
-  }, [page]);
+  }, [profileData, isAdmin, location.pathname, navigate]);
 
   // Per-page scene tint: subtly recolor the backdrop vignette so sections
   // feel distinct (news cool, arcade/economy warm) without new scene layers.
@@ -1339,13 +1364,12 @@ export function App() {
     const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
     setSelectedMemberIds(ownerIds);
     setComposerScrollNonce((nonce) => nonce + 1);
-    setPage("games");
+    navigateToPage("games");
     toastQueue.pushToast(`Planning around ${game?.name ?? "this game"}`, "info");
   }
 
   function openProfile(discordUserId: string) {
-    setSelectedProfileId(discordUserId);
-    setPage("islander-profile");
+    navigate(pathForIslander(discordUserId));
   }
 
   async function loadSteamExclusions() {
@@ -1611,17 +1635,17 @@ export function App() {
     <NuggiesSignalProvider signal={nuggiesSignal}>
     <ActivityRefetchProvider refetch={() => loadActivity(true)}>
     <ToastQueueProvider queue={toastQueue}>
+      <ScrollRestoration getKey={(loc) => loc.pathname} />
       <Topbar
-        page={page}
-        onNavigate={setPage}
+        page={page ?? "home"}
+        onNavigate={navigateToPage}
         profile={profileData}
         isAdmin={isAdmin}
         tagline={tagline}
         onLogout={() => void logout()}
         onOpenSearch={() => setQuickSwitchOpen(true)}
         onOpenForumThread={(threadId, postId) => {
-          window.location.hash = `#/forums/thread/${threadId}${postId ? `/post/${postId}` : ""}`;
-          setPage("community-forums");
+          navigate(pathForForumThread(threadId, postId));
         }}
       />
       <div className="bi-topbar-spacer" aria-hidden="true" />
@@ -1631,7 +1655,7 @@ export function App() {
         isAdmin={isAdmin}
         guildMembers={guildMembers}
         crewGames={crewGames}
-        onNavigate={setPage}
+        onNavigate={navigateToPage}
         onOpenProfile={openProfile}
       />
       <SteamOnboardingModal
@@ -1655,9 +1679,11 @@ export function App() {
       >
 
       <Suspense fallback={<PageLoadingFallback />}>
-      {/* Keyed on page id: remounts per route so the enter animation replays —
-          a 150ms fade/rise instead of a hard cut between pages. */}
-      <div key={page} className="bi-page-enter">
+      {/* Keyed on page id: remounts per top-level route so the enter animation
+          replays — a 150ms fade/rise instead of a hard cut between pages. Keyed
+          on page (not full pathname) so within-section navigation (forum
+          threads, library filters) doesn't remount and refetch. */}
+      <div key={page ?? "not-found"} className="bi-page-enter">
 
       {page === "home" ? (
         <HomePage
@@ -1668,7 +1694,7 @@ export function App() {
           activityEvents={activityEvents}
           newsCards={newsCards}
           tagline={tagline}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
         />
       ) : null}
 
@@ -1698,7 +1724,7 @@ export function App() {
           onLeaveSelectedNight={leaveSelectedNight}
           onAddSelectedMembersToNight={addSelectedMembersToNight}
           onRemoveSelectedMembersFromNight={removeSelectedMembersFromNight}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
           onSendChatMessage={sendChatMessage}
         />
       ) : null}
@@ -1708,7 +1734,7 @@ export function App() {
           crewGames={crewGames}
           guildMembers={guildMembers}
           currentDiscordUserId={profileData?.discordUserId ?? null}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
           onPlan={onPlan}
         />
       ) : null}
@@ -1719,17 +1745,17 @@ export function App() {
           activityEvents={activityEvents}
           guildMembers={guildMembers}
           gameNights={gameNights}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
           openProfile={openProfile}
         />
       ) : null}
 
       {page === "tide-check" ? (
-        <TideCheckPage onNavigate={setPage} />
+        <TideCheckPage onNavigate={navigateToPage} />
       ) : null}
 
       {page === "islander-profile" ? (
-        <IslanderProfilePage targetDiscordUserId={selectedProfileId} onNavigate={setPage} />
+        <IslanderProfilePage targetDiscordUserId={selectedProfileId} onNavigate={navigateToPage} />
       ) : null}
 
       {page === "games-news" ? (
@@ -1741,11 +1767,11 @@ export function App() {
       ) : null}
 
       {page === "community-leaderboard" ? (
-        <CommunityLeaderboardPage onNavigate={setPage} />
+        <CommunityLeaderboardPage onNavigate={navigateToPage} />
       ) : null}
 
       {page === "crew-achievements" ? (
-        <CrewAchievementsPage onNavigate={setPage} />
+        <CrewAchievementsPage onNavigate={navigateToPage} />
       ) : null}
 
       {page === "nuggies" ? <AchievementsPage onProfileChanged={() => void loadProfile(true)} /> : null}
@@ -1753,7 +1779,7 @@ export function App() {
       {page === "nuggies-casino" ? <CasinoPage /> : null}
 
       {page === "nuggies-history" ? (
-        <NuggiesHistoryPage onNavigate={setPage} />
+        <NuggiesHistoryPage onNavigate={navigateToPage} />
       ) : null}
 
       {page === "nuggies-milestones" ? <MilestonesPage /> : null}
@@ -1816,6 +1842,8 @@ export function App() {
         />
       ) : null}
 
+      {page === null ? <NotFoundPage /> : null}
+
       </div>
       </Suspense>
 
@@ -1861,7 +1889,7 @@ export function App() {
       `}</style>
 
       </main>
-      <MobileTabBar page={page} onNavigate={setPage} />
+      <MobileTabBar page={page ?? "home"} onNavigate={navigateToPage} />
       <ToastHost toasts={toastQueue.toasts} onDismiss={toastQueue.dismiss} />
       <AchievementCelebration current={celebrationQueue.current} onDismiss={celebrationQueue.dismiss} remaining={celebrationQueue.remaining} />
     </ToastQueueProvider>

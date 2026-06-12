@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { IslandButton, IslandCard, IslandEmptyState, IslandTag, islandInputStyle, memberColor } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { CrewOwnedGame, CrewOwner, GuildMember, PageId } from "../types.js";
@@ -78,29 +79,19 @@ function capabilityPills(game: CrewOwnedGame): string[] {
   return pills;
 }
 
-const LIB_HASH_PREFIX = "#/library";
-
-function readLibHashParams(): URLSearchParams {
-  if (typeof window === "undefined") return new URLSearchParams();
-  const hash = window.location.hash;
-  if (!hash.startsWith(LIB_HASH_PREFIX)) return new URLSearchParams();
-  const qIndex = hash.indexOf("?");
-  return new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : "");
-}
-
 const LIB_FILTERS: LibFilter[] = ["all", "mine", "co-op", "horror", "puzzle", "party", "solo"];
 
 function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavigate, onPlan }: LibraryPageProps) {
-  // Filter/sort/search live in the URL hash so refreshes and shared links
-  // land on the same view (#/library?f=co-op&s=title&q=…).
-  const initialParams = readLibHashParams();
-  const [search, setSearch] = useState(() => initialParams.get("q") ?? "");
+  // Filter/sort/search live in the URL query string so refreshes and shared
+  // links land on the same view (/library?f=co-op&s=title&q=…).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
   const [filter, setFilter] = useState<LibFilter>(() => {
-    const f = initialParams.get("f") as LibFilter | null;
+    const f = searchParams.get("f") as LibFilter | null;
     return f && LIB_FILTERS.includes(f) ? f : "all";
   });
   const [sort, setSort] = useState<SortMode>(() => {
-    const s = initialParams.get("s");
+    const s = searchParams.get("s");
     return s === "title" || s === "tonight" ? s : "owned";
   });
   const [openAppId, setOpenAppId] = useState<number | null>(null);
@@ -110,16 +101,10 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
     if (filter !== "all") params.set("f", filter);
     if (sort !== "owned") params.set("s", sort);
     if (search.trim()) params.set("q", search.trim());
-    const qs = params.toString();
-    window.history.replaceState(null, "", `${LIB_HASH_PREFIX}${qs ? `?${qs}` : ""}`);
+    // replace + preventScrollReset: filtering shouldn't spam history or jump scroll.
+    setSearchParams(params, { replace: true, preventScrollReset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, sort, search]);
-
-  // Leaving the library: drop the hash so refreshing elsewhere doesn't bounce back here.
-  useEffect(() => () => {
-    if (window.location.hash.startsWith(LIB_HASH_PREFIX)) {
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-  }, []);
 
   // Crew members reachable right now — online-ish presence or in voice.
   const onlineIds = useMemo(

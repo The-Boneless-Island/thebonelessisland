@@ -2,7 +2,9 @@
 // on touch; below 640px this carries primary navigation instead. Hidden
 // entirely on wider viewports.
 
+import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
+import { pathForPage } from "../lib/routes.js";
 import type { PageId } from "../types.js";
 
 type Tab = {
@@ -30,25 +32,24 @@ const TABS: Tab[] = [
   { id: "profile", icon: "👤", label: "Profile", match: (p) => p === "profile" || p === "settings" }
 ];
 
-export function MobileTabBar({ page, onNavigate }: { page: PageId; onNavigate: (page: PageId) => void }) {
+export function MobileTabBar({ page }: { page: PageId; onNavigate?: (page: PageId) => void }) {
   return (
     <>
       <nav className="bi-tabbar" aria-label="Primary">
         {TABS.map((tab) => {
           const active = tab.match(page);
           return (
-            <button
+            <Link
               key={tab.id}
-              type="button"
+              to={pathForPage(tab.id)}
               className="bi-tabbar-btn"
               aria-current={active ? "page" : undefined}
-              onClick={() => onNavigate(tab.id)}
             >
               <span aria-hidden="true" style={{ fontSize: 19, lineHeight: 1 }}>
                 {tab.icon}
               </span>
               <span>{tab.label}</span>
-            </button>
+            </Link>
           );
         })}
       </nav>
@@ -85,6 +86,7 @@ export function MobileTabBar({ page, onNavigate }: { page: PageId; onNavigate: (
           border-radius: ${islandTheme.radius.control}px;
           background: transparent;
           color: var(--bi-text-muted);
+          text-decoration: none;
           font: inherit;
           font-size: ${islandTheme.text.xs}px;
           font-weight: 700;
