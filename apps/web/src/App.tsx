@@ -87,6 +87,7 @@ export function App() {
     if (typeof window === "undefined") return "home";
     if (window.location.hash.startsWith("#/admin")) return "admin";
     if (window.location.hash.startsWith("#/library")) return "library";
+    if (window.location.hash.startsWith("#/forums")) return "community-forums";
     return "home";
   });
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
@@ -1618,6 +1619,10 @@ export function App() {
         tagline={tagline}
         onLogout={() => void logout()}
         onOpenSearch={() => setQuickSwitchOpen(true)}
+        onOpenForumThread={(threadId, postId) => {
+          window.location.hash = `#/forums/thread/${threadId}${postId ? `/post/${postId}` : ""}`;
+          setPage("community-forums");
+        }}
       />
       <div className="bi-topbar-spacer" aria-hidden="true" />
       <QuickSwitcher

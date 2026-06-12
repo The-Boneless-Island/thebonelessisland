@@ -11,3 +11,6 @@ infra/certs/
 
 # Local source export snapshots
 *.zip
+
+# Forum image uploads — stored on the local volume, served at /uploads
+apps/api/data/

@@ -3,6 +3,7 @@ import { islandTheme } from "../theme.js";
 import type { MeProfile, PageId } from "../types.js";
 import { UserMenu } from "./UserMenu.js";
 import { MegaMenu } from "./MegaMenu.js";
+import { NotificationBell } from "./NotificationBell.js";
 
 type TopbarProps = {
   page: PageId;
@@ -12,9 +13,10 @@ type TopbarProps = {
   tagline?: string;
   onLogout: () => void;
   onOpenSearch?: () => void;
+  onOpenForumThread?: (threadId: number, postId: number | null) => void;
 };
 
-export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, onOpenSearch }: TopbarProps) {
+export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, onOpenSearch, onOpenForumThread }: TopbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -93,6 +95,9 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, 
             <SearchIcon />
             <span className="island-mono" style={{ fontSize: 12, letterSpacing: "0.04em" }}>Ctrl K</span>
           </button>
+        ) : null}
+        {profile && onOpenForumThread ? (
+          <NotificationBell onOpenThread={onOpenForumThread} />
         ) : null}
         <div style={{ position: "relative", display: "flex", flexShrink: 0 }}>
           <UserTrigger

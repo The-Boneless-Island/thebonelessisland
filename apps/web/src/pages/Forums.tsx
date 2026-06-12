@@ -1,27 +1,61 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "../api/client.js";
 import { IslandButton, IslandCard, IslandEmptyState, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { GameCover } from "../steamArt.js";
+import { renderMarkdown, surroundSelection, prefixLines } from "../lib/markdown.js";
 import type {
   CrewOwnedGame,
+  ForumAttachment,
   ForumCategory,
   ForumFeedSort,
   ForumFeedThread,
+  ForumLinkPreview,
+  ForumMember,
+  ForumPoll,
   ForumPost,
-  ForumRecentThread,
+  ForumReactionKey,
+  ForumRelatedThread,
+  ForumResourceItem,
+  ForumSearchResult,
   ForumStats,
   ForumThreadDetail,
   ForumThreadGame,
   ForumThreadListItem,
+  ForumThreadType,
+  ForumUpload,
   MeProfile
 } from "../types.js";
+
+// ── Post types ──────────────────────────────────────────────────────────────
+// Four orthogonal post types (alongside categories). Each has a stable accent
+// + emoji used consistently across composer, type rail, feed chips and headers.
+type PostTypeMeta = { key: ForumThreadType; emoji: string; label: string; blurb: string; accent: string };
+
+const POST_TYPES: PostTypeMeta[] = [
+  { key: "discussion", emoji: "💬", label: "Discussion", blurb: "A question, a hot take, anything worth talking about.", accent: "#38bdf8" },
+  { key: "memory", emoji: "📸", label: "Memory", blurb: "Screenshots, photos and stories from our adventures.", accent: "#a855f7" },
+  { key: "recommendation", emoji: "⭐", label: "Recommendation", blurb: "A game, show, or anything worth the crew's time.", accent: "#fbbf77" },
+  { key: "resource", emoji: "🧰", label: "Resource", blurb: "A link to a tool or guide others should know about.", accent: "#4ade80" }
+];
+
+const POST_TYPE_BY_KEY: Record<ForumThreadType, PostTypeMeta> =
+  Object.fromEntries(POST_TYPES.map((t) => [t.key, t])) as Record<ForumThreadType, PostTypeMeta>;
+
+// The fixed reaction palette. Order here is the display order in the bar.
+const REACTION_META: { key: ForumReactionKey; emoji: string; label: string }[] = [
+  { key: "nug", emoji: "👍", label: "Nug" },
+  { key: "heart", emoji: "❤️", label: "Love" },
+  { key: "laugh", emoji: "😂", label: "Haha" },
+  { key: "fire", emoji: "🔥", label: "Fire" },
+  { key: "salute", emoji: "🫡", label: "Respect" }
+];
 
 type ForumView =
   | { mode: "home" }
   | { mode: "category"; slug: string }
-  | { mode: "thread"; threadId: number }
-  | { mode: "compose"; categorySlug: string };
+  | { mode: "thread"; threadId: number; postId?: number }
+  | { mode: "compose"; categorySlug: string; type?: ForumThreadType };
 
 type ForumsPageProps = {
   profile: MeProfile | null;
@@ -31,8 +65,63 @@ type ForumsPageProps = {
 
 const FEED_PAGE_SIZE = 30;
 
+// ── Hash routing ────────────────────────────────────────────────────────────
+// Forum views are URL-addressable via the hash so threads/posts are shareable
+// (permalinks), announce-able (Discord) and notification-linkable. Grammar:
+//   #/forums
+//   #/forums/category/<slug>
+//   #/forums/thread/<id>[/post/<postId>]
+//   #/forums/compose/<slug>[/<type>]
+function parseForumHash(): ForumView {
+  const h = typeof window === "undefined" ? "" : window.location.hash;
+  let m: RegExpExecArray | null;
+  if ((m = /^#\/forums\/thread\/(\d+)(?:\/post\/(\d+))?/.exec(h))) {
+    return { mode: "thread", threadId: Number(m[1]), postId: m[2] ? Number(m[2]) : undefined };
+  }
+  if ((m = /^#\/forums\/category\/([a-z0-9-]+)/.exec(h))) return { mode: "category", slug: m[1] };
+  if ((m = /^#\/forums\/compose\/([a-z0-9-]+)(?:\/(discussion|memory|recommendation|resource))?/.exec(h))) {
+    return { mode: "compose", categorySlug: m[1], type: m[2] as ForumThreadType | undefined };
+  }
+  return { mode: "home" };
+}
+
+function forumHash(view: ForumView): string {
+  switch (view.mode) {
+    case "thread": return `#/forums/thread/${view.threadId}${view.postId ? `/post/${view.postId}` : ""}`;
+    case "category": return `#/forums/category/${view.slug}`;
+    case "compose": return `#/forums/compose/${view.categorySlug}${view.type ? `/${view.type}` : ""}`;
+    default: return "#/forums";
+  }
+}
+
 export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
-  const [view, setView] = useState<ForumView>({ mode: "home" });
+  const [view, setView] = useState<ForumView>(() => parseForumHash());
+
+  const navigate = useCallback((next: ForumView) => {
+    setView(next);
+    const hash = forumHash(next);
+    if (typeof window !== "undefined" && window.location.hash !== hash) {
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${hash}`);
+    }
+    if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "auto" });
+  }, []);
+
+  // External hash changes (notification click, browser nav) re-drive the view.
+  useEffect(() => {
+    const onHash = () => setView(parseForumHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // Ensure the URL carries the current view on first mount (so a bare #/forums
+  // becomes a real address and permalinks resolve).
+  useEffect(() => {
+    const hash = forumHash(view);
+    if (typeof window !== "undefined" && !window.location.hash.startsWith("#/forums")) {
+      window.history.replaceState({}, "", `${window.location.pathname}${window.location.search}${hash}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div style={{ display: "grid", gap: 18 }}>
@@ -40,34 +129,37 @@ export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
       {view.mode === "home" ? (
         <ForumHome
           profile={profile}
-          onSelectCategory={(slug) => setView({ mode: "category", slug })}
-          onSelectThread={(threadId) => setView({ mode: "thread", threadId })}
-          onCompose={(slug) => setView({ mode: "compose", categorySlug: slug })}
+          onSelectCategory={(slug) => navigate({ mode: "category", slug })}
+          onSelectThread={(threadId) => navigate({ mode: "thread", threadId })}
+          onCompose={(slug, type) => navigate({ mode: "compose", categorySlug: slug, type })}
         />
       ) : null}
       {view.mode === "category" ? (
         <CategoryView
           slug={view.slug}
-          onBack={() => setView({ mode: "home" })}
-          onSelectThread={(threadId) => setView({ mode: "thread", threadId })}
-          onCompose={() => setView({ mode: "compose", categorySlug: view.slug })}
+          onBack={() => navigate({ mode: "home" })}
+          onSelectThread={(threadId) => navigate({ mode: "thread", threadId })}
+          onCompose={() => navigate({ mode: "compose", categorySlug: view.slug })}
         />
       ) : null}
       {view.mode === "thread" ? (
         <ThreadView
           threadId={view.threadId}
+          targetPostId={view.postId}
           profile={profile}
           isAdmin={isAdmin}
-          onBack={() => setView({ mode: "home" })}
-          onCategory={(slug) => setView({ mode: "category", slug })}
+          onBack={() => navigate({ mode: "home" })}
+          onCategory={(slug) => navigate({ mode: "category", slug })}
+          onSelectThread={(id) => navigate({ mode: "thread", threadId: id })}
         />
       ) : null}
       {view.mode === "compose" ? (
         <ComposeView
           categorySlug={view.categorySlug}
+          initialType={view.type}
           crewGames={crewGames}
-          onCancel={() => setView({ mode: "category", slug: view.categorySlug })}
-          onCreated={(threadId) => setView({ mode: "thread", threadId })}
+          onCancel={() => navigate({ mode: "category", slug: view.categorySlug })}
+          onCreated={(threadId) => navigate({ mode: "thread", threadId })}
         />
       ) : null}
     </div>
@@ -117,7 +209,7 @@ function ForumHome({
   profile: MeProfile | null;
   onSelectCategory: (slug: string) => void;
   onSelectThread: (threadId: number) => void;
-  onCompose: (slug: string) => void;
+  onCompose: (slug: string, type?: ForumThreadType) => void;
 }) {
   const [categories, setCategories] = useState<ForumCategory[] | null>(null);
   const [shellError, setShellError] = useState<string | null>(null);
@@ -127,9 +219,11 @@ function ForumHome({
   const [feedError, setFeedError] = useState<string | null>(null);
   const [sort, setSort] = useState<ForumFeedSort>("latest");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState<ForumThreadType | null>(null);
   const [search, setSearch] = useState("");
-  const [searchResults, setSearchResults] = useState<ForumRecentThread[] | null>(null);
-  const [composerOpen, setComposerOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<ForumSearchResult[] | null>(null);
+  const [memoryWall, setMemoryWall] = useState<ForumFeedThread[]>([]);
+  const [resourceShelf, setResourceShelf] = useState<ForumResourceItem[]>([]);
 
   const loadShell = useCallback(async () => {
     setShellError(null);
@@ -156,12 +250,31 @@ function ForumHome({
           categoriesTotal: data.categoriesTotal ?? 0,
           postsToday: data.postsToday ?? 0,
           topAuthors: Array.isArray(data.topAuthors) ? data.topAuthors : [],
-          mine: data.mine ?? { threadCount: 0, postCount: 0 },
+          mine: {
+            threadCount: data.mine?.threadCount ?? 0,
+            postCount: data.mine?.postCount ?? 0,
+            reactionsGiven: data.mine?.reactionsGiven ?? 0,
+          },
+          typeCounts: data.typeCounts ?? {},
         };
       }
     }
     setCategories(cats?.categories ?? []);
     setStats(st);
+
+    // Discovery rails: recent memories (photo-first) + resource/recommendation shelf.
+    const [memRes, resRes] = await Promise.all([
+      apiFetch("/forums/threads?type=memory&limit=6").catch(() => null),
+      apiFetch("/forums/resources?limit=6").catch(() => null)
+    ]);
+    if (memRes && memRes.ok) {
+      const d = await memRes.json().catch(() => null);
+      setMemoryWall(Array.isArray(d?.threads) ? d.threads : []);
+    }
+    if (resRes && resRes.ok) {
+      const d = await resRes.json().catch(() => null);
+      setResourceShelf(Array.isArray(d?.resources) ? d.resources : []);
+    }
   }, []);
 
   const [feedHasMore, setFeedHasMore] = useState(false);
@@ -175,6 +288,7 @@ function ForumHome({
       params.set("limit", String(FEED_PAGE_SIZE));
       params.set("offset", String(offset));
       if (categoryFilter) params.set("category", categoryFilter);
+      if (typeFilter) params.set("type", typeFilter);
       const r = await apiFetch(`/forums/threads?${params.toString()}`);
       if (!r.ok) {
         const data = await r.json().catch(() => null);
@@ -190,7 +304,7 @@ function ForumHome({
     } finally {
       setFeedLoading(false);
     }
-  }, [sort, categoryFilter]);
+  }, [sort, categoryFilter, typeFilter]);
 
   useEffect(() => { void loadShell(); }, [loadShell]);
   useEffect(() => { void loadFeed(); }, [loadFeed]);
@@ -209,47 +323,51 @@ function ForumHome({
   }, [search]);
 
   const noCategories = categories !== null && categories.length === 0 && !shellError;
-  // First-visit onboarding: shown until dismissed or until the user has posted.
-  const [onboardingDismissed, setOnboardingDismissed] = useState(
+  const wide = useIsWide(880);
+  const defaultCat = categories?.find((c) => !c.isLocked)?.slug ?? "general";
+
+  // Getting-started checklist — driven by real stats, except the intro-read
+  // tick which is remembered in localStorage.
+  const [introRead, setIntroRead] = useState(
     () => localStorage.getItem("bi:forum-onboarding-dismissed") === "1"
   );
-  const dismissOnboarding = () => {
+  const markIntroRead = () => {
     localStorage.setItem("bi:forum-onboarding-dismissed", "1");
-    setOnboardingDismissed(true);
+    setIntroRead(true);
   };
-  const showOnboarding =
-    !onboardingDismissed &&
-    Boolean(profile) &&
-    stats !== null &&
-    (stats.mine?.threadCount ?? 0) === 0 &&
-    (stats.mine?.postCount ?? 0) === 0 &&
-    !noCategories &&
-    !shellError;
+  const mine = stats?.mine;
+  const reacted = (mine?.reactionsGiven ?? 0) > 0;
+  const posted = (mine?.threadCount ?? 0) > 0;
+  const replied = ((mine?.postCount ?? 0) - (mine?.threadCount ?? 0)) > 0;
+  const checklistDone = introRead && reacted && replied && posted;
+  const showExpandedHero = Boolean(profile) && stats !== null && !checklistDone && !noCategories && !shellError;
+
+  const rail = (
+    <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
+      {memoryWall.length > 0 ? <MemoryWallCard memories={memoryWall} onSelect={onSelectThread} /> : null}
+      {resourceShelf.length > 0 ? <ResourceShelfCard resources={resourceShelf} onSelect={onSelectThread} /> : null}
+      {stats && (stats.topAuthors?.length ?? 0) > 0 ? <TopAuthorsCard stats={stats} /> : null}
+      {categories && categories.length > 0 ? <BrowseCategoriesCollapsible categories={categories} onSelect={onSelectCategory} /> : null}
+    </div>
+  );
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <ForumHeroBar
-        statsLine={stats
-          ? `${stats.threadsTotal ?? 0} threads · ${stats.postsTotal ?? 0} posts · ${stats.postsToday ?? 0} new today`
-          : null}
-        onStartDiscussion={() => setComposerOpen((v) => !v)}
-        composerOpen={composerOpen}
+      <ForumHero
+        expanded={showExpandedHero}
+        stats={stats}
+        checklist={{ introRead, reacted, replied, posted }}
+        onMarkIntroRead={markIntroRead}
+        onShare={() => onCompose(defaultCat)}
+        onPickType={(type) => onCompose(defaultCat, type)}
         canCompose={!noCategories}
       />
-
-      {composerOpen && categories ? (
-        <CategoryPickerCard
-          categories={categories}
-          onPick={(slug) => { setComposerOpen(false); onCompose(slug); }}
-          onCancel={() => setComposerOpen(false)}
-        />
-      ) : null}
 
       <input
         type="search"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search threads by title…"
+        placeholder="Search threads & posts…"
         style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14 }}
       />
 
@@ -262,7 +380,7 @@ function ForumHome({
             </p>
           ) : (
             searchResults.map((t, i) => (
-              <RecentRow key={t.id} thread={t} firstRow={i === 0} onSelect={() => onSelectThread(t.id)} />
+              <SearchResultRow key={t.id} result={t} firstRow={i === 0} onSelect={() => onSelectThread(t.id)} />
             ))
           )}
         </IslandCard>
@@ -270,140 +388,211 @@ function ForumHome({
         <>
           {shellError ? <ForumsErrorState message={shellError} onRetry={() => void loadShell()} /> : null}
           {noCategories ? <ForumsEmptyState /> : null}
-          {showOnboarding ? (
-            <ForumOnboardingCard
-              onStart={() => setComposerOpen(true)}
-              onDismiss={dismissOnboarding}
-            />
-          ) : null}
 
-          <SortFilterBar
-            sort={sort}
-            onSortChange={setSort}
-            mineCount={stats?.mine?.threadCount ?? 0}
-            isAuthed={Boolean(profile)}
-          />
+          <div style={{ display: "grid", gridTemplateColumns: wide ? "minmax(0, 1fr) 300px" : "1fr", gap: 16, alignItems: "start" }}>
+            <div style={{ display: "grid", gap: 12, minWidth: 0 }}>
+              <TypeRail active={typeFilter} counts={stats?.typeCounts ?? {}} onSelect={setTypeFilter} />
 
-          {categories && categories.length > 0 ? (
-            <CategoryChipStrip
-              categories={categories}
-              activeSlug={categoryFilter}
-              onSelect={(slug) => setCategoryFilter(slug)}
-              onJump={onSelectCategory}
-            />
-          ) : null}
+              <SortFilterBar
+                sort={sort}
+                onSortChange={setSort}
+                mineCount={stats?.mine?.threadCount ?? 0}
+                isAuthed={Boolean(profile)}
+              />
 
-          <FeedList
-            threads={feed}
-            loading={feedLoading}
-            error={feedError}
-            sort={sort}
-            categoryFilter={categoryFilter}
-            hasMore={feedHasMore}
-            onLoadMore={() => void loadFeed(feed?.length ?? 0)}
-            onSelect={onSelectThread}
-            onClearFilter={() => { setCategoryFilter(null); setSort("latest"); }}
-          />
+              {categories && categories.length > 0 ? (
+                <CategoryChipStrip
+                  categories={categories}
+                  activeSlug={categoryFilter}
+                  onSelect={(slug) => setCategoryFilter(slug)}
+                  onJump={onSelectCategory}
+                />
+              ) : null}
 
-          {categories && categories.length > 0 ? (
-            <BrowseCategoriesCollapsible categories={categories} onSelect={onSelectCategory} />
-          ) : null}
-
-          {stats && (stats.topAuthors?.length ?? 0) > 0 ? <TopAuthorsCard stats={stats} /> : null}
+              <FeedList
+                threads={feed}
+                loading={feedLoading}
+                error={feedError}
+                sort={sort}
+                categoryFilter={categoryFilter}
+                hasMore={feedHasMore}
+                onLoadMore={() => void loadFeed(feed?.length ?? 0)}
+                onSelect={onSelectThread}
+                onClearFilter={() => { setCategoryFilter(null); setSort("latest"); setTypeFilter(null); }}
+              />
+            </div>
+            {rail}
+          </div>
         </>
       )}
     </div>
   );
 }
 
-// ── Hero / Composer / Empty State ───────────────────────────────────────────
+// Switch between the two-column desktop layout and the stacked mobile layout.
+function useIsWide(min: number): boolean {
+  const [wide, setWide] = useState(() => typeof window !== "undefined" && window.innerWidth >= min);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(`(min-width: ${min}px)`);
+    const on = () => setWide(mq.matches);
+    on();
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, [min]);
+  return wide;
+}
 
-function ForumHeroBar({
-  statsLine,
-  onStartDiscussion,
-  composerOpen,
+// ── Hero / Onboarding ───────────────────────────────────────────────────────
+
+function ForumHero({
+  expanded,
+  stats,
+  checklist,
+  onMarkIntroRead,
+  onShare,
+  onPickType,
   canCompose
 }: {
-  statsLine: string | null;
-  onStartDiscussion: () => void;
-  composerOpen: boolean;
+  expanded: boolean;
+  stats: ForumStats | null;
+  checklist: { introRead: boolean; reacted: boolean; replied: boolean; posted: boolean };
+  onMarkIntroRead: () => void;
+  onShare: () => void;
+  onPickType: (type: ForumThreadType) => void;
   canCompose: boolean;
 }) {
+  const statsLine = stats
+    ? `${stats.threadsTotal} threads · ${stats.postsTotal} posts · ${stats.postsToday} new today`
+    : "Loading stats…";
+
+  if (!expanded) {
+    return (
+      <IslandCard
+        style={{
+          background: `linear-gradient(135deg, rgba(56,189,248,0.14) 0%, ${islandTheme.color.panelBg} 80%)`,
+          padding: 16,
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          flexWrap: "wrap"
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="island-display" style={{ fontSize: 17, fontWeight: 800 }}>Share something with the crew</div>
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 4 }}>{statsLine}</div>
+        </div>
+        <IslandButton variant="primary" onClick={onShare} disabled={!canCompose}>+ Share something</IslandButton>
+      </IslandCard>
+    );
+  }
+
+  const useCards = POST_TYPES.filter((t) => t.key !== "discussion");
+  const items: { done: boolean; label: string; action?: () => void; actionLabel?: string }[] = [
+    { done: checklist.introRead, label: "Read the intro", action: checklist.introRead ? undefined : onMarkIntroRead, actionLabel: "Mark read" },
+    { done: checklist.reacted, label: "Leave a reaction on a post" },
+    { done: checklist.replied, label: "Reply to a thread" },
+    { done: checklist.posted, label: "Post your first thread", action: checklist.posted ? undefined : onShare, actionLabel: "Start" }
+  ];
+
   return (
     <IslandCard
       style={{
-        background: `linear-gradient(135deg, rgba(56,189,248,0.14) 0%, ${islandTheme.color.panelBg} 80%)`,
-        padding: 16,
-        display: "flex",
-        gap: 12,
-        alignItems: "center",
-        flexWrap: "wrap"
+        background: `linear-gradient(135deg, rgba(168,85,247,0.12) 0%, rgba(56,189,248,0.08) 45%, ${islandTheme.color.panelBg} 90%)`,
+        padding: 18,
+        display: "grid",
+        gap: 16
       }}
     >
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="island-display" style={{ fontSize: 17, fontWeight: 800 }}>
-          Have something to say?
-        </div>
-        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 4 }}>
-          {statsLine ?? "Loading stats…"}
+      <div style={{ display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+        <img
+          src="/mascot/nugget-wave.svg"
+          alt=""
+          aria-hidden="true"
+          width={64}
+          height={64}
+          style={{ flexShrink: 0 }}
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
+        />
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <h2 className="island-display" style={{ margin: 0, fontSize: 20, fontWeight: 800 }}>👋 Welcome to the boards</h2>
+          <p style={{ margin: "4px 0 0", fontSize: 13.5, color: islandTheme.color.textSubtle, lineHeight: 1.5, maxWidth: "60ch" }}>
+            This is the crew's living room — post <strong>memories</strong> from our adventures, drop <strong>recommendations</strong>,
+            and share <strong>resources</strong> worth knowing about. Pick a lane to get started:
+          </p>
         </div>
       </div>
-      <IslandButton variant="primary" onClick={onStartDiscussion} disabled={!canCompose}>
-        {composerOpen ? "× Close" : "+ Start a Discussion"}
-      </IslandButton>
-    </IslandCard>
-  );
-}
 
-function CategoryPickerCard({
-  categories,
-  onPick,
-  onCancel
-}: {
-  categories: ForumCategory[];
-  onPick: (slug: string) => void;
-  onCancel: () => void;
-}) {
-  return (
-    <IslandCard style={{ padding: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted }}>
-          Pick a category for your post
-        </span>
-        <button
-          type="button"
-          className="island-btn"
-          onClick={onCancel}
-          style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, fontSize: 13, cursor: "pointer", font: "inherit" }}
-        >
-          Cancel
-        </button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
-        {categories.filter((c) => !c.isLocked).map((c) => (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+        {useCards.map((t) => (
           <button
-            key={c.id}
+            key={t.key}
             type="button"
             className="island-btn"
-            onClick={() => onPick(c.slug)}
+            onClick={() => onPickType(t.key)}
+            disabled={!canCompose}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              padding: "10px 12px",
-              borderRadius: 10,
-              background: `${c.accentColor}1f`,
-              border: `1px solid ${c.accentColor}55`,
+              textAlign: "left",
+              display: "grid",
+              gap: 4,
+              padding: "12px 14px",
+              borderRadius: 12,
+              background: `${t.accent}1a`,
+              border: `1px solid ${t.accent}55`,
               color: islandTheme.color.textPrimary,
-              cursor: "pointer",
-              font: "inherit",
-              textAlign: "left"
+              cursor: canCompose ? "pointer" : "default",
+              font: "inherit"
             }}
           >
-            <span style={{ fontSize: 18 }}>{c.icon}</span>
-            <span style={{ fontSize: 13, fontWeight: 700 }}>{c.name}</span>
+            <span style={{ fontSize: 22 }} aria-hidden="true">{t.emoji}</span>
+            <span style={{ fontSize: 14, fontWeight: 800 }}>{t.label}</span>
+            <span style={{ fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.4 }}>{t.blurb}</span>
           </button>
         ))}
+      </div>
+
+      <div style={{ display: "grid", gap: 8 }}>
+        <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+          Getting started
+        </span>
+        <div style={{ display: "grid", gap: 6 }}>
+          {items.map((it) => (
+            <div key={it.label} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 20,
+                  height: 20,
+                  borderRadius: 999,
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 12,
+                  fontWeight: 800,
+                  background: it.done ? islandTheme.color.successAccent : "transparent",
+                  color: it.done ? "#06281a" : islandTheme.color.textMuted,
+                  border: it.done ? "none" : `1.5px solid ${islandTheme.color.cardBorder}`
+                }}
+              >
+                {it.done ? "✓" : ""}
+              </span>
+              <span style={{ flex: 1, fontSize: 13, color: it.done ? islandTheme.color.textMuted : islandTheme.color.textPrimary, textDecoration: it.done ? "line-through" : "none" }}>
+                {it.label}
+              </span>
+              {!it.done && it.action ? (
+                <button
+                  type="button"
+                  className="island-btn"
+                  onClick={it.action}
+                  style={{ background: "transparent", border: "none", color: islandTheme.color.primaryGlow, cursor: "pointer", font: "inherit", fontSize: 12, fontWeight: 700 }}
+                >
+                  {it.actionLabel} →
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
       </div>
     </IslandCard>
   );
@@ -418,72 +607,6 @@ function ForumsErrorState({ message, onRetry }: { message: string; onRetry: () =
         body={message}
         action={<IslandButton onClick={onRetry}>Try again</IslandButton>}
       />
-    </IslandCard>
-  );
-}
-
-const ONBOARDING_STEPS: Array<{ emoji: string; title: string; body: string }> = [
-  { emoji: "🗂️", title: "Pick a category", body: "General, Gaming, Hardware, Events… every thread lives somewhere." },
-  { emoji: "✍️", title: "Start a thread", body: "A clear title + your take. Markdown-ish formatting works." },
-  { emoji: "🪙", title: "Earn Nuggies", body: "₦5 per thread, ₦1 per reply — straight to your balance." }
-];
-
-function ForumOnboardingCard({ onStart, onDismiss }: { onStart: () => void; onDismiss: () => void }) {
-  return (
-    <IslandCard
-      style={{
-        padding: 16,
-        background: `linear-gradient(135deg, rgba(168,85,247,0.10) 0%, ${islandTheme.color.panelBg} 70%)`
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12 }}>
-        <h3 className="island-display" style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
-          👋 First time on the boards?
-        </h3>
-        <button
-          type="button"
-          className="island-btn"
-          onClick={onDismiss}
-          aria-label="Dismiss forum intro"
-          style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, fontSize: 13, cursor: "pointer", font: "inherit", flexShrink: 0 }}
-        >
-          Got it ×
-        </button>
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, marginTop: 12 }}>
-        {ONBOARDING_STEPS.map((s, i) => (
-          <div
-            key={s.title}
-            style={{
-              display: "flex",
-              gap: 10,
-              padding: "10px 12px",
-              borderRadius: 10,
-              background: islandTheme.color.panelMutedBg,
-              border: `1px solid ${islandTheme.color.cardBorder}`
-            }}
-          >
-            <span style={{ fontSize: 20 }} aria-hidden="true">{s.emoji}</span>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>
-                <span className="island-mono" style={{ color: islandTheme.color.textMuted, marginRight: 6 }}>{i + 1}.</span>
-                {s.title}
-              </div>
-              <div style={{ fontSize: 12, color: islandTheme.color.textSubtle, marginTop: 2, lineHeight: 1.45 }}>
-                {s.body}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
-        <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-          House rules: be cool, stay on topic, report anything gross. Mods are watching (kindly).
-        </span>
-        <IslandButton variant="primary" onClick={onStart}>
-          Start your first thread →
-        </IslandButton>
-      </div>
     </IslandCard>
   );
 }
@@ -551,6 +674,79 @@ function SortFilterBar({
         );
       })}
     </div>
+  );
+}
+
+// ── Post-type rail + chip ───────────────────────────────────────────────────
+
+function typePill(active: boolean, accent: string): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "6px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    font: "inherit",
+    background: active ? `${accent}26` : islandTheme.color.panelMutedBg,
+    color: active ? islandTheme.color.textPrimary : islandTheme.color.textSubtle,
+    border: `1px solid ${active ? accent : islandTheme.color.cardBorder}`
+  };
+}
+
+function TypeRail({
+  active,
+  counts,
+  onSelect
+}: {
+  active: ForumThreadType | null;
+  counts: Partial<Record<ForumThreadType, number>>;
+  onSelect: (t: ForumThreadType | null) => void;
+}) {
+  const total = POST_TYPES.reduce((n, t) => n + (counts[t.key] ?? 0), 0);
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      <button type="button" className="island-btn" onClick={() => onSelect(null)} style={typePill(active === null, islandTheme.color.primaryGlow)}>
+        All <span style={{ opacity: 0.7, marginLeft: 2 }}>{total}</span>
+      </button>
+      {POST_TYPES.map((t) => {
+        const on = active === t.key;
+        return (
+          <button key={t.key} type="button" className="island-btn" onClick={() => onSelect(on ? null : t.key)} style={typePill(on, t.accent)}>
+            <span aria-hidden="true">{t.emoji}</span> {t.label}
+            <span style={{ opacity: 0.7, marginLeft: 2 }}>{counts[t.key] ?? 0}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Small inline chip showing a thread's post type. */
+function TypeChip({ type }: { type: ForumThreadType }) {
+  const meta = POST_TYPE_BY_KEY[type];
+  if (type === "discussion") return null; // discussion is the implicit default
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: "0 6px",
+        borderRadius: 5,
+        fontSize: 11,
+        fontWeight: 700,
+        background: `${meta.accent}22`,
+        border: `1px solid ${meta.accent}55`,
+        color: meta.accent,
+        verticalAlign: "middle"
+      }}
+    >
+      <span aria-hidden="true">{meta.emoji}</span>
+      {meta.label}
+    </span>
   );
 }
 
@@ -742,8 +938,12 @@ function FeedRow({
         )}
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 700 }}>
+            {thread.unread ? (
+              <span title="New replies since your last visit" aria-label="unread" style={{ width: 8, height: 8, borderRadius: 999, background: islandTheme.color.primaryGlow, flexShrink: 0 }} />
+            ) : null}
             {thread.isPinned ? <PinGlyph /> : null}
             {thread.isLocked ? <LockGlyph /> : null}
+            <TypeChip type={thread.threadType} />
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{thread.title}</span>
           </div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
@@ -756,6 +956,15 @@ function FeedRow({
             {thread.viewCount} view{thread.viewCount === 1 ? "" : "s"}
             {thread.game ? <GameChip game={thread.game} /> : null}
           </div>
+          {thread.linkUrl ? <FeedLinkLine linkUrl={thread.linkUrl} preview={thread.linkPreview ?? null} /> : null}
+          {thread.coverImage ? (
+            <img
+              src={thread.coverImage.thumbUrl}
+              alt=""
+              loading="lazy"
+              style={{ marginTop: 8, maxHeight: 130, maxWidth: "100%", borderRadius: 8, border: `1px solid ${islandTheme.color.cardBorder}`, objectFit: "cover", display: "block" }}
+            />
+          ) : null}
         </div>
       </div>
       <div style={{ fontSize: 12, color: islandTheme.color.textMuted, whiteSpace: "nowrap", textAlign: "right" }}>
@@ -940,58 +1149,161 @@ function CategoryTile({ category, onClick }: { category: ForumCategory; onClick:
   );
 }
 
-function RecentRow({
-  thread,
-  firstRow,
-  onSelect
-}: {
-  thread: ForumRecentThread;
-  firstRow: boolean;
-  onSelect: () => void;
-}) {
+
+// ── Search results + discovery rails ────────────────────────────────────────
+
+// Postgres ts_headline marks matches with … sentinels. Render them
+// as <mark> React elements — never raw HTML.
+function renderSnippet(snippet: string | null): React.ReactNode {
+  if (!snippet) return null;
+  const START = String.fromCharCode(1);
+  const END = String.fromCharCode(2);
+  const out: React.ReactNode[] = [];
+  let key = 0;
+  snippet.split(START).forEach((part, idx) => {
+    if (idx === 0) { if (part) out.push(part); return; }
+    const endIdx = part.indexOf(END);
+    if (endIdx === -1) { out.push(part); return; }
+    const hl = part.slice(0, endIdx);
+    const after = part.slice(endIdx + 1);
+    out.push(
+      <mark key={key++} style={{ background: `${islandTheme.color.nuggieGold}55`, color: "inherit", borderRadius: 3, padding: "0 2px" }}>
+        {hl}
+      </mark>
+    );
+    if (after) out.push(after);
+  });
+  return out;
+}
+
+function listRowStyle(firstRow: boolean): React.CSSProperties {
+  return {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "12px 16px",
+    background: "transparent",
+    border: "none",
+    borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
+    cursor: "pointer",
+    font: "inherit",
+    color: islandTheme.color.textPrimary
+  };
+}
+
+function SearchResultRow({ result, firstRow, onSelect }: { result: ForumSearchResult; firstRow: boolean; onSelect: () => void }) {
   return (
     <button
       type="button"
       className="island-btn"
       onClick={onSelect}
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1fr) auto",
-        gap: 12,
-        padding: "12px 16px",
-        alignItems: "center",
-        width: "100%",
-        background: "transparent",
-        border: "none",
-        borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
-        cursor: "pointer",
-        font: "inherit",
-        color: islandTheme.color.textPrimary,
-        textAlign: "left"
-      }}
+      style={listRowStyle(firstRow)}
       onMouseEnter={(e) => { e.currentTarget.style.background = islandTheme.color.panelMutedBg; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
     >
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700 }}>
-          {thread.isPinned ? <PinGlyph /> : null}
-          {thread.isLocked ? <LockGlyph /> : null}
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{thread.title}</span>
-        </div>
-        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
-          <span style={{ color: thread.categoryAccent ?? islandTheme.color.textSubtle }}>
-            {thread.categoryIcon} {thread.categoryName}
-          </span>
-          {" · "}
-          by {thread.author.displayName}
-          {" · "}
-          {thread.replyCount} repl{thread.replyCount === 1 ? "y" : "ies"}
-        </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, fontWeight: 700, minWidth: 0 }}>
+        <TypeChip type={result.threadType} />
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{result.title}</span>
       </div>
-      <div style={{ fontSize: 12, color: islandTheme.color.textMuted, whiteSpace: "nowrap" }}>
-        {formatRelative(thread.lastReplyAt ?? thread.createdAt)}
+      {result.snippet ? (
+        <div style={{ fontSize: 12.5, color: islandTheme.color.textSubtle, marginTop: 3, lineHeight: 1.4 }}>{renderSnippet(result.snippet)}</div>
+      ) : null}
+      <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 3 }}>
+        <span style={{ color: result.categoryAccent }}>{result.categoryIcon} {result.categoryName}</span>
+        {" · "}{result.replyCount} repl{result.replyCount === 1 ? "y" : "ies"}
+        {" · "}{formatRelative(result.lastReplyAt ?? result.createdAt)}
       </div>
     </button>
+  );
+}
+
+function MemoryWallCard({ memories, onSelect }: { memories: ForumFeedThread[]; onSelect: (id: number) => void }) {
+  return (
+    <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+      <SectionHeader>📸 Memory wall</SectionHeader>
+      <div style={{ padding: 12, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(92px, 1fr))", gap: 8 }}>
+        {memories.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => onSelect(m.id)}
+            title={m.title}
+            style={{
+              padding: 0,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              borderRadius: 8,
+              overflow: "hidden",
+              cursor: "pointer",
+              background: islandTheme.color.panelMutedBg,
+              aspectRatio: "4 / 3"
+            }}
+          >
+            {m.coverImage ? (
+              <img src={m.coverImage.thumbUrl} alt={m.title} loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+            ) : (
+              <span style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: 22 }} aria-hidden="true">📸</span>
+            )}
+          </button>
+        ))}
+      </div>
+    </IslandCard>
+  );
+}
+
+function ResourceShelfCard({ resources, onSelect }: { resources: ForumResourceItem[]; onSelect: (id: number) => void }) {
+  return (
+    <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+      <SectionHeader>🧰 Resource shelf</SectionHeader>
+      {resources.map((r, i) => (
+        <button
+          key={r.id}
+          type="button"
+          className="island-btn"
+          onClick={() => onSelect(r.id)}
+          style={listRowStyle(i === 0)}
+          onMouseEnter={(e) => { e.currentTarget.style.background = islandTheme.color.panelMutedBg; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, minWidth: 0 }}>
+            <TypeChip type={r.threadType} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</span>
+          </div>
+          <div style={{ fontSize: 12, color: islandTheme.color.primaryGlow, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            🔗 {r.linkPreview?.siteName ?? (r.linkUrl ? domainOf(r.linkUrl) : r.categoryName)}
+          </div>
+        </button>
+      ))}
+    </IslandCard>
+  );
+}
+
+function RelatedThreadsCard({ related, onSelect }: { related: ForumRelatedThread[]; onSelect: (id: number) => void }) {
+  if (related.length === 0) return null;
+  return (
+    <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+      <SectionHeader>Related threads</SectionHeader>
+      {related.map((t, i) => (
+        <button
+          key={t.id}
+          type="button"
+          className="island-btn"
+          onClick={() => onSelect(t.id)}
+          style={listRowStyle(i === 0)}
+          onMouseEnter={(e) => { e.currentTarget.style.background = islandTheme.color.panelMutedBg; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13.5, fontWeight: 700, minWidth: 0 }}>
+            <TypeChip type={t.threadType} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</span>
+          </div>
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
+            <span style={{ color: t.categoryAccent }}>{t.categoryIcon} {t.categoryName}</span>
+            {" · "}{t.replyCount} repl{t.replyCount === 1 ? "y" : "ies"}
+            {" · "}{formatRelative(t.lastReplyAt ?? t.createdAt)}
+          </div>
+        </button>
+      ))}
+    </IslandCard>
   );
 }
 
@@ -1210,24 +1522,32 @@ function ColumnStat({ value, label }: { value: number; label: string }) {
 
 function ThreadView({
   threadId,
+  targetPostId,
   profile,
   isAdmin,
   onBack,
-  onCategory
+  onCategory,
+  onSelectThread
 }: {
   threadId: number;
+  targetPostId?: number;
   profile: MeProfile | null;
   isAdmin: boolean;
   onBack: () => void;
   onCategory: (slug: string) => void;
+  onSelectThread: (id: number) => void;
 }) {
   const [thread, setThread] = useState<ForumThreadDetail | null>(null);
   const [posts, setPosts] = useState<ForumPost[] | null>(null);
+  const [related, setRelated] = useState<ForumRelatedThread[]>([]);
   // Reply drafts survive accidental navigation within the session.
   const replyDraftKey = `bi:forum-reply:${threadId}`;
   const [reply, setReply] = useState(() => sessionStorage.getItem(replyDraftKey) ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<number | null>(null);
+  const [replyUploads, setReplyUploads] = useState<ForumUpload[]>([]);
+  const replyRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     if (reply) sessionStorage.setItem(replyDraftKey, reply);
@@ -1245,19 +1565,84 @@ function ThreadView({
 
   useEffect(() => { void load(); }, [load]);
 
+  // Related threads: same game tag first, then same category.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch(`/forums/threads/${threadId}/related`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setRelated(Array.isArray(d?.threads) ? d.threads : []); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [threadId]);
+
+  // Once posts are present: scroll to a deep-linked post, else to the unread
+  // divider (new replies since the last visit).
+  useEffect(() => {
+    if (!posts) return;
+    if (targetPostId) {
+      const el = document.getElementById(`post-${targetPostId}`);
+      if (el) requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "start" }));
+      return;
+    }
+    if (thread?.firstUnreadPostId) {
+      const el = document.getElementById("forum-unread-divider");
+      if (el) requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "center" }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posts, targetPostId, thread?.firstUnreadPostId]);
+
+  async function toggleSubscribe() {
+    if (!thread) return;
+    const next = !thread.subscribed;
+    setThread({ ...thread, subscribed: next });
+    try {
+      await apiFetch(`/forums/threads/${threadId}/subscribe`, { method: next ? "POST" : "DELETE" });
+    } catch {
+      setThread((t) => (t ? { ...t, subscribed: !next } : t));
+    }
+  }
+
+  async function votePoll(optionIds: number[]) {
+    if (!thread?.poll) return;
+    try {
+      const r = await apiFetch(`/forums/polls/${thread.poll.id}/vote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ optionIds })
+      });
+      const data = await r.json().catch(() => null);
+      if (r.ok && data?.poll) setThread((t) => (t ? { ...t, poll: data.poll } : t));
+    } catch {
+      /* ignore — keep prior state */
+    }
+  }
+
+  function copyPermalink(postId: number) {
+    const base = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+    const url = `${base}#/forums/thread/${threadId}/post/${postId}`;
+    void navigator.clipboard?.writeText(url).then(() => {
+      setCopied(postId);
+      window.setTimeout(() => setCopied((c) => (c === postId ? null : c)), 1500);
+    }).catch(() => undefined);
+  }
+
   async function postReply() {
-    if (!reply.trim() || busy || !thread) return;
+    if ((!reply.trim() && replyUploads.length === 0) || busy || !thread) return;
     setBusy(true);
     setError(null);
     try {
       const r = await apiFetch(`/forums/threads/${threadId}/posts`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ body: reply.trim() })
+        body: JSON.stringify({
+          body: reply.trim() || "(image)",
+          ...(replyUploads.length ? { uploadIds: replyUploads.map((u) => u.id) } : {})
+        })
       });
       const data = await r.json().catch(() => null);
       if (!r.ok) throw new Error(data?.error ?? "Reply failed");
       setReply("");
+      setReplyUploads([]);
       sessionStorage.removeItem(replyDraftKey);
       await load();
     } catch (err) {
@@ -1267,15 +1652,39 @@ function ThreadView({
     }
   }
 
-  async function reactPost(postId: number) {
-    setPosts((cur) => cur?.map((p) => p.id === postId
-      ? { ...p, userReacted: !p.userReacted, reactionCount: p.reactionCount + (p.userReacted ? -1 : 1) }
-      : p) ?? cur);
+  async function reactPost(postId: number, reaction: ForumReactionKey) {
+    setPosts((cur) => cur?.map((p) => {
+      if (p.id !== postId) return p;
+      const has = p.myReactions.includes(reaction);
+      const reactions = { ...p.reactions };
+      const nextCount = Math.max(0, (reactions[reaction] ?? 0) + (has ? -1 : 1));
+      if (nextCount === 0) delete reactions[reaction];
+      else reactions[reaction] = nextCount;
+      return {
+        ...p,
+        reactions,
+        myReactions: has ? p.myReactions.filter((r) => r !== reaction) : [...p.myReactions, reaction]
+      };
+    }) ?? cur);
     try {
-      await apiFetch(`/forums/posts/${postId}/react`, { method: "POST" });
+      await apiFetch(`/forums/posts/${postId}/react`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reaction })
+      });
     } catch {
       void load();
     }
+  }
+
+  function quotePost(post: ForumPost) {
+    const quoted = post.body.split("\n").map((l) => `> ${l}`).join("\n");
+    const block = `${quoted}\n\n`;
+    setReply((cur) => (cur.trim() ? `${cur.replace(/\s*$/, "")}\n\n${block}` : block));
+    requestAnimationFrame(() => {
+      replyRef.current?.focus();
+      replyRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
   }
 
   async function deletePost(postId: number) {
@@ -1323,6 +1732,11 @@ function ThreadView({
     onBack();
   }
 
+  function focusReply() {
+    replyRef.current?.focus();
+    replyRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
   if (error) {
     return (
       <IslandCard>
@@ -1342,6 +1756,33 @@ function ThreadView({
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      <div
+        style={{
+          position: "sticky",
+          top: 70,
+          zIndex: 20,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 12px",
+          borderRadius: 10,
+          background: islandTheme.color.panelBg,
+          border: `1px solid ${islandTheme.color.cardBorder}`,
+          backdropFilter: islandTheme.glass.blur,
+          WebkitBackdropFilter: islandTheme.glass.blur,
+          boxShadow: islandTheme.shadow.cardIdle
+        }}
+      >
+        <TypeChip type={thread.threadType} />
+        <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {thread.title}
+        </span>
+        {!thread.isLocked ? (
+          <IslandButton variant="primary" onClick={focusReply} style={{ padding: "0.34rem 0.7rem", fontSize: 13, flexShrink: 0 }}>
+            Reply
+          </IslandButton>
+        ) : null}
+      </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <BackLink onClick={onBack} label="← Forum home" />
         <span style={{ color: islandTheme.color.textMuted, fontSize: 13 }}>/</span>
@@ -1375,6 +1816,7 @@ function ThreadView({
             <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(20px, 3vw, 28px)", fontWeight: 800, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               {thread.isPinned ? <PinGlyph /> : null}
               {thread.isLocked ? <LockGlyph /> : null}
+              <TypeChip type={thread.threadType} />
               {thread.title}
             </h1>
             <div style={{ marginTop: 6, fontSize: 12, color: islandTheme.color.textMuted }}>
@@ -1382,34 +1824,47 @@ function ThreadView({
               {thread.game ? <GameChip game={thread.game} /> : null}
             </div>
           </div>
-          {isAdmin ? (
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              <ModButton onClick={() => modAction("isPinned", !thread.isPinned)}>
-                {thread.isPinned ? "Unpin" : "Pin"}
-              </ModButton>
-              <ModButton onClick={() => modAction("isLocked", !thread.isLocked)}>
-                {thread.isLocked ? "Unlock" : "Lock"}
-              </ModButton>
-              <ModButton onClick={deleteThread} danger>
-                Delete
-              </ModButton>
-            </div>
-          ) : null}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <ModButton onClick={toggleSubscribe}>
+              {thread.subscribed ? "🔔 Following" : "🔕 Follow"}
+            </ModButton>
+            {isAdmin ? (
+              <>
+                <ModButton onClick={() => modAction("isPinned", !thread.isPinned)}>
+                  {thread.isPinned ? "Unpin" : "Pin"}
+                </ModButton>
+                <ModButton onClick={() => modAction("isLocked", !thread.isLocked)}>
+                  {thread.isLocked ? "Unlock" : "Lock"}
+                </ModButton>
+                <ModButton onClick={deleteThread} danger>
+                  Delete
+                </ModButton>
+              </>
+            ) : null}
+          </div>
         </div>
+        {thread.linkUrl ? <LinkPreviewCard linkUrl={thread.linkUrl} preview={thread.linkPreview ?? null} /> : null}
       </IslandCard>
 
+      {thread.poll ? <PollCard poll={thread.poll} onVote={votePoll} /> : null}
+
       {posts.map((post, idx) => (
-        <PostCard
-          key={post.id}
-          post={post}
-          idx={idx + 1}
-          canEdit={profile?.discordUserId === post.author.discordUserId || isAdmin}
-          isOwner={profile?.discordUserId === post.author.discordUserId}
-          onReact={() => reactPost(post.id)}
-          onEdit={() => editPost(post.id, post.body)}
-          onDelete={() => deletePost(post.id)}
-          onReport={() => reportPost(post.id)}
-        />
+        <Fragment key={post.id}>
+          {thread.firstUnreadPostId === post.id && idx > 0 ? <UnreadDivider /> : null}
+          <PostCard
+            post={post}
+            idx={idx + 1}
+            canEdit={profile?.discordUserId === post.author.discordUserId || isAdmin}
+            isOwner={profile?.discordUserId === post.author.discordUserId}
+            copied={copied === post.id}
+            onReact={(reaction) => reactPost(post.id, reaction)}
+            onQuote={thread.isLocked ? undefined : () => quotePost(post)}
+            onCopyLink={() => copyPermalink(post.id)}
+            onEdit={() => editPost(post.id, post.body)}
+            onDelete={() => deletePost(post.id)}
+            onReport={() => reportPost(post.id)}
+          />
+        </Fragment>
       ))}
 
       {thread.isLocked ? (
@@ -1423,13 +1878,16 @@ function ThreadView({
           <h3 style={{ margin: 0, marginBottom: 8, fontSize: 13, fontWeight: 700, color: islandTheme.color.textMuted }}>
             Post a reply
           </h3>
-          <textarea
+          <MarkdownEditor
             value={reply}
-            onChange={(e) => setReply(e.target.value)}
+            onChange={setReply}
             rows={5}
-            placeholder="Be cool. Stay on topic. Markdown-ish: *italic*, **bold**, > quote"
-            style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
+            textareaRef={replyRef}
+            placeholder="Be cool. Stay on topic. **bold**, *italic*, > quote, lists, `code`…"
           />
+          <div style={{ marginTop: 10 }}>
+            <ImageDropzone uploads={replyUploads} onUploadsChange={setReplyUploads} />
+          </div>
           {error ? (
             <p style={{ margin: "8px 0 0", fontSize: 12, color: islandTheme.color.dangerText }}>{error}</p>
           ) : null}
@@ -1437,12 +1895,14 @@ function ThreadView({
             <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
               {reply.length} char{reply.length === 1 ? "" : "s"} · earns ₦1
             </span>
-            <IslandButton variant="primary" onClick={postReply} disabled={busy || reply.trim().length < 2}>
+            <IslandButton variant="primary" onClick={postReply} disabled={busy || (reply.trim().length < 2 && replyUploads.length === 0)}>
               {busy ? "Posting…" : "Post Reply"}
             </IslandButton>
           </div>
         </IslandCard>
       )}
+
+      <RelatedThreadsCard related={related} onSelect={onSelectThread} />
     </div>
   );
 }
@@ -1452,7 +1912,10 @@ function PostCard({
   idx,
   canEdit,
   isOwner,
+  copied,
   onReact,
+  onQuote,
+  onCopyLink,
   onEdit,
   onDelete,
   onReport
@@ -1461,16 +1924,21 @@ function PostCard({
   idx: number;
   canEdit: boolean;
   isOwner: boolean;
-  onReact: () => void;
+  copied: boolean;
+  onReact: (reaction: ForumReactionKey) => void;
+  onQuote?: () => void;
+  onCopyLink: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onReport: () => void;
 }) {
   return (
     <IslandCard
+      id={`post-${post.id}`}
       style={{
         padding: 0,
         overflow: "hidden",
+        scrollMarginTop: 80,
         borderColor: post.isOp ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder
       }}
     >
@@ -1512,7 +1980,27 @@ function PostCard({
 
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12, color: islandTheme.color.textMuted, gap: 12, flexWrap: "wrap" }}>
-            <span>#{idx} · {formatAbsolute(post.createdAt)}</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+              <a
+                href={`#/forums/thread/${post.threadId}/post/${post.id}`}
+                onClick={(e) => { e.preventDefault(); onCopyLink(); }}
+                title="Copy link to this post"
+                style={{ color: islandTheme.color.textMuted, textDecoration: "none", fontWeight: 700 }}
+              >
+                #{idx}
+              </a>
+              <span>· {formatAbsolute(post.createdAt)}</span>
+              <button
+                type="button"
+                className="island-btn"
+                onClick={onCopyLink}
+                title="Copy permalink"
+                aria-label="Copy permalink"
+                style={{ background: "transparent", border: "none", color: copied ? islandTheme.color.successSoft : islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 12, padding: 0 }}
+              >
+                {copied ? "✓ copied" : "🔗"}
+              </button>
+            </span>
             {post.editedAt ? <span style={{ fontStyle: "italic" }}>edited {formatRelative(post.editedAt)}</span> : null}
           </div>
           <div
@@ -1526,27 +2014,47 @@ function PostCard({
               fontStyle: post.isDeleted ? "italic" : "normal"
             }}
           >
-            {post.isDeleted ? "[deleted]" : renderForumBody(post.body)}
+            {post.isDeleted ? "[deleted]" : renderMarkdown(post.body)}
           </div>
+          {!post.isDeleted && post.attachments.length > 0 ? <AttachmentGallery attachments={post.attachments} /> : null}
           {!post.isDeleted ? (
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-              <button
-                type="button"
-                className="island-btn"
-                onClick={onReact}
-                style={{
-                  background: post.userReacted ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
-                  color: post.userReacted ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
-                  border: `1px solid ${post.userReacted ? islandTheme.color.primary : islandTheme.color.cardBorder}`,
-                  borderRadius: 999,
-                  padding: "4px 10px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  font: "inherit"
-                }}
-              >
-                👍 {post.reactionCount}
-              </button>
+              {REACTION_META.map((r) => {
+                const count = post.reactions[r.key] ?? 0;
+                const mine = post.myReactions.includes(r.key);
+                return (
+                  <button
+                    key={r.key}
+                    type="button"
+                    className="island-btn"
+                    onClick={() => onReact(r.key)}
+                    title={r.label}
+                    aria-label={`${r.label}${count ? ` (${count})` : ""}`}
+                    aria-pressed={mine}
+                    style={{
+                      background: mine ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
+                      color: mine ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
+                      border: `1px solid ${mine ? islandTheme.color.primary : islandTheme.color.cardBorder}`,
+                      borderRadius: 999,
+                      padding: count > 0 ? "4px 10px 4px 8px" : "4px 8px",
+                      fontSize: 13,
+                      lineHeight: 1,
+                      cursor: "pointer",
+                      font: "inherit",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4
+                    }}
+                  >
+                    <span aria-hidden="true">{r.emoji}</span>
+                    {count > 0 ? <span style={{ fontSize: 12, fontWeight: 700 }}>{count}</span> : null}
+                  </button>
+                );
+              })}
+              <span aria-hidden="true" style={{ width: 1, alignSelf: "stretch", background: islandTheme.color.cardBorder, margin: "2px 2px" }} />
+              {onQuote ? (
+                <button type="button" className="island-btn" onClick={onQuote} style={ghostBtn}>Quote</button>
+              ) : null}
               {canEdit ? (
                 <button type="button" className="island-btn" onClick={onEdit} style={ghostBtn}>Edit</button>
               ) : null}
@@ -1575,6 +2083,85 @@ const ghostBtn: React.CSSProperties = {
   font: "inherit"
 };
 
+function PollCard({ poll, onVote }: { poll: ForumPoll; onVote: (optionIds: number[]) => void }) {
+  const closed = poll.closesAt ? new Date(poll.closesAt).getTime() < Date.now() : false;
+  const total = poll.options.reduce((s, o) => s + o.votes, 0);
+
+  function toggle(id: number) {
+    if (closed) return;
+    if (poll.multi) {
+      const next = poll.myVotes.includes(id) ? poll.myVotes.filter((x) => x !== id) : [...poll.myVotes, id];
+      onVote(next);
+    } else {
+      onVote(poll.myVotes.includes(id) ? [] : [id]);
+    }
+  }
+
+  return (
+    <IslandCard style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span aria-hidden="true" style={{ fontSize: 16 }}>📊</span>
+        <span className="island-display" style={{ fontSize: 16, fontWeight: 800 }}>{poll.question}</span>
+      </div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {poll.options.map((o) => {
+          const pct = total > 0 ? Math.round((o.votes / total) * 100) : 0;
+          const mine = poll.myVotes.includes(o.id);
+          return (
+            <button
+              key={o.id}
+              type="button"
+              onClick={() => toggle(o.id)}
+              disabled={closed}
+              style={{
+                position: "relative",
+                display: "block",
+                width: "100%",
+                textAlign: "left",
+                padding: "10px 12px",
+                borderRadius: 8,
+                overflow: "hidden",
+                border: `1px solid ${mine ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder}`,
+                background: islandTheme.color.panelMutedBg,
+                cursor: closed ? "default" : "pointer",
+                font: "inherit",
+                color: islandTheme.color.textPrimary
+              }}
+            >
+              <div
+                aria-hidden="true"
+                style={{ position: "absolute", insetInlineStart: 0, top: 0, bottom: 0, width: `${pct}%`, background: `${islandTheme.color.primary}33`, transition: "width 240ms ease" }}
+              />
+              <div style={{ position: "relative", display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: mine ? 800 : 600 }}>{mine ? "✓ " : ""}{o.label}</span>
+                <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, flexShrink: 0 }}>{pct}% · {o.votes}</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+        {poll.totalVoters} voter{poll.totalVoters === 1 ? "" : "s"}
+        {poll.multi ? " · multiple choice" : ""}
+        {closed ? " · closed" : poll.closesAt ? ` · closes ${formatRelative(poll.closesAt)}` : ""}
+        {poll.myVotes.length === 0 && !closed ? " · tap to vote" : ""}
+      </div>
+    </IslandCard>
+  );
+}
+
+function UnreadDivider() {
+  return (
+    <div id="forum-unread-divider" style={{ display: "flex", alignItems: "center", gap: 10, margin: "2px 4px", scrollMarginTop: 80 }}>
+      <div style={{ flex: 1, height: 1, background: islandTheme.color.primaryGlow, opacity: 0.5 }} />
+      <span className="island-mono" style={{ fontSize: 11, fontWeight: 700, color: islandTheme.color.primaryGlow, textTransform: "uppercase", letterSpacing: "0.08em", whiteSpace: "nowrap" }}>
+        New since your last visit
+      </span>
+      <div style={{ flex: 1, height: 1, background: islandTheme.color.primaryGlow, opacity: 0.5 }} />
+    </div>
+  );
+}
+
 function ModButton({ children, onClick, danger }: { children: React.ReactNode; onClick: () => void; danger?: boolean }) {
   return (
     <button
@@ -1598,40 +2185,487 @@ function ModButton({ children, onClick, danger }: { children: React.ReactNode; o
   );
 }
 
+// ── Markdown editor (toolbar + write/preview) ───────────────────────────────
+
+type MdAction = "bold" | "italic" | "strike" | "code" | "quote" | "ul" | "ol" | "link" | "image";
+
+const MD_TOOLBAR: { action: MdAction; glyph: string; title: string }[] = [
+  { action: "bold", glyph: "B", title: "Bold" },
+  { action: "italic", glyph: "i", title: "Italic" },
+  { action: "strike", glyph: "S", title: "Strikethrough" },
+  { action: "code", glyph: "</>", title: "Code" },
+  { action: "quote", glyph: "❝", title: "Quote" },
+  { action: "ul", glyph: "•", title: "Bulleted list" },
+  { action: "ol", glyph: "1.", title: "Numbered list" },
+  { action: "link", glyph: "🔗", title: "Link" },
+  { action: "image", glyph: "🖼", title: "Image" }
+];
+
+const mdToolBtn: React.CSSProperties = {
+  minWidth: 28,
+  height: 26,
+  padding: "0 7px",
+  borderRadius: 6,
+  border: `1px solid ${islandTheme.color.cardBorder}`,
+  background: islandTheme.color.panelMutedBg,
+  color: islandTheme.color.textSubtle,
+  fontSize: 12,
+  fontWeight: 700,
+  cursor: "pointer",
+  font: "inherit"
+};
+
+// Crew member list for @mention autocomplete — fetched once, module-cached.
+let forumMembersCache: ForumMember[] | null = null;
+let forumMembersPromise: Promise<ForumMember[]> | null = null;
+
+function useForumMembers(): ForumMember[] {
+  const [members, setMembers] = useState<ForumMember[]>(forumMembersCache ?? []);
+  useEffect(() => {
+    if (forumMembersCache) { setMembers(forumMembersCache); return; }
+    let promise: Promise<ForumMember[]>;
+    if (forumMembersPromise) {
+      promise = forumMembersPromise;
+    } else {
+      promise = apiFetch("/forums/members")
+        .then((r) => r.json())
+        .then((d): ForumMember[] => {
+          const list: ForumMember[] = Array.isArray(d?.members) ? d.members : [];
+          forumMembersCache = list;
+          return list;
+        })
+        .catch((): ForumMember[] => {
+          forumMembersCache = [];
+          return [];
+        });
+      forumMembersPromise = promise;
+    }
+    let active = true;
+    void promise.then((m) => { if (active) setMembers(m); });
+    return () => { active = false; };
+  }, []);
+  return members;
+}
+
+function MarkdownEditor({
+  value,
+  onChange,
+  rows = 8,
+  placeholder,
+  textareaRef
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  rows?: number;
+  placeholder?: string;
+  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
+}) {
+  const internalRef = useRef<HTMLTextAreaElement | null>(null);
+  const ref = textareaRef ?? internalRef;
+  const [preview, setPreview] = useState(false);
+  const members = useForumMembers();
+  const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+
+  const mentionMatches = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    return members
+      .filter((m) => m.username.toLowerCase().includes(q) || m.displayName.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [mention, members]);
+
+  function onTextChange(v: string, cursor: number) {
+    onChange(v);
+    // Detect an in-progress @mention token immediately left of the cursor.
+    const m = /(^|\s)@([a-z0-9._]*)$/i.exec(v.slice(0, cursor));
+    setMention(m ? { query: m[2], start: cursor - m[2].length - 1 } : null);
+  }
+
+  function insertMention(username: string) {
+    const ta = ref.current;
+    if (!ta || !mention) return;
+    const pos = ta.selectionStart ?? value.length;
+    const before = value.slice(0, mention.start);
+    const after = value.slice(pos);
+    const insert = `@${username} `;
+    const next = before + insert + after;
+    onChange(next);
+    setMention(null);
+    const caret = before.length + insert.length;
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(caret, caret); });
+  }
+
+  function apply(action: MdAction) {
+    const ta = ref.current;
+    if (!ta) return;
+    const s = ta.selectionStart ?? value.length;
+    const e = ta.selectionEnd ?? value.length;
+    let next;
+    switch (action) {
+      case "bold": next = surroundSelection(value, s, e, "**", "**", "bold text"); break;
+      case "italic": next = surroundSelection(value, s, e, "*", "*", "italic text"); break;
+      case "strike": next = surroundSelection(value, s, e, "~~", "~~", "struck"); break;
+      case "code": next = surroundSelection(value, s, e, "`", "`", "code"); break;
+      case "link": next = surroundSelection(value, s, e, "[", "](https://)", "link text"); break;
+      case "image": next = surroundSelection(value, s, e, "![", "](https://)", "alt text"); break;
+      case "quote": next = prefixLines(value, s, e, "> ", "quote"); break;
+      case "ul": next = prefixLines(value, s, e, "- ", "item"); break;
+      case "ol": next = prefixLines(value, s, e, "1. ", "item"); break;
+    }
+    onChange(next.value);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(next.selStart, next.selEnd);
+    });
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 6, position: "relative" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", flex: 1, opacity: preview ? 0.4 : 1, pointerEvents: preview ? "none" : "auto" }}>
+          {MD_TOOLBAR.map((t) => (
+            <button
+              key={t.action}
+              type="button"
+              className="island-btn"
+              title={t.title}
+              aria-label={t.title}
+              onClick={() => apply(t.action)}
+              style={{
+                ...mdToolBtn,
+                fontStyle: t.action === "italic" ? "italic" : "normal",
+                textDecoration: t.action === "strike" ? "line-through" : "none",
+                fontFamily: t.action === "code" || t.action === "ol" ? islandTheme.font.mono : "inherit"
+              }}
+            >
+              {t.glyph}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className="island-btn"
+          onClick={() => setPreview((v) => !v)}
+          disabled={!preview && value.trim().length === 0}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: islandTheme.color.primaryGlow,
+            fontSize: 12,
+            fontWeight: 700,
+            cursor: "pointer",
+            padding: "0 4px",
+            font: "inherit",
+            opacity: !preview && value.trim().length === 0 ? 0.5 : 1
+          }}
+        >
+          {preview ? "✎ Write" : "👁 Preview"}
+        </button>
+      </div>
+      {preview ? (
+        <div
+          style={{
+            minHeight: rows * 22,
+            padding: "10px 14px",
+            borderRadius: 10,
+            border: `1px dashed ${islandTheme.color.cardBorder}`,
+            background: islandTheme.color.panelMutedBg,
+            fontSize: 14,
+            lineHeight: 1.6
+          }}
+        >
+          {value.trim() ? renderMarkdown(value) : <span style={{ color: islandTheme.color.textMuted }}>Nothing to preview yet.</span>}
+        </div>
+      ) : (
+        <textarea
+          ref={ref}
+          value={value}
+          onChange={(e) => onTextChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+          onBlur={() => window.setTimeout(() => setMention(null), 150)}
+          rows={rows}
+          placeholder={placeholder}
+          style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
+        />
+      )}
+      {!preview && mention && mentionMatches.length > 0 ? (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            bottom: 6,
+            zIndex: 50,
+            minWidth: 220,
+            maxWidth: 320,
+            background: islandTheme.color.menuBg,
+            border: `1px solid ${islandTheme.color.border}`,
+            borderRadius: 10,
+            boxShadow: islandTheme.shadow.menu,
+            overflow: "hidden"
+          }}
+        >
+          {mentionMatches.map((m) => (
+            <button
+              key={m.username}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); insertMention(m.username); }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                width: "100%",
+                padding: "7px 10px",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                font: "inherit",
+                color: islandTheme.color.textPrimary,
+                textAlign: "left"
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = islandTheme.color.panelMutedBg; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              {m.avatarUrl ? (
+                <img src={m.avatarUrl} alt="" style={{ width: 22, height: 22, borderRadius: 999 }} />
+              ) : (
+                <div style={{ width: 22, height: 22, borderRadius: 999, background: islandTheme.color.panelMutedBg }} />
+              )}
+              <span style={{ fontSize: 13, fontWeight: 700 }}>{m.displayName}</span>
+              <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>@{m.username}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Image dropzone + attachment gallery ─────────────────────────────────────
+
+const MAX_ATTACHMENTS = 10;
+
+function ImageDropzone({
+  uploads,
+  onUploadsChange
+}: {
+  uploads: ForumUpload[];
+  onUploadsChange: (next: ForumUpload[]) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  async function handleFiles(files: FileList | File[]) {
+    const slots = MAX_ATTACHMENTS - uploads.length;
+    if (slots <= 0) { setError(`Up to ${MAX_ATTACHMENTS} images per post.`); return; }
+    const list = Array.from(files).filter((f) => f.type.startsWith("image/")).slice(0, slots);
+    if (list.length === 0) return;
+    setBusy(true);
+    setError(null);
+    const added: ForumUpload[] = [];
+    for (const f of list) {
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const r = await apiFetch("/forums/uploads", { method: "POST", body: fd });
+        const data = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(data?.error ?? "Upload failed");
+        added.push(data as ForumUpload);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Upload failed");
+      }
+    }
+    if (added.length) onUploadsChange([...uploads, ...added]);
+    setBusy(false);
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => inputRef.current?.click()}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inputRef.current?.click(); } }}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => { e.preventDefault(); setDragOver(false); void handleFiles(e.dataTransfer.files); }}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 8,
+          padding: "16px 12px",
+          borderRadius: 10,
+          border: `1.5px dashed ${dragOver ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder}`,
+          background: dragOver ? `${islandTheme.color.primary}14` : islandTheme.color.panelMutedBg,
+          color: islandTheme.color.textSubtle,
+          cursor: "pointer",
+          fontSize: 13,
+          textAlign: "center"
+        }}
+      >
+        <span aria-hidden="true" style={{ fontSize: 18 }}>🖼️</span>
+        {busy ? "Uploading…" : `Drop images here or click to upload (${uploads.length}/${MAX_ATTACHMENTS})`}
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        onChange={(e) => { if (e.target.files) void handleFiles(e.target.files); e.target.value = ""; }}
+        style={{ display: "none" }}
+      />
+      {error ? <span style={{ fontSize: 12, color: islandTheme.color.dangerSoft }}>{error}</span> : null}
+      {uploads.length > 0 ? (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {uploads.map((u) => (
+            <div key={u.id} style={{ position: "relative" }}>
+              <img
+                src={u.thumbUrl}
+                alt=""
+                style={{ width: 84, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${islandTheme.color.cardBorder}`, display: "block" }}
+              />
+              <button
+                type="button"
+                onClick={() => onUploadsChange(uploads.filter((x) => x.id !== u.id))}
+                aria-label="Remove image"
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -6,
+                  width: 20,
+                  height: 20,
+                  borderRadius: 999,
+                  border: "none",
+                  background: islandTheme.color.dangerSurface,
+                  color: islandTheme.color.dangerText,
+                  cursor: "pointer",
+                  fontSize: 12,
+                  lineHeight: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Thumbnail grid + click-to-zoom lightbox for a post's attached images. */
+function AttachmentGallery({ attachments }: { attachments: ForumAttachment[] }) {
+  const [open, setOpen] = useState<string | null>(null);
+  if (!attachments.length) return null;
+  return (
+    <>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
+        {attachments.map((a, i) => (
+          <button
+            key={i}
+            type="button"
+            onClick={() => setOpen(a.url)}
+            style={{ padding: 0, border: `1px solid ${islandTheme.color.cardBorder}`, borderRadius: 8, overflow: "hidden", cursor: "zoom-in", background: "none", lineHeight: 0 }}
+          >
+            <img src={a.thumbUrl} alt="" loading="lazy" style={{ display: "block", maxHeight: 180, maxWidth: 260, objectFit: "cover" }} />
+          </button>
+        ))}
+      </div>
+      {open ? (
+        <div
+          onClick={() => setOpen(null)}
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(2,6,23,0.88)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            cursor: "zoom-out",
+            padding: 24
+          }}
+        >
+          <img src={open} alt="" style={{ maxWidth: "96%", maxHeight: "96%", objectFit: "contain", borderRadius: 8, boxShadow: islandTheme.shadow.menu }} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 // ── Compose ─────────────────────────────────────────────────────────────────
 
 function ComposeView({
   categorySlug,
+  initialType,
   crewGames,
   onCancel,
   onCreated
 }: {
   categorySlug: string;
+  initialType?: ForumThreadType;
   crewGames: CrewOwnedGame[];
   onCancel: () => void;
   onCreated: (threadId: number) => void;
 }) {
   // Compose drafts survive accidental navigation within the session.
   const draftKey = `bi:forum-compose:${categorySlug}`;
-  const [title, setTitle] = useState(() => {
+  const draft = useMemo(() => {
     try {
-      return (JSON.parse(sessionStorage.getItem(draftKey) ?? "null") as { title?: string } | null)?.title ?? "";
+      return JSON.parse(sessionStorage.getItem(draftKey) ?? "null") as
+        | { title?: string; body?: string; type?: ForumThreadType; linkUrl?: string }
+        | null;
     } catch {
-      return "";
+      return null;
     }
-  });
-  const [body, setBody] = useState(() => {
-    try {
-      return (JSON.parse(sessionStorage.getItem(draftKey) ?? "null") as { body?: string } | null)?.body ?? "";
-    } catch {
-      return "";
-    }
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  const [title, setTitle] = useState(draft?.title ?? "");
+  const [body, setBody] = useState(draft?.body ?? "");
+  const [type, setType] = useState<ForumThreadType>(initialType ?? draft?.type ?? "discussion");
+  const [linkUrl, setLinkUrl] = useState(draft?.linkUrl ?? "");
+  // Uploads aren't persisted in the draft (server-side ids), so they reset on
+  // reload — acceptable; the images themselves remain on the server until swept.
+  const [uploads, setUploads] = useState<ForumUpload[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
   const [taggedGame, setTaggedGame] = useState<CrewOwnedGame | null>(null);
   const [gameQuery, setGameQuery] = useState("");
+  const [categories, setCategories] = useState<ForumCategory[]>([]);
+  const [category, setCategory] = useState<string>(categorySlug);
+  const [announce, setAnnounce] = useState(false);
+  const [announceAvailable, setAnnounceAvailable] = useState(false);
+  const [pollOn, setPollOn] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState("");
+  const [pollOptions, setPollOptions] = useState<string[]>(["", ""]);
+  const [pollMulti, setPollMulti] = useState(false);
+
+  // Load categories for the picker; default to the requested slug, else the
+  // last-used one, else the first unlocked category.
+  useEffect(() => {
+    let active = true;
+    apiFetch("/forums/categories")
+      .then((r) => r.json())
+      .then((d) => {
+        if (!active) return;
+        const cats: ForumCategory[] = Array.isArray(d?.categories) ? d.categories : [];
+        setCategories(cats);
+        setAnnounceAvailable(Boolean(d?.announceAvailable));
+        const last = localStorage.getItem("bi:forum-last-category");
+        const valid = (slug: string) => cats.some((c) => c.slug === slug && !c.isLocked);
+        if (valid(categorySlug)) setCategory(categorySlug);
+        else if (last && valid(last)) setCategory(last);
+        else { const first = cats.find((c) => !c.isLocked); if (first) setCategory(first.slug); }
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [categorySlug]);
 
   const gameMatches = useMemo(() => {
     const q = gameQuery.trim().toLowerCase();
@@ -1640,22 +2674,45 @@ function ComposeView({
   }, [gameQuery, crewGames]);
 
   useEffect(() => {
-    if (title || body) sessionStorage.setItem(draftKey, JSON.stringify({ title, body }));
-    else sessionStorage.removeItem(draftKey);
-  }, [title, body, draftKey]);
+    if (title || body || linkUrl || type !== "discussion") {
+      sessionStorage.setItem(draftKey, JSON.stringify({ title, body, type, linkUrl }));
+    } else {
+      sessionStorage.removeItem(draftKey);
+    }
+  }, [title, body, type, linkUrl, draftKey]);
+
+  const linkTrimmed = linkUrl.trim();
+  const linkOk = /^https?:\/\/\S+$/i.test(linkTrimmed);
+  const showLinkField = type === "resource" || type === "recommendation";
+  const linkRequired = type === "resource";
+  const linkInvalid = (linkRequired && !linkOk) || (showLinkField && linkTrimmed.length > 0 && !linkOk);
+  const meta = POST_TYPE_BY_KEY[type];
+
+  const pollCleanOptions = pollOptions.map((o) => o.trim()).filter((o) => o.length > 0);
+  const pollValid = !pollOn || (pollQuestion.trim().length > 0 && pollCleanOptions.length >= 2);
 
   async function submit() {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
-      const r = await apiFetch(`/forums/categories/${categorySlug}/threads`, {
+      const sendLink = showLinkField && linkOk ? linkTrimmed : undefined;
+      localStorage.setItem("bi:forum-last-category", category);
+      const pollPayload = pollOn && pollValid
+        ? { question: pollQuestion.trim(), options: pollCleanOptions, multi: pollMulti }
+        : undefined;
+      const r = await apiFetch(`/forums/categories/${category}/threads`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           title: title.trim(),
           body: body.trim(),
-          ...(taggedGame ? { appId: taggedGame.appId } : {})
+          threadType: type,
+          ...(sendLink ? { linkUrl: sendLink } : {}),
+          ...(uploads.length ? { uploadIds: uploads.map((u) => u.id) } : {}),
+          ...(taggedGame ? { appId: taggedGame.appId } : {}),
+          ...(announce ? { announce: true } : {}),
+          ...(pollPayload ? { poll: pollPayload } : {})
         })
       });
       const data = await r.json().catch(() => null);
@@ -1674,8 +2731,60 @@ function ComposeView({
       <BackLink onClick={onCancel} label={`← Back to ${categorySlug}`} />
       <IslandCard>
         <h2 className="island-display" style={{ margin: 0, marginBottom: 12, fontSize: 20, fontWeight: 800 }}>
-          New thread
+          {meta.emoji} New {meta.label.toLowerCase()}
         </h2>
+        <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
+          <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+            What are you sharing?
+          </span>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 8 }}>
+            {POST_TYPES.map((t) => {
+              const active = type === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  className="island-btn"
+                  onClick={() => setType(t.key)}
+                  aria-pressed={active}
+                  style={{
+                    textAlign: "left",
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "flex-start",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    background: active ? `${t.accent}22` : islandTheme.color.panelMutedBg,
+                    border: `1px solid ${active ? t.accent : islandTheme.color.cardBorder}`,
+                    color: islandTheme.color.textPrimary,
+                    cursor: "pointer",
+                    font: "inherit"
+                  }}
+                >
+                  <span style={{ fontSize: 18, lineHeight: 1.1 }} aria-hidden="true">{t.emoji}</span>
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: "block", fontSize: 13, fontWeight: 800 }}>{t.label}</span>
+                    <span style={{ display: "block", fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.35 }}>{t.blurb}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+          <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+            Category
+          </span>
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, cursor: "pointer" }}
+          >
+            {categories.filter((c) => !c.isLocked).map((c) => (
+              <option key={c.id} value={c.slug}>{c.icon} {c.name}</option>
+            ))}
+          </select>
+        </label>
         <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
           <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
             Title
@@ -1684,61 +2793,62 @@ function ComposeView({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             maxLength={160}
-            placeholder="Be specific — this is the headline"
+            placeholder={
+              type === "memory" ? "Name the moment — e.g. “LAN night 2024, 3am Helldivers”"
+              : type === "recommendation" ? "What are you recommending?"
+              : type === "resource" ? "What is this tool/guide?"
+              : "Be specific — this is the headline"
+            }
             style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14 }}
           />
         </label>
         <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
-              Body
-            </span>
-            <button
-              type="button"
-              className="island-btn"
-              onClick={() => setShowPreview((v) => !v)}
-              disabled={!showPreview && body.trim().length === 0}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: islandTheme.color.primaryGlow,
-                fontSize: 12,
-                fontWeight: 700,
-                cursor: "pointer",
-                padding: 0,
-                font: "inherit",
-                opacity: !showPreview && body.trim().length === 0 ? 0.5 : 1
-              }}
-            >
-              {showPreview ? "✎ Edit" : "👁 Preview"}
-            </button>
-          </div>
-          {showPreview ? (
-            <div
-              style={{
-                minHeight: 180,
-                padding: "10px 14px",
-                borderRadius: 10,
-                border: `1px dashed ${islandTheme.color.cardBorder}`,
-                background: islandTheme.color.panelMutedBg,
-                fontSize: 14,
-                lineHeight: 1.6,
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word"
-              }}
-            >
-              {renderForumBody(body)}
-            </div>
-          ) : (
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={10}
-              placeholder="Lay out your thoughts. Markdown-ish: *italic*, **bold**, > quote, ```code```"
-              style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
-            />
-          )}
+          <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+            Body
+          </span>
+          <MarkdownEditor
+            value={body}
+            onChange={setBody}
+            rows={10}
+            placeholder={
+              type === "memory" ? "Tell the story. Add photos below, tag who was there…"
+              : "Lay out your thoughts. **bold**, *italic*, > quote, - lists, `code`, [links](https://)…"
+            }
+          />
         </div>
+        <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+          <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+            {type === "memory" ? "📸 Photos" : "🖼️ Images (optional)"}
+          </span>
+          <ImageDropzone uploads={uploads} onUploadsChange={setUploads} />
+        </div>
+        {showLinkField ? (
+          <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
+            <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+              {meta.emoji} Link {linkRequired ? "(required)" : "(optional)"}
+            </span>
+            <input
+              value={linkUrl}
+              onChange={(e) => setLinkUrl(e.target.value)}
+              inputMode="url"
+              placeholder="https://…"
+              style={{
+                ...islandInputStyle,
+                width: "100%",
+                padding: "10px 14px",
+                fontSize: 14,
+                borderColor: linkInvalid ? islandTheme.color.dangerAccent : islandTheme.color.border
+              }}
+            />
+            <span style={{ fontSize: 12, color: linkInvalid ? islandTheme.color.dangerSoft : islandTheme.color.textMuted }}>
+              {linkInvalid
+                ? "Enter a full http(s):// link."
+                : type === "resource"
+                  ? "We'll unfurl a preview card from this link."
+                  : "Add a store/link if you have one — optional."}
+            </span>
+          </div>
+        ) : null}
         <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
           <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
             🎮 Tag a game (optional)
@@ -1812,6 +2922,66 @@ function ComposeView({
             </>
           )}
         </div>
+
+        <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, justifySelf: "start" }}>
+            <input type="checkbox" checked={pollOn} onChange={(e) => setPollOn(e.target.checked)} />
+            📊 Add a poll
+          </label>
+          {pollOn ? (
+            <div style={{ display: "grid", gap: 8, padding: 12, borderRadius: 10, border: `1px solid ${islandTheme.color.cardBorder}`, background: islandTheme.color.panelMutedBg }}>
+              <input
+                value={pollQuestion}
+                onChange={(e) => setPollQuestion(e.target.value)}
+                maxLength={300}
+                placeholder="Ask a question…"
+                style={{ ...islandInputStyle, width: "100%", padding: "8px 12px", fontSize: 14 }}
+              />
+              {pollOptions.map((opt, i) => (
+                <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    value={opt}
+                    onChange={(e) => setPollOptions((o) => o.map((x, j) => (j === i ? e.target.value : x)))}
+                    maxLength={120}
+                    placeholder={`Option ${i + 1}`}
+                    style={{ ...islandInputStyle, flex: 1, padding: "7px 12px", fontSize: 13 }}
+                  />
+                  {pollOptions.length > 2 ? (
+                    <button
+                      type="button"
+                      onClick={() => setPollOptions((o) => o.filter((_, j) => j !== i))}
+                      aria-label="Remove option"
+                      style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 16 }}
+                    >
+                      ×
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {pollOptions.length < 10 ? (
+                <button
+                  type="button"
+                  onClick={() => setPollOptions((o) => [...o, ""])}
+                  style={{ background: "transparent", border: "none", color: islandTheme.color.primaryGlow, cursor: "pointer", font: "inherit", fontSize: 13, fontWeight: 700, justifySelf: "start", padding: 0 }}
+                >
+                  + Add option
+                </button>
+              ) : null}
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 12, color: islandTheme.color.textSubtle }}>
+                <input type="checkbox" checked={pollMulti} onChange={(e) => setPollMulti(e.target.checked)} />
+                Allow multiple choices
+              </label>
+            </div>
+          ) : null}
+        </div>
+
+        {announceAvailable ? (
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 13 }}>
+            <input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
+            📣 Also announce this to the Discord
+          </label>
+        ) : null}
+
         {error ? (
           <p style={{ margin: "0 0 10px", fontSize: 12, color: islandTheme.color.dangerText }}>{error}</p>
         ) : null}
@@ -1821,8 +2991,8 @@ function ComposeView({
           </span>
           <div style={{ display: "flex", gap: 8 }}>
             <IslandButton onClick={onCancel}>Cancel</IslandButton>
-            <IslandButton variant="primary" onClick={submit} disabled={busy || title.trim().length < 3 || body.trim().length < 2}>
-              {busy ? "Posting…" : "Post Thread"}
+            <IslandButton variant="primary" onClick={submit} disabled={busy || !category || title.trim().length < 3 || body.trim().length < 2 || linkInvalid || (linkRequired && !linkOk) || (pollOn && !pollValid)}>
+              {busy ? "Posting…" : `Post ${meta.label}`}
             </IslandButton>
           </div>
         </div>
@@ -1853,6 +3023,81 @@ function BackLink({ onClick, label }: { onClick: () => void; label: string }) {
     >
       {label}
     </button>
+  );
+}
+
+function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** Compact one-line link summary for feed rows. */
+function FeedLinkLine({ linkUrl, preview }: { linkUrl: string; preview: ForumLinkPreview | null }) {
+  return (
+    <div style={{ marginTop: 4, fontSize: 12, color: islandTheme.color.textSubtle, display: "flex", alignItems: "center", gap: 6, minWidth: 0 }}>
+      <span aria-hidden="true">🔗</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+        {preview?.title ? (
+          <span style={{ color: islandTheme.color.textPrimary, fontWeight: 600 }}>{preview.title}</span>
+        ) : null}
+        {preview?.title ? " · " : ""}
+        <span style={{ color: islandTheme.color.primaryGlow }}>{preview?.siteName ?? domainOf(linkUrl)}</span>
+      </span>
+    </div>
+  );
+}
+
+/** Rich unfurl card shown in the thread header for resource/recommendation posts. */
+function LinkPreviewCard({ linkUrl, preview }: { linkUrl: string; preview: ForumLinkPreview | null }) {
+  const domain = preview?.siteName ?? domainOf(linkUrl);
+  const clamp2: React.CSSProperties = {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical"
+  };
+  return (
+    <a
+      href={linkUrl}
+      target="_blank"
+      rel="noopener noreferrer nofollow"
+      style={{
+        display: "flex",
+        gap: 12,
+        marginTop: 14,
+        padding: 10,
+        borderRadius: 10,
+        border: `1px solid ${islandTheme.color.cardBorder}`,
+        background: islandTheme.color.panelMutedBg,
+        textDecoration: "none",
+        color: islandTheme.color.textPrimary,
+        alignItems: "center"
+      }}
+    >
+      {preview?.imageUrl ? (
+        <img
+          src={preview.imageUrl}
+          alt=""
+          loading="lazy"
+          style={{ width: 104, height: 64, objectFit: "cover", borderRadius: 8, flexShrink: 0, border: `1px solid ${islandTheme.color.cardBorder}` }}
+        />
+      ) : (
+        <div style={{ width: 104, height: 64, borderRadius: 8, flexShrink: 0, background: islandTheme.color.panelBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24 }} aria-hidden="true">
+          🔗
+        </div>
+      )}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12, color: islandTheme.color.primaryGlow, marginBottom: 2 }}>{domain}</div>
+        <div style={{ fontSize: 14, fontWeight: 700, wordBreak: "break-word", ...clamp2 }}>{preview?.title ?? linkUrl}</div>
+        {preview?.description ? (
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2, ...clamp2 }}>{preview.description}</div>
+        ) : null}
+      </div>
+    </a>
   );
 }
 
@@ -1911,118 +3156,6 @@ function LockGlyph() {
       🔒
     </span>
   );
-}
-
-// ── Markdown-ish body rendering ─────────────────────────────────────────────
-// The composer advertises *italic*, **bold**, `code`, > quote and ``` fences.
-// Render those (and nothing else) by building React nodes — never raw HTML.
-
-function renderInline(text: string): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  // Order matters: bold (**) before italic (*) so ** isn't eaten as two *.
-  const pattern = /(\*\*([^*]+)\*\*|\*([^*\n]+)\*|`([^`\n]+)`|https?:\/\/[^\s<>"')]+)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let key = 0;
-  while ((m = pattern.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    if (m[2] !== undefined) {
-      nodes.push(<strong key={`b${key++}`}>{m[2]}</strong>);
-    } else if (m[3] !== undefined) {
-      nodes.push(<em key={`i${key++}`}>{m[3]}</em>);
-    } else if (m[4] !== undefined) {
-      nodes.push(
-        <code
-          key={`c${key++}`}
-          className="island-mono"
-          style={{ background: islandTheme.color.panelMutedBg, padding: "1px 5px", borderRadius: 4, fontSize: "0.92em" }}
-        >
-          {m[4]}
-        </code>
-      );
-    } else {
-      nodes.push(
-        <a key={`a${key++}`} href={m[0]} target="_blank" rel="noopener noreferrer" style={{ color: islandTheme.color.primaryGlow, wordBreak: "break-all" }}>
-          {m[0]}
-        </a>
-      );
-    }
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
-}
-
-function renderForumBody(body: string): React.ReactNode {
-  const blocks: React.ReactNode[] = [];
-  const parts = body.split(/```/);
-  parts.forEach((part, pi) => {
-    if (pi % 2 === 1) {
-      // Inside a fence — verbatim code block.
-      blocks.push(
-        <pre
-          key={`pre${pi}`}
-          className="island-mono"
-          style={{
-            margin: "6px 0",
-            padding: "10px 12px",
-            borderRadius: 8,
-            background: islandTheme.color.panelMutedBg,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            overflowX: "auto",
-            fontSize: 12.5,
-            whiteSpace: "pre"
-          }}
-        >
-          {part.replace(/^\n/, "").replace(/\n$/, "")}
-        </pre>
-      );
-      return;
-    }
-    // Outside fences: group consecutive "> " lines into quotes.
-    const lines = part.split("\n");
-    let quote: string[] = [];
-    let plain: string[] = [];
-    const flushPlain = () => {
-      if (!plain.length) return;
-      const text = plain.join("\n");
-      if (text.trim().length > 0 || blocks.length > 0) {
-        blocks.push(<span key={`t${pi}-${blocks.length}`}>{renderInline(text)}</span>);
-      }
-      plain = [];
-    };
-    const flushQuote = () => {
-      if (!quote.length) return;
-      blocks.push(
-        <blockquote
-          key={`q${pi}-${blocks.length}`}
-          style={{
-            margin: "6px 0",
-            padding: "4px 12px",
-            borderLeft: `3px solid ${islandTheme.color.primaryGlow}`,
-            color: islandTheme.color.textSubtle,
-            background: islandTheme.color.panelMutedBg,
-            borderRadius: "0 8px 8px 0"
-          }}
-        >
-          {renderInline(quote.join("\n"))}
-        </blockquote>
-      );
-      quote = [];
-    };
-    for (const line of lines) {
-      if (/^>\s?/.test(line)) {
-        flushPlain();
-        quote.push(line.replace(/^>\s?/, ""));
-      } else {
-        flushQuote();
-        plain.push(line);
-      }
-    }
-    flushQuote();
-    flushPlain();
-  });
-  return blocks;
 }
 
 function formatRelative(iso: string | null | undefined): string {

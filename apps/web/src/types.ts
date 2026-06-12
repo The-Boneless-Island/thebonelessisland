@@ -417,6 +417,26 @@ export type ForumThreadGame = {
   headerImageUrl: string | null;
 };
 
+export type ForumThreadType = "discussion" | "memory" | "recommendation" | "resource";
+
+export type ForumPollOption = { id: number; label: string; votes: number };
+export type ForumPoll = {
+  id: number;
+  question: string;
+  multi: boolean;
+  closesAt: string | null;
+  totalVoters: number;
+  options: ForumPollOption[];
+  myVotes: number[];
+};
+
+export type ForumLinkPreview = {
+  title: string | null;
+  description: string | null;
+  imageUrl: string | null;
+  siteName: string | null;
+};
+
 export type ForumThreadDetail = {
   id: number;
   categoryId: number;
@@ -426,6 +446,12 @@ export type ForumThreadDetail = {
   categoryAccent: string;
   title: string;
   slug: string;
+  threadType: ForumThreadType;
+  linkUrl: string | null;
+  linkPreview?: ForumLinkPreview | null;
+  poll?: ForumPoll | null;
+  subscribed: boolean;
+  firstUnreadPostId: number | null;
   isPinned: boolean;
   isLocked: boolean;
   viewCount: number;
@@ -436,6 +462,26 @@ export type ForumThreadDetail = {
   game?: ForumThreadGame | null;
 };
 
+export type ForumNotification = {
+  id: number;
+  type: "mention" | "reply";
+  threadId: number | null;
+  postId: number | null;
+  read: boolean;
+  createdAt: string;
+  actorName: string | null;
+  actorAvatarUrl: string | null;
+  threadTitle: string | null;
+};
+
+export type ForumMember = { username: string; displayName: string; avatarUrl: string | null };
+
+export type ForumReactionKey = "nug" | "heart" | "laugh" | "fire" | "salute";
+
+export type ForumAttachment = { url: string; thumbUrl: string; width: number; height: number };
+
+export type ForumUpload = { id: number; url: string; thumbUrl: string; width: number; height: number };
+
 export type ForumPost = {
   id: number;
   threadId: number;
@@ -445,8 +491,9 @@ export type ForumPost = {
   editedAt: string | null;
   createdAt: string;
   author: ForumAuthor;
-  reactionCount: number;
-  userReacted: boolean;
+  reactions: Partial<Record<ForumReactionKey, number>>;
+  myReactions: ForumReactionKey[];
+  attachments: ForumAttachment[];
 };
 
 export type ForumFeedSort = "latest" | "top" | "unanswered" | "mine";
@@ -455,6 +502,10 @@ export type ForumFeedThread = {
   id: number;
   title: string;
   slug: string;
+  threadType: ForumThreadType;
+  linkUrl: string | null;
+  linkPreview?: ForumLinkPreview | null;
+  coverImage?: { url: string; thumbUrl: string } | null;
   isPinned: boolean;
   isLocked: boolean;
   viewCount: number;
@@ -468,6 +519,7 @@ export type ForumFeedThread = {
   author: ForumAuthor;
   lastReplyUser: { displayName: string; avatarUrl: string | null } | null;
   game?: ForumThreadGame | null;
+  unread?: boolean;
 };
 
 export type ForumStats = {
@@ -476,7 +528,8 @@ export type ForumStats = {
   categoriesTotal: number;
   postsToday: number;
   topAuthors: { displayName: string; avatarUrl: string | null; postCount: number }[];
-  mine: { threadCount: number; postCount: number };
+  mine: { threadCount: number; postCount: number; reactionsGiven: number };
+  typeCounts: Partial<Record<ForumThreadType, number>>;
 };
 
 export type ForumRecentThread = {
@@ -493,6 +546,52 @@ export type ForumRecentThread = {
   categoryIcon: string;
   categoryAccent: string;
   author: { displayName: string; avatarUrl: string | null };
+};
+
+export type ForumSearchResult = {
+  id: number;
+  title: string;
+  slug: string;
+  threadType: ForumThreadType;
+  replyCount: number;
+  createdAt: string;
+  lastReplyAt: string | null;
+  categorySlug: string;
+  categoryName: string;
+  categoryIcon: string;
+  categoryAccent: string;
+  snippet: string | null;
+};
+
+export type ForumResourceItem = {
+  id: number;
+  title: string;
+  slug: string;
+  threadType: ForumThreadType;
+  linkUrl: string | null;
+  linkPreview?: ForumLinkPreview | null;
+  replyCount: number;
+  createdAt: string;
+  lastReplyAt: string | null;
+  categorySlug: string;
+  categoryName: string;
+  categoryIcon: string;
+  categoryAccent: string;
+  author: { displayName: string; avatarUrl: string | null };
+};
+
+export type ForumRelatedThread = {
+  id: number;
+  title: string;
+  slug: string;
+  threadType: ForumThreadType;
+  replyCount: number;
+  createdAt: string;
+  lastReplyAt: string | null;
+  categorySlug: string;
+  categoryName: string;
+  categoryIcon: string;
+  categoryAccent: string;
 };
 
 export type ForumReport = {

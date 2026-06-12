@@ -35,6 +35,7 @@ import { buildAndStoreWeeklyDigest } from "./lib/weeklyDigest.js";
 import { getAISetting } from "./lib/serverSettings.js";
 import { db } from "./db/client.js";
 import { forumsRouter } from "./routes/forums.js";
+import { FORUM_UPLOAD_DIR, sweepOrphanUploads } from "./lib/forumUploads.js";
 import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
 import { settingsRouter } from "./routes/settings.js";
@@ -137,6 +138,20 @@ app.get("/events", requireSession, (req, res) => {
 // Rate limits are scoped to specific risk classes; everything else gets the
 // generous defaultLimiter. The /internal router stays unlimited because the
 // bot is trusted and uses a shared-secret auth header — caller is us.
+// Forum image uploads, served from the local volume. Files are immutable
+// (UUID-named, re-encoded WebP), so cache hard and forbid MIME sniffing.
+app.use(
+  "/uploads",
+  express.static(FORUM_UPLOAD_DIR, {
+    immutable: true,
+    maxAge: "30d",
+    index: false,
+    setHeaders: (res) => {
+      res.setHeader("X-Content-Type-Options", "nosniff");
+    }
+  })
+);
+
 app.use("/auth", authLimiter, authRouter);
 app.use("/ai", aiLimiter, aiChatRouter);
 app.use("/steam", steamLimiter, steamRouter);
@@ -233,6 +248,19 @@ async function bootstrap() {
       }
     });
   }, 24 * 60 * 60 * 1000);
+
+  // Forum orphan-upload sweep: drops never-attached images (composer abandoned)
+  // older than 24h, freeing disk. Runs shortly after boot, then every 6 hours.
+  setTimeout(() => {
+    sweepOrphanUploads()
+      .then((n) => { if (n > 0) console.log(`[forums] swept ${n} orphan upload(s)`); })
+      .catch((err) => console.error("[forums] orphan upload sweep failed:", err));
+  }, 45_000);
+  setInterval(() => {
+    sweepOrphanUploads()
+      .then((n) => { if (n > 0) console.log(`[forums] swept ${n} orphan upload(s)`); })
+      .catch((err) => console.error("[forums] orphan upload sweep failed:", err));
+  }, 6 * 60 * 60 * 1000);
 
   // Register Nuggies game handlers + sweep expired sessions every 30s
   registerAllGames();

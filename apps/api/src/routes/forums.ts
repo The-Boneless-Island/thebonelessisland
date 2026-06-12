@@ -1,10 +1,90 @@
-import { Router } from "express";
+import { Router, type Request, type Response, type NextFunction } from "express";
+import multer from "multer";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
 import { ensureSettingsLoaded, getAISetting } from "../lib/serverSettings.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
+import { getOrFetchLinkPreview } from "../lib/forumLinkPreview.js";
+import { announceNewThread } from "../lib/forumAnnounce.js";
+import { processForumImage } from "../lib/forumUploads.js";
+
+const THREAD_TYPES = ["discussion", "memory", "recommendation", "resource"] as const;
+
+/** Public base URL of this API, derived from the (proxy-aware) request. */
+function reqBaseUrl(req: Request): string {
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+type Querier = { query: (text: string, params?: unknown[]) => Promise<unknown> };
+
+/** Attach pending uploads to a post — only the uploader's own unclaimed rows. */
+async function claimUploads(q: Querier, uploadIds: number[] | undefined, userId: bigint, postId: number): Promise<void> {
+  const ids = (uploadIds ?? []).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10);
+  if (ids.length === 0) return;
+  await q.query(
+    `UPDATE forum_uploads SET post_id = $1
+     WHERE id = ANY($2::bigint[]) AND uploader_user_id = $3 AND post_id IS NULL`,
+    [postId, ids, userId]
+  );
+}
+
+// @username mentions: the unique no-spaces Discord username. The lookbehind
+// rejects an @ glued to a preceding word char so email addresses
+// (test@example.com) never read as a mention of "example.com".
+const MENTION_RE = /(?<![a-z0-9._])@([a-z0-9._]{2,32})/gi;
+
+/** Resolve @username mentions in a body to internal user ids (minus the author). */
+async function resolveMentions(body: string, authorUserId: bigint): Promise<bigint[]> {
+  const names = new Set<string>();
+  let m: RegExpExecArray | null;
+  MENTION_RE.lastIndex = 0;
+  while ((m = MENTION_RE.exec(body)) !== null) names.add(m[1].toLowerCase());
+  if (names.size === 0) return [];
+  const r = await db.query<{ user_id: string }>(
+    `SELECT DISTINCT dp.user_id FROM discord_profiles dp WHERE lower(dp.username) = ANY($1)`,
+    [[...names]]
+  );
+  return r.rows.map((row) => BigInt(row.user_id)).filter((id) => id !== authorUserId);
+}
+
+/**
+ * Notify about a new post: mentioned users get a 'mention', thread subscribers
+ * get a 'reply'. Mention wins over reply for the same recipient; the author and
+ * banned users never get notified. Best-effort (called post-commit).
+ */
+async function notifyForPost(opts: { threadId: number; postId: number; body: string; authorUserId: bigint }): Promise<void> {
+  const { threadId, postId, body, authorUserId } = opts;
+  const notified = new Set<string>();
+
+  const mentioned = await resolveMentions(body, authorUserId);
+  for (const uid of mentioned) {
+    if (await isBanned(uid)) continue;
+    await db.query(
+      `INSERT INTO forum_notifications (user_id, type, actor_user_id, thread_id, post_id)
+       VALUES ($1, 'mention', $2, $3, $4)`,
+      [uid, authorUserId, threadId, postId]
+    );
+    notified.add(String(uid));
+  }
+
+  const subs = await db.query<{ user_id: string }>(
+    `SELECT user_id FROM forum_thread_subscriptions WHERE thread_id = $1 AND user_id <> $2`,
+    [threadId, authorUserId]
+  );
+  for (const row of subs.rows) {
+    if (notified.has(row.user_id)) continue;
+    const uid = BigInt(row.user_id);
+    if (await isBanned(uid)) continue;
+    await db.query(
+      `INSERT INTO forum_notifications (user_id, type, actor_user_id, thread_id, post_id)
+       VALUES ($1, 'reply', $2, $3, $4)`,
+      [uid, authorUserId, threadId, postId]
+    );
+  }
+}
 
 export const forumsRouter = Router();
 
@@ -58,6 +138,18 @@ async function isParent(discordUserId: string): Promise<boolean> {
   return (r.rows[0]?.role_names ?? []).includes("Parent");
 }
 
+// The fixed reaction set. Stored verbatim in forum_post_reactions.reaction.
+// Legacy 'like' rows (pre-v2) are mapped to 'nug' at read time below until
+// migration 057 renames them in place.
+const REACTIONS = ["nug", "heart", "laugh", "fire", "salute"] as const;
+type ReactionKey = (typeof REACTIONS)[number];
+const REACTION_SET = new Set<string>(REACTIONS);
+
+// Normalize legacy 'like' → 'nug' in aggregations. Reused across queries.
+const REACTION_NORM = "CASE WHEN reaction = 'like' THEN 'nug' ELSE reaction END";
+
+type UploadRow = { file_path: string; thumb_path: string; width: number; height: number };
+
 type PostRow = {
   id: string;
   thread_id: string;
@@ -70,8 +162,9 @@ type PostRow = {
   author_username: string;
   author_display_name: string;
   author_avatar_url: string | null;
-  reaction_count: string;
-  user_reacted: boolean;
+  reactions: Record<string, number> | null;
+  my_reactions: string[] | null;
+  attachments: UploadRow[] | null;
 };
 
 async function fetchPosts(threadId: bigint, viewerUserId: bigint | null): Promise<PostRow[]> {
@@ -82,11 +175,16 @@ async function fetchPosts(threadId: bigint, viewerUserId: bigint | null): Promis
        dp.username AS author_username,
        COALESCE(dp.global_name, dp.username) AS author_display_name,
        dp.avatar_url AS author_avatar_url,
-       (SELECT COUNT(*)::text FROM forum_post_reactions WHERE post_id = p.id) AS reaction_count,
-       EXISTS (
-         SELECT 1 FROM forum_post_reactions
-         WHERE post_id = p.id AND user_id = $2
-       ) AS user_reacted
+       (SELECT COALESCE(jsonb_object_agg(rk, cnt), '{}'::jsonb)
+          FROM (SELECT ${REACTION_NORM} AS rk, COUNT(*)::int AS cnt
+                FROM forum_post_reactions WHERE post_id = p.id
+                GROUP BY 1) agg) AS reactions,
+       (SELECT COALESCE(array_agg(DISTINCT ${REACTION_NORM}), '{}')
+          FROM forum_post_reactions WHERE post_id = p.id AND user_id = $2) AS my_reactions,
+       (SELECT COALESCE(json_agg(json_build_object(
+                 'file_path', fu.file_path, 'thumb_path', fu.thumb_path,
+                 'width', fu.width, 'height', fu.height) ORDER BY fu.id), '[]'::json)
+          FROM forum_uploads fu WHERE fu.post_id = p.id) AS attachments
      FROM forum_posts p
      INNER JOIN users u ON u.id = p.author_user_id
      INNER JOIN discord_profiles dp ON dp.user_id = p.author_user_id
@@ -97,7 +195,7 @@ async function fetchPosts(threadId: bigint, viewerUserId: bigint | null): Promis
   return r.rows;
 }
 
-function serializePost(row: PostRow) {
+function serializePost(row: PostRow, baseUrl: string) {
   return {
     id: parseInt(row.id, 10),
     threadId: parseInt(row.thread_id, 10),
@@ -112,8 +210,72 @@ function serializePost(row: PostRow) {
       displayName: row.author_display_name,
       avatarUrl: row.author_avatar_url,
     },
-    reactionCount: parseInt(row.reaction_count, 10),
-    userReacted: row.user_reacted,
+    reactions: row.reactions ?? {},
+    myReactions: row.my_reactions ?? [],
+    attachments: row.is_deleted
+      ? []
+      : (row.attachments ?? []).map((a) => ({
+          url: `${baseUrl}/uploads/${a.file_path}`,
+          thumbUrl: `${baseUrl}/uploads/${a.thumb_path}`,
+          width: a.width,
+          height: a.height,
+        })),
+  };
+}
+
+type LinkPreviewRow = {
+  lp_status: string | null;
+  lp_title: string | null;
+  lp_desc: string | null;
+  lp_image: string | null;
+  lp_site: string | null;
+};
+
+function buildLinkPreview(row: LinkPreviewRow) {
+  if (row.lp_status !== "ok") return null;
+  return {
+    title: row.lp_title,
+    description: row.lp_desc,
+    imageUrl: row.lp_image,
+    siteName: row.lp_site,
+  };
+}
+
+// Shared SELECT fragment + JOIN for the cached link preview of a thread.
+const LINK_PREVIEW_SELECT =
+  "lp.status AS lp_status, lp.title AS lp_title, lp.description AS lp_desc, lp.image_url AS lp_image, lp.site_name AS lp_site";
+const LINK_PREVIEW_JOIN = "LEFT JOIN forum_link_previews lp ON lp.url = t.link_url";
+
+type PollOptionRow = { id: number; label: string; position: number; votes: number };
+
+/** Fetch the thread's poll (if any) with per-option counts + the viewer's votes. */
+async function fetchPoll(threadId: number, viewerUserId: bigint | null) {
+  const r = await db.query<{
+    id: string; question: string; multi: boolean; closes_at: string | null;
+    options: PollOptionRow[] | null; my_votes: string[] | null; voter_count: string;
+  }>(
+    `SELECT p.id, p.question, p.multi, p.closes_at,
+       (SELECT COALESCE(json_agg(json_build_object(
+          'id', o.id, 'label', o.label, 'position', o.position,
+          'votes', (SELECT COUNT(*) FROM forum_poll_votes v WHERE v.option_id = o.id)
+        ) ORDER BY o.position), '[]'::json)
+        FROM forum_poll_options o WHERE o.poll_id = p.id) AS options,
+       (SELECT COALESCE(array_agg(v.option_id), '{}')
+        FROM forum_poll_votes v WHERE v.poll_id = p.id AND v.user_id = $2) AS my_votes,
+       (SELECT COUNT(DISTINCT v.user_id)::text FROM forum_poll_votes v WHERE v.poll_id = p.id) AS voter_count
+     FROM forum_polls p WHERE p.thread_id = $1`,
+    [threadId, viewerUserId ?? -1]
+  );
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    id: parseInt(row.id, 10),
+    question: row.question,
+    multi: row.multi,
+    closesAt: row.closes_at,
+    totalVoters: parseInt(row.voter_count, 10),
+    options: (row.options ?? []).map((o) => ({ id: Number(o.id), label: o.label, votes: Number(o.votes) })),
+    myVotes: (row.my_votes ?? []).map((v) => Number(v)),
   };
 }
 
@@ -149,6 +311,7 @@ forumsRouter.get("/categories", requireSession, async (_req, res) => {
   );
 
   res.json({
+    announceAvailable: Boolean(getAISetting("forums_discord_webhook_url")),
     categories: r.rows.map((row) => ({
       id: parseInt(row.id, 10),
       slug: row.slug,
@@ -261,6 +424,16 @@ const createThreadSchema = z.object({
   title: z.string().min(3),
   body: z.string().min(2),
   appId: z.number().int().positive().optional(),
+  threadType: z.enum(THREAD_TYPES).optional(),
+  linkUrl: z.string().max(2048).optional(),
+  uploadIds: z.array(z.number().int().positive()).max(10).optional(),
+  announce: z.boolean().optional(),
+  poll: z.object({
+    question: z.string().min(1).max(300),
+    options: z.array(z.string().min(1).max(120)).min(2).max(10),
+    multi: z.boolean().optional(),
+    closesAt: z.string().datetime().optional(),
+  }).optional(),
 });
 
 forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) => {
@@ -281,13 +454,29 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
     res.status(400).json({ error: `Post must be ${bodyMin}–${bodyMax} characters` }); return;
   }
 
+  // Post type + optional primary link. Links are only meaningful for resource
+  // (required) and recommendation (optional); reject them elsewhere so the
+  // column means one thing.
+  const threadType = parsed.data.threadType ?? "discussion";
+  const linkRaw = parsed.data.linkUrl?.trim();
+  if (linkRaw && threadType !== "resource" && threadType !== "recommendation") {
+    res.status(400).json({ error: "Links are only allowed on resource or recommendation posts" }); return;
+  }
+  if (threadType === "resource" && !linkRaw) {
+    res.status(400).json({ error: "A resource post needs a link" }); return;
+  }
+  if (linkRaw && !/^https?:\/\/\S+$/i.test(linkRaw)) {
+    res.status(400).json({ error: "Link must be a full http(s) URL" }); return;
+  }
+  const linkUrl: string | null = linkRaw ?? null;
+
   const discordUserId = String(res.locals.userId);
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
   if (await isBanned(userId)) { res.status(403).json({ error: "Banned from forums" }); return; }
 
-  const cat = await db.query<{ id: string; is_locked: boolean }>(
-    "SELECT id, is_locked FROM forum_categories WHERE slug = $1",
+  const cat = await db.query<{ id: string; name: string; is_locked: boolean }>(
+    "SELECT id, name, is_locked FROM forum_categories WHERE slug = $1",
     [String(req.params.slug)]
   );
   if (!cat.rows[0]) { res.status(404).json({ error: "Category not found" }); return; }
@@ -295,6 +484,7 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
     res.status(403).json({ error: "Category is locked" }); return;
   }
   const categoryId = parseInt(cat.rows[0].id, 10);
+  const categoryName = cat.rows[0].name;
 
   const last = await db.query<{ created_at: string }>(
     `SELECT created_at FROM forum_threads
@@ -323,23 +513,71 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
   try {
     await client.query("BEGIN");
     const t = await client.query<{ id: string }>(
-      `INSERT INTO forum_threads (category_id, author_user_id, title, slug, last_reply_at, last_reply_user_id, app_id)
-       VALUES ($1, $2, $3, $4, NOW(), $2, $5) RETURNING id`,
-      [categoryId, userId, title, slug, appId]
+      `INSERT INTO forum_threads (category_id, author_user_id, title, slug, last_reply_at, last_reply_user_id, app_id, thread_type, link_url)
+       VALUES ($1, $2, $3, $4, NOW(), $2, $5, $6, $7) RETURNING id`,
+      [categoryId, userId, title, slug, appId, threadType, linkUrl]
     );
     const threadId = parseInt(t.rows[0].id, 10);
-    await client.query(
+    const op = await client.query<{ id: string }>(
       `INSERT INTO forum_posts (thread_id, author_user_id, body, is_op)
-       VALUES ($1, $2, $3, TRUE)`,
+       VALUES ($1, $2, $3, TRUE) RETURNING id`,
       [threadId, userId, body]
     );
+    const opPostId = parseInt(op.rows[0].id, 10);
+    await claimUploads(client, parsed.data.uploadIds, userId, opPostId);
+    // Author auto-subscribes to their own thread.
+    await client.query(
+      `INSERT INTO forum_thread_subscriptions (user_id, thread_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [userId, threadId]
+    );
+    // Optional poll attached to the thread.
+    if (parsed.data.poll) {
+      const opts = parsed.data.poll.options.map((o) => o.trim()).filter((o) => o.length > 0);
+      if (opts.length >= 2) {
+        const pr = await client.query<{ id: string }>(
+          `INSERT INTO forum_polls (thread_id, question, multi, closes_at) VALUES ($1, $2, $3, $4) RETURNING id`,
+          [threadId, parsed.data.poll.question.trim(), parsed.data.poll.multi ?? false, parsed.data.poll.closesAt ?? null]
+        );
+        const pollId = parseInt(pr.rows[0].id, 10);
+        for (let i = 0; i < opts.length; i++) {
+          await client.query(`INSERT INTO forum_poll_options (poll_id, position, label) VALUES ($1, $2, $3)`, [pollId, i, opts[i]]);
+        }
+      }
+    }
     await client.query("COMMIT");
 
     void recordEvent({
       eventType: "forum_thread_created",
       actorDiscordUserId: discordUserId,
-      payload: { threadId, categoryId, title, slug },
+      payload: { threadId, categoryId, title, slug, threadType },
     });
+
+    // Notify anyone @mentioned in the opening post.
+    void notifyForPost({ threadId, postId: opPostId, body, authorUserId: userId }).catch(() => undefined);
+
+    // Unfurl the primary link (cached) — fire-and-forget, never blocks/fails
+    // the response.
+    if (linkUrl) void getOrFetchLinkPreview(linkUrl).catch(() => undefined);
+
+    // Announce to Discord as Nuggie — only if the author opted in for this post
+    // (and a webhook is configured). Fire-and-forget; never blocks the response.
+    if (parsed.data.announce) {
+      void (async () => {
+        const a = await db.query<{ display_name: string }>(
+          "SELECT COALESCE(dp.global_name, dp.username) AS display_name FROM discord_profiles dp WHERE dp.user_id = $1",
+          [userId]
+        ).catch(() => null);
+        await announceNewThread({
+          threadId,
+          title,
+          threadType,
+          categoryName,
+          authorName: a?.rows[0]?.display_name ?? "someone",
+          bodyPreview: body,
+          linkUrl,
+        });
+      })();
+    }
 
     const reward = getSetting("forums_thread_nuggies", 5);
     if (reward > 0) {
@@ -371,25 +609,29 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
 
   const t = await db.query<{
     id: string; category_id: string; title: string; slug: string;
+    thread_type: string; link_url: string | null;
     is_pinned: boolean; is_locked: boolean; is_deleted: boolean;
     view_count: number; reply_count: number; created_at: string; updated_at: string;
     author_discord_id: string; author_username: string; author_display_name: string; author_avatar_url: string | null;
     category_slug: string; category_name: string; category_icon: string; category_accent: string;
     app_id: number | null; game_name: string | null; game_image: string | null;
-  }>(
-    `SELECT t.id, t.category_id, t.title, t.slug, t.is_pinned, t.is_locked, t.is_deleted,
+  } & LinkPreviewRow>(
+    `SELECT t.id, t.category_id, t.title, t.slug, t.thread_type, t.link_url,
+            t.is_pinned, t.is_locked, t.is_deleted,
             t.view_count, t.reply_count, t.created_at, t.updated_at, t.app_id,
             g.name AS game_name, g.header_image_url AS game_image,
             u.discord_user_id AS author_discord_id,
             dp.username AS author_username,
             COALESCE(dp.global_name, dp.username) AS author_display_name,
             dp.avatar_url AS author_avatar_url,
-            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent
+            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
+            ${LINK_PREVIEW_SELECT}
      FROM forum_threads t
      INNER JOIN users u ON u.id = t.author_user_id
      INNER JOIN discord_profiles dp ON dp.user_id = t.author_user_id
      INNER JOIN forum_categories c ON c.id = t.category_id
      LEFT JOIN games g ON g.app_id = t.app_id
+     ${LINK_PREVIEW_JOIN}
      WHERE t.id = $1`,
     [threadId]
   );
@@ -399,6 +641,34 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
   db.query("UPDATE forum_threads SET view_count = view_count + 1 WHERE id = $1", [threadId]).catch(() => undefined);
 
   const posts = await fetchPosts(BigInt(threadId), viewerUserId);
+  const baseUrl = reqBaseUrl(req);
+
+  // Subscription state + unread divider, then mark the thread read up to its
+  // latest post.
+  let subscribed = false;
+  let firstUnreadPostId: number | null = null;
+  if (viewerUserId) {
+    const [sub, prev] = await Promise.all([
+      db.query("SELECT 1 FROM forum_thread_subscriptions WHERE user_id = $1 AND thread_id = $2", [viewerUserId, threadId]),
+      db.query<{ last_read_post_id: string | null }>(
+        "SELECT last_read_post_id FROM forum_thread_reads WHERE user_id = $1 AND thread_id = $2",
+        [viewerUserId, threadId]
+      ),
+    ]);
+    subscribed = sub.rows.length > 0;
+    const prevLast = prev.rows[0]?.last_read_post_id ? parseInt(prev.rows[0].last_read_post_id, 10) : 0;
+    const firstUnread = posts.find((pp) => !pp.is_deleted && parseInt(pp.id, 10) > prevLast);
+    firstUnreadPostId = firstUnread ? parseInt(firstUnread.id, 10) : null;
+    const lastPostId = posts.length ? parseInt(posts[posts.length - 1].id, 10) : null;
+    await db.query(
+      `INSERT INTO forum_thread_reads (user_id, thread_id, last_read_post_id, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (user_id, thread_id) DO UPDATE SET last_read_post_id = EXCLUDED.last_read_post_id, updated_at = NOW()`,
+      [viewerUserId, threadId, lastPostId]
+    ).catch(() => undefined);
+  }
+
+  const poll = await fetchPoll(threadId, viewerUserId);
 
   const row = t.rows[0];
   res.json({
@@ -411,6 +681,12 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
       categoryAccent: row.category_accent,
       title: row.title,
       slug: row.slug,
+      threadType: row.thread_type,
+      linkUrl: row.link_url,
+      linkPreview: row.link_url ? buildLinkPreview(row) : null,
+      poll,
+      subscribed,
+      firstUnreadPostId,
       isPinned: row.is_pinned,
       isLocked: row.is_locked,
       viewCount: row.view_count,
@@ -427,13 +703,16 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
         ? { appId: row.app_id, name: row.game_name, headerImageUrl: row.game_image }
         : null,
     },
-    posts: posts.map(serializePost),
+    posts: posts.map((pr) => serializePost(pr, baseUrl)),
   });
 });
 
 // ── POST /forums/threads/:id/posts ──────────────────────────────────────────
 
-const replySchema = z.object({ body: z.string().min(1) });
+const replySchema = z.object({
+  body: z.string().min(1),
+  uploadIds: z.array(z.number().int().positive()).max(10).optional(),
+});
 
 forumsRouter.post("/threads/:id/posts", requireSession, async (req, res) => {
   if (!isEnabled()) { res.status(503).json({ error: "Forums disabled" }); return; }
@@ -498,13 +777,23 @@ forumsRouter.post("/threads/:id/posts", requireSession, async (req, res) => {
        WHERE id = $2`,
       [userId, threadId]
     );
+    const replyPostId = parseInt(p.rows[0].id, 10);
+    await claimUploads(client, parsed.data.uploadIds, userId, replyPostId);
+    // Replier auto-subscribes so they're notified of further replies.
+    await client.query(
+      `INSERT INTO forum_thread_subscriptions (user_id, thread_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [userId, threadId]
+    );
     await client.query("COMMIT");
 
     void recordEvent({
       eventType: "forum_reply_created",
       actorDiscordUserId: discordUserId,
-      payload: { threadId, postId: parseInt(p.rows[0].id, 10), threadTitle: t.rows[0].title },
+      payload: { threadId, postId: replyPostId, threadTitle: t.rows[0].title },
     });
+
+    // Notify mentioned users + thread subscribers.
+    void notifyForPost({ threadId, postId: replyPostId, body, authorUserId: userId }).catch(() => undefined);
 
     const reward = getSetting("forums_reply_nuggies", 1);
     if (reward > 0) {
@@ -620,29 +909,105 @@ forumsRouter.delete("/posts/:id", requireSession, async (req, res) => {
 
 // ── POST /forums/posts/:id/react ───────────────────────────────────────────
 
+const reactSchema = z.object({ reaction: z.enum(REACTIONS).optional() });
+
 forumsRouter.post("/posts/:id/react", requireSession, async (req, res) => {
   const postId = parseInt(String(req.params.id), 10);
-  const userId = await resolveInternalId(String(res.locals.userId));
-  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  const parsed = reactSchema.safeParse(req.body ?? {});
+  if (!parsed.success) { res.status(400).json({ error: "Invalid reaction" }); return; }
+  // Default to 'nug' so a bare POST (legacy client) still toggles the primary.
+  const reaction: ReactionKey = parsed.data.reaction ?? "nug";
+  if (!REACTION_SET.has(reaction)) { res.status(400).json({ error: "Invalid reaction" }); return; }
 
+  const discordUserId = String(res.locals.userId);
+  const userId = await resolveInternalId(discordUserId);
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  if (await isBanned(userId)) { res.status(403).json({ error: "Banned from forums" }); return; }
+
+  // Toggle this specific reaction for this user. Legacy 'like' rows count as
+  // 'nug': clear them too so the user's nug state stays single-valued.
   const exists = await db.query(
-    "SELECT 1 FROM forum_post_reactions WHERE post_id = $1 AND user_id = $2 AND reaction = 'like'",
-    [postId, userId]
+    `SELECT 1 FROM forum_post_reactions
+     WHERE post_id = $1 AND user_id = $2
+       AND (${REACTION_NORM}) = $3`,
+    [postId, userId, reaction]
   );
   if (exists.rows.length > 0) {
     await db.query(
-      "DELETE FROM forum_post_reactions WHERE post_id = $1 AND user_id = $2 AND reaction = 'like'",
-      [postId, userId]
+      `DELETE FROM forum_post_reactions
+       WHERE post_id = $1 AND user_id = $2 AND (${REACTION_NORM}) = $3`,
+      [postId, userId, reaction]
     );
-    res.json({ reacted: false });
+    res.json({ reacted: false, reaction });
     return;
   }
   await db.query(
-    `INSERT INTO forum_post_reactions (post_id, user_id, reaction) VALUES ($1, $2, 'like')
+    `INSERT INTO forum_post_reactions (post_id, user_id, reaction) VALUES ($1, $2, $3)
      ON CONFLICT DO NOTHING`,
-    [postId, userId]
+    [postId, userId, reaction]
   );
-  res.json({ reacted: true });
+  res.json({ reacted: true, reaction });
+});
+
+// ── POST /forums/uploads ───────────────────────────────────────────────────
+// Multipart image upload. The buffer is sniffed + re-encoded to WebP (EXIF
+// stripped) before it is written; the row is claimed when a post is created.
+
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: () => getSetting("forums_upload_per_hour", 20),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => {
+    const uid = (req as Request & { session?: { userId?: string } }).session?.userId;
+    return uid ? `u:${uid}` : `ip:${req.ip ?? "unknown"}`;
+  },
+  message: { error: "Too many uploads — try again later" },
+});
+
+// multer is constructed per request so the size limit honors the live setting.
+function uploadMiddleware(req: Request, res: Response, next: NextFunction) {
+  const maxMb = getSetting("forums_upload_max_mb", 8);
+  const mw = multer({ storage: multer.memoryStorage(), limits: { fileSize: maxMb * 1024 * 1024, files: 1 } }).single("file");
+  mw(req, res, (err: unknown) => {
+    if (err) {
+      const code = (err as { code?: string }).code;
+      res.status(400).json({ error: code === "LIMIT_FILE_SIZE" ? `Image too large (max ${maxMb}MB)` : "Upload failed" });
+      return;
+    }
+    next();
+  });
+}
+
+forumsRouter.post("/uploads", requireSession, uploadLimiter, uploadMiddleware, async (req, res) => {
+  if (!isEnabled()) { res.status(503).json({ error: "Forums disabled" }); return; }
+  await ensureSettingsLoaded();
+
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  if (await isBanned(userId)) { res.status(403).json({ error: "Banned from forums" }); return; }
+
+  const file = req.file;
+  if (!file?.buffer?.length) { res.status(400).json({ error: "No image provided" }); return; }
+
+  try {
+    const img = await processForumImage(file.buffer);
+    const ins = await db.query<{ id: string }>(
+      `INSERT INTO forum_uploads (uploader_user_id, file_path, thumb_path, width, height, bytes)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+      [userId, img.filePath, img.thumbPath, img.width, img.height, img.bytes]
+    );
+    const base = reqBaseUrl(req);
+    res.json({
+      id: parseInt(ins.rows[0].id, 10),
+      url: `${base}/uploads/${img.filePath}`,
+      thumbUrl: `${base}/uploads/${img.thumbPath}`,
+      width: img.width,
+      height: img.height,
+    });
+  } catch {
+    res.status(400).json({ error: "Unsupported or corrupt image" });
+  }
 });
 
 // ── POST /forums/posts/:id/report ──────────────────────────────────────────
@@ -790,6 +1155,8 @@ forumsRouter.delete("/threads/:id", requireSession, async (req, res) => {
 forumsRouter.get("/threads", requireSession, async (req, res) => {
   const sort = String(req.query.sort ?? "latest");
   const categorySlug = req.query.category ? String(req.query.category) : null;
+  const typeFilterRaw = req.query.type ? String(req.query.type) : null;
+  const typeFilter = typeFilterRaw && (THREAD_TYPES as readonly string[]).includes(typeFilterRaw) ? typeFilterRaw : null;
   const limit = Math.min(parseInt(String(req.query.limit ?? "30"), 10) || 30, 100);
   const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
 
@@ -799,8 +1166,15 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
   const params: unknown[] = [];
   let p = 0;
 
+  // Viewer id powers the unread join (param reserved up front so it's stable).
+  p++; params.push(viewerUserId ?? -1);
+  const viewerParam = p;
+
   if (categorySlug) {
     p++; where.push(`c.slug = $${p}`); params.push(categorySlug);
+  }
+  if (typeFilter) {
+    p++; where.push(`t.thread_type = $${p}`); params.push(typeFilter);
   }
   if (sort === "unanswered") {
     where.push("t.reply_count = 0");
@@ -825,7 +1199,7 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
   const offsetParam = p;
 
   const sql = `
-    SELECT t.id, t.title, t.slug, t.is_pinned, t.is_locked, t.view_count, t.reply_count,
+    SELECT t.id, t.title, t.slug, t.thread_type, t.link_url, t.is_pinned, t.is_locked, t.view_count, t.reply_count,
            t.created_at, t.last_reply_at, t.app_id,
            g.name AS game_name, g.header_image_url AS game_image,
            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
@@ -834,20 +1208,30 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
            COALESCE(dp.global_name, dp.username) AS author_display_name,
            dp.avatar_url AS author_avatar_url,
            COALESCE(ldp.global_name, ldp.username) AS last_user_display,
-           ldp.avatar_url AS last_user_avatar
+           ldp.avatar_url AS last_user_avatar,
+           ${LINK_PREVIEW_SELECT},
+           (tr.thread_id IS NOT NULL AND t.last_reply_at IS NOT NULL AND t.last_reply_at > tr.updated_at) AS unread,
+           (SELECT json_build_object('file_path', fu.file_path, 'thumb_path', fu.thumb_path)
+              FROM forum_uploads fu
+              INNER JOIN forum_posts op ON op.id = fu.post_id
+              WHERE op.thread_id = t.id AND op.is_op = TRUE AND op.is_deleted = FALSE
+              ORDER BY fu.id ASC LIMIT 1) AS cover
     FROM forum_threads t
     INNER JOIN forum_categories c ON c.id = t.category_id
     INNER JOIN users u ON u.id = t.author_user_id
     INNER JOIN discord_profiles dp ON dp.user_id = t.author_user_id
     LEFT JOIN discord_profiles ldp ON ldp.user_id = t.last_reply_user_id
     LEFT JOIN games g ON g.app_id = t.app_id
+    LEFT JOIN forum_thread_reads tr ON tr.thread_id = t.id AND tr.user_id = $${viewerParam}
+    ${LINK_PREVIEW_JOIN}
     WHERE ${where.join(" AND ")}
     ORDER BY ${orderBy}
     LIMIT $${limitParam} OFFSET $${offsetParam}
   `;
 
+  const baseUrl = reqBaseUrl(req);
   const r = await db.query<{
-    id: string; title: string; slug: string;
+    id: string; title: string; slug: string; thread_type: string; link_url: string | null;
     is_pinned: boolean; is_locked: boolean;
     view_count: number; reply_count: number;
     created_at: string; last_reply_at: string | null;
@@ -855,13 +1239,22 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
     category_slug: string; category_name: string; category_icon: string; category_accent: string;
     author_discord_id: string; author_username: string; author_display_name: string; author_avatar_url: string | null;
     last_user_display: string | null; last_user_avatar: string | null;
-  }>(sql, params);
+    cover: { file_path: string; thumb_path: string } | null;
+    unread: boolean;
+  } & LinkPreviewRow>(sql, params);
 
   res.json({
     threads: r.rows.map((row) => ({
       id: parseInt(row.id, 10),
       title: row.title,
       slug: row.slug,
+      threadType: row.thread_type,
+      linkUrl: row.link_url,
+      linkPreview: row.link_url ? buildLinkPreview(row) : null,
+      coverImage: row.cover
+        ? { url: `${baseUrl}/uploads/${row.cover.file_path}`, thumbUrl: `${baseUrl}/uploads/${row.cover.thumb_path}` }
+        : null,
+      unread: row.unread === true,
       isPinned: row.is_pinned,
       isLocked: row.is_locked,
       viewCount: row.view_count,
@@ -896,7 +1289,7 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
 forumsRouter.get("/stats", requireSession, async (_req, res) => {
   const viewerUserId = await resolveInternalId(String(res.locals.userId));
 
-  const [counts, topAuthors, mine] = await Promise.all([
+  const [counts, topAuthors, mine, typeCounts] = await Promise.all([
     db.query<{ threads: string; posts: string; categories: string; today_posts: string }>(
       `SELECT
          (SELECT COUNT(*)::text FROM forum_threads WHERE is_deleted = FALSE) AS threads,
@@ -914,14 +1307,23 @@ forumsRouter.get("/stats", requireSession, async (_req, res) => {
        LIMIT 5`
     ),
     viewerUserId
-      ? db.query<{ thread_count: string; post_count: string }>(
+      ? db.query<{ thread_count: string; post_count: string; reactions_given: string }>(
           `SELECT
              (SELECT COUNT(*)::text FROM forum_threads WHERE author_user_id = $1 AND is_deleted = FALSE) AS thread_count,
-             (SELECT COUNT(*)::text FROM forum_posts   WHERE author_user_id = $1 AND is_deleted = FALSE) AS post_count`,
+             (SELECT COUNT(*)::text FROM forum_posts   WHERE author_user_id = $1 AND is_deleted = FALSE) AS post_count,
+             (SELECT COUNT(*)::text FROM forum_post_reactions WHERE user_id = $1) AS reactions_given`,
           [viewerUserId]
         )
-      : Promise.resolve({ rows: [{ thread_count: "0", post_count: "0" }] }),
+      : Promise.resolve({ rows: [{ thread_count: "0", post_count: "0", reactions_given: "0" }] }),
+    db.query<{ thread_type: string; count: string }>(
+      `SELECT thread_type, COUNT(*)::text AS count
+       FROM forum_threads WHERE is_deleted = FALSE
+       GROUP BY thread_type`
+    ),
   ]);
+
+  const typeCountMap: Record<string, number> = {};
+  for (const row of typeCounts.rows) typeCountMap[row.thread_type] = parseInt(row.count, 10);
 
   res.json({
     threadsTotal: parseInt(counts.rows[0]?.threads ?? "0", 10),
@@ -936,7 +1338,9 @@ forumsRouter.get("/stats", requireSession, async (_req, res) => {
     mine: {
       threadCount: parseInt(mine.rows[0]?.thread_count ?? "0", 10),
       postCount: parseInt(mine.rows[0]?.post_count ?? "0", 10),
+      reactionsGiven: parseInt(mine.rows[0]?.reactions_given ?? "0", 10),
     },
+    typeCounts: typeCountMap,
   });
 });
 
@@ -979,25 +1383,85 @@ forumsRouter.get("/recent", requireSession, async (_req, res) => {
   });
 });
 
-// ── GET /forums/search?q=... ────────────────────────────────────────────────
+// ── GET /forums/resources ──────────────────────────────────────────────────
+// The resource/recommendation shelf: link-first threads for the library view.
 
-forumsRouter.get("/search", requireSession, async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
-  if (q.length < 2) { res.json({ threads: [] }); return; }
+forumsRouter.get("/resources", requireSession, async (req, res) => {
+  const limit = Math.min(parseInt(String(req.query.limit ?? "20"), 10) || 20, 50);
+  const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
 
   const r = await db.query<{
-    id: string; title: string; slug: string; reply_count: number;
-    created_at: string; last_reply_at: string | null;
-    category_slug: string; category_name: string; category_icon: string;
-  }>(
-    `SELECT t.id, t.title, t.slug, t.reply_count, t.created_at, t.last_reply_at,
-            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon
+    id: string; title: string; slug: string; thread_type: string; link_url: string | null;
+    reply_count: number; created_at: string; last_reply_at: string | null;
+    category_slug: string; category_name: string; category_icon: string; category_accent: string;
+    author_display: string; author_avatar: string | null;
+  } & LinkPreviewRow>(
+    `SELECT t.id, t.title, t.slug, t.thread_type, t.link_url, t.reply_count, t.created_at, t.last_reply_at,
+            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
+            COALESCE(dp.global_name, dp.username) AS author_display, dp.avatar_url AS author_avatar,
+            ${LINK_PREVIEW_SELECT}
      FROM forum_threads t
      INNER JOIN forum_categories c ON c.id = t.category_id
-     WHERE t.is_deleted = FALSE AND t.title ILIKE $1
+     INNER JOIN discord_profiles dp ON dp.user_id = t.author_user_id
+     ${LINK_PREVIEW_JOIN}
+     WHERE t.is_deleted = FALSE AND t.thread_type IN ('resource','recommendation')
      ORDER BY COALESCE(t.last_reply_at, t.created_at) DESC
-     LIMIT 30`,
-    [`%${q}%`]
+     LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+
+  res.json({
+    resources: r.rows.map((row) => ({
+      id: parseInt(row.id, 10),
+      title: row.title,
+      slug: row.slug,
+      threadType: row.thread_type,
+      linkUrl: row.link_url,
+      linkPreview: row.link_url ? buildLinkPreview(row) : null,
+      replyCount: row.reply_count,
+      createdAt: row.created_at,
+      lastReplyAt: row.last_reply_at,
+      categorySlug: row.category_slug,
+      categoryName: row.category_name,
+      categoryIcon: row.category_icon,
+      categoryAccent: row.category_accent,
+      author: { displayName: row.author_display, avatarUrl: row.author_avatar },
+    })),
+  });
+});
+
+// ── GET /forums/threads/:id/related ────────────────────────────────────────
+// Up to 5 related threads: same game tag first, then same category.
+
+forumsRouter.get("/threads/:id/related", requireSession, async (req, res) => {
+  const threadId = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(threadId)) { res.status(400).json({ error: "Invalid thread id" }); return; }
+
+  const base = await db.query<{ category_id: string; app_id: number | null }>(
+    "SELECT category_id, app_id FROM forum_threads WHERE id = $1 AND is_deleted = FALSE",
+    [threadId]
+  );
+  if (!base.rows[0]) { res.json({ threads: [] }); return; }
+  const categoryId = parseInt(base.rows[0].category_id, 10);
+  const appId = base.rows[0].app_id;
+
+  const r = await db.query<{
+    id: string; title: string; slug: string; thread_type: string; reply_count: number;
+    created_at: string; last_reply_at: string | null;
+    category_slug: string; category_name: string; category_icon: string; category_accent: string;
+  }>(
+    `SELECT t.id, t.title, t.slug, t.thread_type, t.reply_count, t.created_at, t.last_reply_at,
+            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent
+     FROM forum_threads t
+     INNER JOIN forum_categories c ON c.id = t.category_id
+     WHERE t.is_deleted = FALSE AND t.id <> $1
+       AND (($2::int IS NOT NULL AND t.app_id = $2) OR t.category_id = $3)
+     ORDER BY
+       (CASE WHEN $2::int IS NOT NULL AND t.app_id = $2 THEN 2 ELSE 0 END)
+         + (CASE WHEN t.category_id = $3 THEN 1 ELSE 0 END) DESC,
+       COALESCE(t.last_reply_at, t.created_at) DESC
+     LIMIT 5`,
+    [threadId, appId, categoryId]
   );
 
   res.json({
@@ -1005,14 +1469,242 @@ forumsRouter.get("/search", requireSession, async (req, res) => {
       id: parseInt(row.id, 10),
       title: row.title,
       slug: row.slug,
+      threadType: row.thread_type,
       replyCount: row.reply_count,
       createdAt: row.created_at,
       lastReplyAt: row.last_reply_at,
       categorySlug: row.category_slug,
       categoryName: row.category_name,
       categoryIcon: row.category_icon,
+      categoryAccent: row.category_accent,
     })),
   });
+});
+
+// ── GET /forums/search?q=... ────────────────────────────────────────────────
+
+// Highlight sentinels: control chars never present in normal text. The client
+// splits on these and renders <mark> as React elements — never raw HTML.
+const SEARCH_HL_START = String.fromCharCode(1);
+const SEARCH_HL_END = String.fromCharCode(2);
+const SEARCH_HL_OPTS = `StartSel=${SEARCH_HL_START},StopSel=${SEARCH_HL_END},MaxFragments=2,MinWords=5,MaxWords=20,FragmentDelimiter= … `;
+
+forumsRouter.get("/search", requireSession, async (req, res) => {
+  const q = String(req.query.q ?? "").trim();
+  if (q.length < 2) { res.json({ threads: [] }); return; }
+
+  // FTS over title (weighted) + post bodies, with an ILIKE-on-title safety net
+  // so partial-word title matches still surface like the old behavior did.
+  const r = await db.query<{
+    id: string; title: string; slug: string; thread_type: string; reply_count: number;
+    created_at: string; last_reply_at: string | null;
+    category_slug: string; category_name: string; category_icon: string; category_accent: string;
+    snippet: string | null;
+  }>(
+    `WITH q AS (SELECT websearch_to_tsquery('english', $1) AS query)
+     SELECT t.id, t.title, t.slug, t.thread_type, t.reply_count, t.created_at, t.last_reply_at,
+            c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
+            ts_headline('english', COALESCE(bp.body, t.title), q.query, $2) AS snippet
+     FROM forum_threads t
+     CROSS JOIN q
+     INNER JOIN forum_categories c ON c.id = t.category_id
+     LEFT JOIN LATERAL (
+       SELECT p.body, ts_rank(p.body_tsv, q.query) AS prank
+       FROM forum_posts p
+       WHERE p.thread_id = t.id AND p.is_deleted = FALSE AND p.body_tsv @@ q.query
+       ORDER BY ts_rank(p.body_tsv, q.query) DESC
+       LIMIT 1
+     ) bp ON TRUE
+     WHERE t.is_deleted = FALSE
+       AND (t.title_tsv @@ q.query OR bp.body IS NOT NULL OR t.title ILIKE $3)
+     ORDER BY (ts_rank(t.title_tsv, q.query) * 2 + COALESCE(bp.prank, 0)) DESC,
+              COALESCE(t.last_reply_at, t.created_at) DESC
+     LIMIT 30`,
+    [q, SEARCH_HL_OPTS, `%${q}%`]
+  );
+
+  res.json({
+    threads: r.rows.map((row) => ({
+      id: parseInt(row.id, 10),
+      title: row.title,
+      slug: row.slug,
+      threadType: row.thread_type,
+      replyCount: row.reply_count,
+      createdAt: row.created_at,
+      lastReplyAt: row.last_reply_at,
+      categorySlug: row.category_slug,
+      categoryName: row.category_name,
+      categoryIcon: row.category_icon,
+      categoryAccent: row.category_accent,
+      snippet: row.snippet,
+    })),
+  });
+});
+
+// ── GET /forums/members ────────────────────────────────────────────────────
+// Lightweight member list for @mention autocomplete in the composer.
+
+forumsRouter.get("/members", requireSession, async (_req, res) => {
+  const r = await db.query<{ username: string; display_name: string; avatar_url: string | null }>(
+    `SELECT dp.username, COALESCE(dp.global_name, dp.username) AS display_name, dp.avatar_url
+     FROM discord_profiles dp
+     INNER JOIN users u ON u.id = dp.user_id
+     INNER JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id AND gm.in_guild = TRUE
+     WHERE dp.username IS NOT NULL AND dp.username <> ''
+     ORDER BY display_name
+     LIMIT 200`
+  );
+  res.json({
+    members: r.rows.map((m) => ({ username: m.username, displayName: m.display_name, avatarUrl: m.avatar_url })),
+  });
+});
+
+// ── Subscriptions ──────────────────────────────────────────────────────────
+
+forumsRouter.post("/threads/:id/subscribe", requireSession, async (req, res) => {
+  const threadId = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(threadId)) { res.status(400).json({ error: "Invalid thread id" }); return; }
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  if (await isBanned(userId)) { res.status(403).json({ error: "Banned from forums" }); return; }
+  await db.query(
+    `INSERT INTO forum_thread_subscriptions (user_id, thread_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+    [userId, threadId]
+  );
+  res.json({ subscribed: true });
+});
+
+forumsRouter.delete("/threads/:id/subscribe", requireSession, async (req, res) => {
+  const threadId = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(threadId)) { res.status(400).json({ error: "Invalid thread id" }); return; }
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  await db.query("DELETE FROM forum_thread_subscriptions WHERE user_id = $1 AND thread_id = $2", [userId, threadId]);
+  res.json({ subscribed: false });
+});
+
+// ── Notifications ──────────────────────────────────────────────────────────
+
+forumsRouter.get("/notifications", requireSession, async (_req, res) => {
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.json({ items: [], unreadCount: 0 }); return; }
+
+  const [items, unread] = await Promise.all([
+    db.query<{
+      id: string; type: string; thread_id: string | null; post_id: string | null;
+      read_at: string | null; created_at: string;
+      actor_name: string | null; actor_avatar: string | null; thread_title: string | null;
+    }>(
+      `SELECT n.id, n.type, n.thread_id, n.post_id, n.read_at, n.created_at,
+              COALESCE(adp.global_name, adp.username) AS actor_name, adp.avatar_url AS actor_avatar,
+              t.title AS thread_title
+       FROM forum_notifications n
+       LEFT JOIN discord_profiles adp ON adp.user_id = n.actor_user_id
+       LEFT JOIN forum_threads t ON t.id = n.thread_id
+       WHERE n.user_id = $1
+       ORDER BY n.created_at DESC
+       LIMIT 50`,
+      [userId]
+    ),
+    db.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM forum_notifications WHERE user_id = $1 AND read_at IS NULL",
+      [userId]
+    ),
+  ]);
+
+  res.json({
+    items: items.rows.map((r) => ({
+      id: parseInt(r.id, 10),
+      type: r.type,
+      threadId: r.thread_id ? parseInt(r.thread_id, 10) : null,
+      postId: r.post_id ? parseInt(r.post_id, 10) : null,
+      read: r.read_at !== null,
+      createdAt: r.created_at,
+      actorName: r.actor_name,
+      actorAvatarUrl: r.actor_avatar,
+      threadTitle: r.thread_title,
+    })),
+    unreadCount: parseInt(unread.rows[0]?.count ?? "0", 10),
+  });
+});
+
+const markReadSchema = z.object({ ids: z.array(z.number().int().positive()).optional() });
+
+forumsRouter.post("/notifications/read", requireSession, async (req, res) => {
+  const parsed = markReadSchema.safeParse(req.body ?? {});
+  if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+
+  if (parsed.data.ids && parsed.data.ids.length > 0) {
+    await db.query(
+      "UPDATE forum_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL AND id = ANY($2::bigint[])",
+      [userId, parsed.data.ids]
+    );
+  } else {
+    await db.query("UPDATE forum_notifications SET read_at = NOW() WHERE user_id = $1 AND read_at IS NULL", [userId]);
+  }
+  res.json({ ok: true });
+});
+
+// ── Poll voting ────────────────────────────────────────────────────────────
+
+const voteSchema = z.object({ optionIds: z.array(z.number().int().positive()).max(10) });
+
+forumsRouter.post("/polls/:id/vote", requireSession, async (req, res) => {
+  const pollId = parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(pollId)) { res.status(400).json({ error: "Invalid poll id" }); return; }
+  const parsed = voteSchema.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
+
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  if (await isBanned(userId)) { res.status(403).json({ error: "Banned from forums" }); return; }
+
+  const pr = await db.query<{ thread_id: string; multi: boolean; closes_at: string | null; thread_deleted: boolean; thread_locked: boolean }>(
+    `SELECT p.thread_id, p.multi, p.closes_at, t.is_deleted AS thread_deleted, t.is_locked AS thread_locked
+     FROM forum_polls p INNER JOIN forum_threads t ON t.id = p.thread_id
+     WHERE p.id = $1`,
+    [pollId]
+  );
+  if (!pr.rows[0] || pr.rows[0].thread_deleted) { res.status(404).json({ error: "Poll not found" }); return; }
+  const poll = pr.rows[0];
+  if (poll.thread_locked) { res.status(403).json({ error: "Thread is locked" }); return; }
+  if (poll.closes_at && new Date(poll.closes_at).getTime() < Date.now()) {
+    res.status(403).json({ error: "Poll is closed" }); return;
+  }
+
+  // Single-choice polls keep at most one option. Validate ids belong to the poll.
+  let optionIds = poll.multi ? parsed.data.optionIds : parsed.data.optionIds.slice(0, 1);
+  if (optionIds.length > 0) {
+    const valid = await db.query<{ id: string }>(
+      "SELECT id FROM forum_poll_options WHERE poll_id = $1 AND id = ANY($2::bigint[])",
+      [pollId, optionIds]
+    );
+    const validSet = new Set(valid.rows.map((r) => Number(r.id)));
+    optionIds = optionIds.filter((id) => validSet.has(id));
+  }
+
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM forum_poll_votes WHERE poll_id = $1 AND user_id = $2", [pollId, userId]);
+    for (const oid of optionIds) {
+      await client.query(
+        "INSERT INTO forum_poll_votes (poll_id, option_id, user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+        [pollId, oid, userId]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const updated = await fetchPoll(parseInt(poll.thread_id, 10), userId);
+  res.json({ poll: updated });
 });
 
 // ── ADMIN ──────────────────────────────────────────────────────────────────
