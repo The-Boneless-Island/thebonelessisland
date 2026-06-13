@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { IslandButton, IslandCard, IslandEmptyState, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
@@ -2449,6 +2450,8 @@ function ImageDropzone({
     setBusy(true);
     setError(null);
     const added: ForumUpload[] = [];
+    let failed = 0;
+    let lastMsg = "Upload failed";
     for (const f of list) {
       try {
         const fd = new FormData();
@@ -2458,10 +2461,22 @@ function ImageDropzone({
         if (!r.ok) throw new Error(data?.error ?? "Upload failed");
         added.push(data as ForumUpload);
       } catch (e) {
-        setError(e instanceof Error ? e.message : "Upload failed");
+        failed++;
+        if (e instanceof Error && e.message) lastMsg = e.message;
       }
     }
     if (added.length) onUploadsChange([...uploads, ...added]);
+    // Summarize partial failures (don't let one file's error mask the rest),
+    // while still surfacing the server's reason for the last failure.
+    if (failed > 0) {
+      setError(
+        failed === list.length
+          ? failed === 1
+            ? lastMsg
+            : `All ${failed} uploads failed — ${lastMsg}`
+          : `${failed} of ${list.length} images failed — ${lastMsg}`
+      );
+    }
     setBusy(false);
   }
 
@@ -2545,42 +2560,140 @@ function ImageDropzone({
 
 /** Thumbnail grid + click-to-zoom lightbox for a post's attached images. */
 function AttachmentGallery({ attachments }: { attachments: ForumAttachment[] }) {
-  const [open, setOpen] = useState<string | null>(null);
+  const [openIdx, setOpenIdx] = useState<number | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const count = attachments.length;
+  const isOpen = openIdx !== null;
+
+  const close = useCallback(() => setOpenIdx(null), []);
+  const step = useCallback(
+    (delta: number) => setOpenIdx((i) => (i === null ? i : (i + delta + count) % count)),
+    [count]
+  );
+
+  // While the lightbox is open: keyboard nav (Esc/←/→), lock background scroll,
+  // move focus into the dialog, and restore it to the thumbnail on close.
+  // (Hooks must run before the early return below.)
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+      else if (e.key === "ArrowRight") step(1);
+      else if (e.key === "ArrowLeft") step(-1);
+    };
+    window.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    overlayRef.current?.focus();
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prevOverflow;
+      triggerRef.current?.focus();
+    };
+  }, [isOpen, close, step]);
+
   if (!attachments.length) return null;
+
+  const navBtnStyle: CSSProperties = {
+    position: "absolute",
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: 44,
+    height: 44,
+    borderRadius: 999,
+    border: "none",
+    background: "rgba(2,6,23,0.6)",
+    color: "#fff",
+    fontSize: 28,
+    lineHeight: 1,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center"
+  };
+
   return (
     <>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 2 }}>
         {attachments.map((a, i) => (
           <button
-            key={i}
+            key={a.url}
             type="button"
-            onClick={() => setOpen(a.url)}
+            onClick={(e) => {
+              triggerRef.current = e.currentTarget;
+              setOpenIdx(i);
+            }}
             style={{ padding: 0, border: `1px solid ${islandTheme.color.cardBorder}`, borderRadius: 8, overflow: "hidden", cursor: "zoom-in", background: "none", lineHeight: 0 }}
           >
             <img src={a.thumbUrl} alt="" loading="lazy" style={{ display: "block", maxHeight: 180, maxWidth: 260, objectFit: "cover" }} />
           </button>
         ))}
       </div>
-      {open ? (
-        <div
-          onClick={() => setOpen(null)}
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(2,6,23,0.88)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            cursor: "zoom-out",
-            padding: 24
-          }}
-        >
-          <img src={open} alt="" style={{ maxWidth: "96%", maxHeight: "96%", objectFit: "contain", borderRadius: 8, boxShadow: islandTheme.shadow.menu }} />
-        </div>
-      ) : null}
+      {openIdx !== null
+        ? // Portal to <body>: the post sits inside an IslandCard whose
+          // backdrop-filter makes it a containing block for position:fixed (and
+          // its overflow:hidden clips), which would otherwise trap the lightbox
+          // inside the post box. The portal lets it cover the real viewport.
+          createPortal(
+            <div
+              ref={overlayRef}
+              tabIndex={-1}
+              onClick={close}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Image viewer"
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(2,6,23,0.88)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                zIndex: 1000,
+                cursor: "zoom-out",
+                padding: 24,
+                outline: "none"
+              }}
+            >
+              {count > 1 ? (
+                <button
+                  type="button"
+                  aria-label="Previous image"
+                  onClick={(e) => { e.stopPropagation(); step(-1); }}
+                  style={{ ...navBtnStyle, left: 16 }}
+                >
+                  ‹
+                </button>
+              ) : null}
+              <img
+                src={attachments[openIdx].url}
+                alt=""
+                onClick={(e) => e.stopPropagation()}
+                style={{ maxWidth: count > 1 ? "86%" : "96%", maxHeight: "96%", objectFit: "contain", borderRadius: 8, boxShadow: islandTheme.shadow.menu, cursor: "default" }}
+              />
+              {count > 1 ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Next image"
+                    onClick={(e) => { e.stopPropagation(); step(1); }}
+                    style={{ ...navBtnStyle, right: 16 }}
+                  >
+                    ›
+                  </button>
+                  <div
+                    aria-hidden="true"
+                    style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", color: "#fff", fontSize: 13, background: "rgba(2,6,23,0.6)", padding: "4px 10px", borderRadius: 999 }}
+                  >
+                    {openIdx + 1} / {count}
+                  </div>
+                </>
+              ) : null}
+            </div>,
+            document.body
+          )
+        : null}
     </>
   );
 }
