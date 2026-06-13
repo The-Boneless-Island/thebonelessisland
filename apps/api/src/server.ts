@@ -48,6 +48,7 @@ import { runMigrations } from "./db/runMigrations.js";
 import { snapshotCrewTrending } from "./lib/crewTrendingSnapshots.js";
 import { recommendationRouter } from "./routes/recommendations.js";
 import { steamRouter, syncAllOwnedGames } from "./routes/steam.js";
+import { refreshSteamAppList, repairMissingGameNames } from "./lib/steamAppList.js";
 import { authLimiter, aiLimiter, steamLimiter, defaultLimiter } from "./middleware/rateLimit.js";
 
 const app = express();
@@ -572,6 +573,33 @@ async function bootstrap() {
       console.error("[tide] scheduled weekly digest failed:", err);
     });
   }, 7 * 24 * 60 * 60 * 1000);
+
+  // Steam app-list warm + placeholder-name repair. The storefront appdetails
+  // endpoint only accepts one appid per request, so it can't bulk-resolve
+  // names; GetAppList gives the full appid->name catalog in one call. We warm
+  // the cache shortly after boot (so wishlist syncs resolve names instantly),
+  // refresh it daily, and run a bounded sweep that fixes any game row still
+  // holding the 'app-<id>' placeholder (e.g. wishlist items, whose Steam API
+  // returns appids only). Lookups are in-memory, so the sweep is cheap.
+  setTimeout(() => {
+    refreshSteamAppList(true)
+      .then((count) => {
+        console.log(`[steam] app-list cached: ${count} app(s)`);
+        return repairMissingGameNames(500);
+      })
+      .then((fixed) => {
+        if (fixed > 0) console.log(`[steam] repaired ${fixed} placeholder game name(s)`);
+      })
+      .catch((err) => console.error("[steam] initial app-list warm / name repair failed:", err));
+  }, 8_000);
+  setInterval(() => {
+    refreshSteamAppList()
+      .then(() => repairMissingGameNames(200))
+      .then((fixed) => {
+        if (fixed > 0) console.log(`[steam] repaired ${fixed} placeholder game name(s)`);
+      })
+      .catch((err) => console.error("[steam] scheduled name repair failed:", err));
+  }, 30 * 60 * 1000);
 
   app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);

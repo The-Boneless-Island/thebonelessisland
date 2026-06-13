@@ -68,15 +68,43 @@ async function markImageChecked(appId: number): Promise<void> {
   );
 }
 
+// Steam's storefront appdetails endpoint only honours a SINGLE appid per
+// request — a comma-separated list returns HTTP 400. We therefore fetch one
+// appid at a time with a small delay between calls to stay within the
+// endpoint's unofficial IP rate limit (~200 requests / 5 min).
+const APPDETAILS_REQUEST_DELAY_MS = 250;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Returns a record keyed by appid string. A MISSING key means the request
+// failed transiently (network / 429 / 5xx) — callers must leave such rows
+// unstamped so they retry. A PRESENT key with success:false means Steam has no
+// public store page for that appid (delisted / region-locked / non-app) —
+// callers should stamp it to stop re-fetching. A present key with success:true
+// carries the data.
 async function fetchSteamAppDetails(appIds: number[]): Promise<Record<string, SteamAppDetails>> {
-  if (!appIds.length) return {};
-  const response = await fetch(
-    `https://store.steampowered.com/api/appdetails?appids=${appIds.join(",")}&l=en&cc=us`
-  ).catch(() => null);
-  if (!response?.ok) {
-    return {};
+  const out: Record<string, SteamAppDetails> = {};
+  for (let i = 0; i < appIds.length; i++) {
+    const appId = appIds[i];
+    if (i > 0) {
+      await sleep(APPDETAILS_REQUEST_DELAY_MS);
+    }
+    const response = await fetch(
+      `https://store.steampowered.com/api/appdetails?appids=${appId}&l=en&cc=us`
+    ).catch(() => null);
+    if (!response?.ok) {
+      // Transient failure — leave the key absent so the caller retries later.
+      continue;
+    }
+    const payload = (await response.json().catch(() => null)) as Record<string, SteamAppDetails> | null;
+    const entry = payload?.[String(appId)];
+    if (entry) {
+      out[String(appId)] = entry;
+    }
   }
-  return (await response.json().catch(() => ({}))) as Record<string, SteamAppDetails>;
+  return out;
 }
 
 async function resolveSteamImageMap(appIds: number[]): Promise<Map<number, string>> {
@@ -350,7 +378,25 @@ export async function enrichGameMetadataFromSteam(appIds: number[]): Promise<voi
   const payload = await fetchSteamAppDetails(staleIds);
   for (const appId of staleIds) {
     const appData = payload[String(appId)];
-    if (!appData?.success || !appData.data) {
+    if (appData === undefined) {
+      // Transient fetch failure — leave the row unstamped so a later sweep
+      // retries it.
+      continue;
+    }
+    if (!appData.success || !appData.data) {
+      // Steam has no public store page for this appid (delisted / region-locked
+      // / DLC / non-app). Stamp the freshness markers so we stop re-fetching it
+      // every sweep — the human-readable name still comes from the app-list
+      // path (steamAppList.ts). Leave name and other fields untouched.
+      await db.query(
+        `
+          UPDATE games
+          SET store_details_checked_at = NOW(),
+              metadata_updated_at = COALESCE(metadata_updated_at, NOW())
+          WHERE app_id = $1
+        `,
+        [appId]
+      );
       continue;
     }
 

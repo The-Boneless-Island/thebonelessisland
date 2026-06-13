@@ -5,6 +5,7 @@ import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
+import { resolveGameNamesFromAppList } from "../lib/steamAppList.js";
 import { syncAchievementSchema } from "../lib/steamAchievementSchema.js";
 import { ingestNewsForApps } from "../lib/gameNewsIngestion.js";
 import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
@@ -129,25 +130,40 @@ async function syncWishlistForUser(userId: string, steamId64: string): Promise<S
       [userId, appIds]
     );
 
-    // Enrich all wishlist items that are missing metadata or an image.
-    // Steam's appdetails endpoint supports batches; we chunk at 50 to stay
-    // well within unofficial limits and avoid overly long query strings.
-    const enrichTargets = await db.query<{ app_id: number }>(
-      `
-        SELECT app_id
-        FROM games
-        WHERE app_id = ANY($1::int[])
-          AND (metadata_updated_at IS NULL OR header_image_url IS NULL)
-        ORDER BY app_id ASC
-      `,
-      [appIds]
-    );
-    const enrichIds = enrichTargets.rows.map((row) => row.app_id);
-    for (let i = 0; i < enrichIds.length; i += 50) {
-      const chunk = enrichIds.slice(i, i + 50);
-      await enrichGameMetadataFromSteam(chunk);
-      await enrichMissingGameImages(chunk);
-    }
+    // Resolve human-readable names immediately from the cached Steam app-list.
+    // The wishlist API returns appids only (no names), so without this every
+    // freshly-synced wishlist row would render as "App <id>" until the slower
+    // per-app store enrichment below lands. This lookup is in-memory + one bulk
+    // UPDATE, so it's safe to await on the sync path.
+    await resolveGameNamesFromAppList(appIds).catch((error: unknown) => {
+      console.error("wishlist name resolution failed", error);
+    });
+
+    // Rich store enrichment (price, tags, art, capability flags) for items
+    // missing metadata or an image. Steam's appdetails endpoint rejects batched
+    // appids, so it is fetched one appid at a time and throttled — far too slow
+    // to block the sync response on. Fire-and-forget; the next read picks up the
+    // enriched data once it lands.
+    void (async () => {
+      const enrichTargets = await db.query<{ app_id: number }>(
+        `
+          SELECT app_id
+          FROM games
+          WHERE app_id = ANY($1::int[])
+            AND (metadata_updated_at IS NULL OR header_image_url IS NULL)
+          ORDER BY app_id ASC
+        `,
+        [appIds]
+      );
+      const enrichIds = enrichTargets.rows.map((row) => row.app_id);
+      for (let i = 0; i < enrichIds.length; i += 50) {
+        const chunk = enrichIds.slice(i, i + 50);
+        await enrichGameMetadataFromSteam(chunk);
+        await enrichMissingGameImages(chunk);
+      }
+    })().catch((error: unknown) => {
+      console.error("wishlist store enrichment failed", error);
+    });
   } else {
     await db.query(`DELETE FROM user_wishlists WHERE user_id = $1`, [userId]);
   }
@@ -1116,6 +1132,7 @@ steamRouter.get("/crew-games", async (req, res) => {
     .map((row) => row.app_id);
 
   void Promise.all([
+    resolveGameNamesFromAppList(rows.map((row) => row.app_id)),
     enrichGameMetadataFromSteam(missingMetadataIds),
     enrichMissingGameImages(missingImageIds)
   ]).catch((error: unknown) => {
@@ -1258,6 +1275,7 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
     .map((row) => row.app_id);
 
   void Promise.all([
+    resolveGameNamesFromAppList(rows.map((row) => row.app_id)),
     enrichGameMetadataFromSteam(missingMetadataIds),
     enrichMissingGameImages(missingImageIds)
   ]).catch((error: unknown) => {
