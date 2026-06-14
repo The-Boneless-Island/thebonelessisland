@@ -3,7 +3,7 @@ import { z } from "zod";
 import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { getGuildId, getParentRoleName } from "../lib/serverSettings.js";
-import { requireSession } from "../lib/auth.js";
+import { requireSession, requireParentRole } from "../lib/auth.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { broadcast } from "../lib/eventBus.js";
 import { whatCanWePlay } from "../lib/recommend.js";
@@ -31,6 +31,15 @@ const recommendationSchema = z.object({
 const manageAttendeesSchema = z.object({
   memberIds: z.array(z.string().trim().min(1)).min(1)
 });
+
+const adminUpdateGameNightSchema = z
+  .object({
+    title: z.string().trim().min(1).max(120).optional(),
+    scheduledFor: z.iso.datetime().optional(),
+    // null clears the locked pick; a number locks the given game.
+    selectedAppId: z.number().int().positive().nullable().optional()
+  })
+  .refine((body) => Object.keys(body).length > 0, { message: "No fields to update" });
 
 type AuthedUser = { id: number; discord_user_id: string };
 
@@ -309,6 +318,158 @@ gameNightRouter.post("/", requireSession, async (req, res) => {
   }
 
   res.status(201).json({ id: gameNightId });
+});
+
+// ── Admin (Parent-only) game-night management ────────────────────────────────
+
+// Every game night, including past/ended ones, with host + locked pick. Powers
+// the admin management table (the public GET "/" only returns upcoming nights).
+gameNightRouter.get("/admin/all", requireParentRole, async (_req, res) => {
+  const nights = await db.query<{
+    id: number;
+    title: string;
+    scheduled_for: string;
+    created_by_user_id: number;
+    host_name: string | null;
+    host_avatar_url: string | null;
+    selected_app_id: number | null;
+    selected_game_name: string | null;
+    selected_at: string | null;
+    attendee_count: number;
+  }>(
+    `
+      SELECT
+        gn.id,
+        gn.title,
+        gn.scheduled_for,
+        gn.created_by_user_id,
+        COALESCE(gm.display_name, gm.username, dp.username) AS host_name,
+        COALESCE(gm.avatar_url, dp.avatar_url) AS host_avatar_url,
+        gn.selected_app_id,
+        selected_game.name AS selected_game_name,
+        gn.selected_at,
+        COUNT(gna.user_id)::int AS attendee_count
+      FROM game_nights gn
+      LEFT JOIN users host_user ON host_user.id = gn.created_by_user_id
+      LEFT JOIN guild_members gm
+        ON gm.discord_user_id = host_user.discord_user_id
+       AND gm.guild_id = $1
+      LEFT JOIN discord_profiles dp ON dp.user_id = gn.created_by_user_id
+      LEFT JOIN games selected_game ON selected_game.app_id = gn.selected_app_id
+      LEFT JOIN game_night_attendees gna ON gna.game_night_id = gn.id
+      GROUP BY
+        gn.id,
+        gn.title,
+        gn.scheduled_for,
+        gn.created_by_user_id,
+        gm.display_name,
+        gm.username,
+        dp.username,
+        gm.avatar_url,
+        dp.avatar_url,
+        gn.selected_app_id,
+        selected_game.name,
+        gn.selected_at
+      ORDER BY gn.scheduled_for DESC
+      LIMIT 200
+    `,
+    [getGuildId()]
+  );
+
+  const now = Date.now();
+  res.json({
+    gameNights: nights.rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      scheduledFor: row.scheduled_for,
+      createdByUserId: row.created_by_user_id,
+      hostName: row.host_name,
+      hostAvatarUrl: row.host_avatar_url,
+      selectedAppId: row.selected_app_id,
+      selectedGameName: row.selected_game_name,
+      selectedAt: row.selected_at,
+      attendeeCount: row.attendee_count,
+      isPast: new Date(row.scheduled_for).getTime() < now
+    }))
+  });
+});
+
+gameNightRouter.patch("/:id", requireParentRole, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid game night id" });
+    return;
+  }
+  if (!(await gameNightExists(id))) {
+    res.status(404).json({ error: "Game night not found" });
+    return;
+  }
+
+  const body = adminUpdateGameNightSchema.parse(req.body ?? {});
+
+  const sets: string[] = [];
+  const params: unknown[] = [id];
+
+  if (body.title !== undefined) {
+    params.push(body.title);
+    sets.push(`title = $${params.length}`);
+  }
+  if (body.scheduledFor !== undefined) {
+    params.push(body.scheduledFor);
+    sets.push(`scheduled_for = $${params.length}::timestamptz`);
+  }
+  if (body.selectedAppId !== undefined) {
+    if (body.selectedAppId === null) {
+      sets.push(`selected_app_id = NULL`, `selected_at = NULL`);
+    } else {
+      if (!(await gameExists(body.selectedAppId))) {
+        res.status(400).json({ error: "Selected game not found" });
+        return;
+      }
+      params.push(body.selectedAppId);
+      sets.push(`selected_app_id = $${params.length}`, `selected_at = NOW()`);
+    }
+  }
+
+  await db.query(`UPDATE game_nights SET ${sets.join(", ")} WHERE id = $1`, params);
+
+  void recordEvent({
+    eventType: "game_night.admin_updated",
+    actorDiscordUserId: String(res.locals.userId),
+    targetGameNightId: id,
+    payload: {
+      ...(body.title !== undefined ? { title: body.title } : {}),
+      ...(body.scheduledFor !== undefined ? { scheduledFor: body.scheduledFor } : {}),
+      ...(body.selectedAppId !== undefined ? { selectedAppId: body.selectedAppId } : {})
+    }
+  });
+
+  broadcast("nights-changed");
+  res.json({ ok: true });
+});
+
+gameNightRouter.delete("/:id", requireParentRole, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid game night id" });
+    return;
+  }
+  if (!(await gameNightExists(id))) {
+    res.status(404).json({ error: "Game night not found" });
+    return;
+  }
+
+  // game_night_attendees + game_night_votes cascade; activity_events set null.
+  await db.query(`DELETE FROM game_nights WHERE id = $1`, [id]);
+
+  void recordEvent({
+    eventType: "game_night.admin_deleted",
+    actorDiscordUserId: String(res.locals.userId),
+    payload: { gameNightId: id }
+  });
+
+  broadcast("nights-changed");
+  res.json({ ok: true });
 });
 
 gameNightRouter.patch("/:id/game", requireSession, async (req, res) => {

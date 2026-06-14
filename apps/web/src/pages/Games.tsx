@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "rea
 import { IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { GameCover, LogoCover, coverUrl, steamArt } from "../steamArt.js";
+import { PosterCard, PosterWall, categoryFor } from "../components/PosterCard.js";
 import { modePills } from "../gameModes.js";
 import { gameAccent, countdownLabel, seatPips, type CountdownTone } from "../gameAccent.js";
 import { ConfettiBurst } from "../system/celebration.js";
@@ -2104,17 +2105,6 @@ function formatWishlistPrice(cents: number): string {
 
 function GroupWishlist({ crewWishlist }: { crewWishlist: CrewWishlistGame[] }) {
   const visible = crewWishlist.slice(0, 12);
-  const maxHype = visible.reduce((max, game) => Math.max(max, game.hypeCount), 0);
-  const totalCrewWithHype = useMemo(() => {
-    const ids = new Set<string>();
-    for (const game of crewWishlist) {
-      for (const owner of game.wishlistedBy) {
-        ids.add(owner.discordUserId);
-      }
-    }
-    return ids.size;
-  }, [crewWishlist]);
-  const hypeScale = Math.max(maxHype, totalCrewWithHype, 1);
 
   return (
     <section style={{ display: "grid", gap: 12 }}>
@@ -2130,162 +2120,47 @@ function GroupWishlist({ crewWishlist }: { crewWishlist: CrewWishlistGame[] }) {
           </p>
         </IslandCard>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-            gap: 10
-          }}
-        >
+        <PosterWall>
           {visible.map((game) => (
-            <WishlistCard key={game.appId} game={game} hypeScale={hypeScale} />
+            <WishlistPoster key={game.appId} game={game} />
           ))}
-        </div>
+        </PosterWall>
       )}
     </section>
   );
 }
 
-function WishlistCard({ game, hypeScale }: { game: CrewWishlistGame; hypeScale: number }) {
-  const pills = modePills(game).slice(0, 2);
-  return (
-    <article
-      style={{
-        padding: 12,
-        borderRadius: 12,
-        background: islandTheme.color.panelBg,
-        backdropFilter: islandTheme.glass.blur,
-        WebkitBackdropFilter: islandTheme.glass.blur,
-        border: `1px solid ${islandTheme.color.cardBorder}`,
-        display: "grid",
-        gridTemplateColumns: "60px 1fr",
-        gap: 10,
-        alignItems: "center"
-      }}
-    >
-      <GameCover
-        appId={game.appId}
-        storedUrl={game.headerImageUrl}
-        variant="header"
-        alt={game.name}
-        style={{ width: 60, height: 60, borderRadius: 10 }}
-      />
-      <div style={{ minWidth: 0 }}>
-        <div
-          style={{
-            fontSize: 13,
-            fontWeight: 700,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            color: game.name.startsWith("app-") ? islandTheme.color.textMuted : undefined,
-            fontStyle: game.name.startsWith("app-") ? "italic" : undefined
-          }}
-          title={game.name.startsWith("app-") ? `App ${game.appId} — name loading` : game.name}
-        >
-          {game.name.startsWith("app-") ? `App ${game.appId}` : game.name}
-        </div>
-        <WishlistPriceBadge game={game} />
-        {pills.length > 0 ? (
-          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {pills.map((p) => (
-              <span
-                key={p}
-                className="island-mono"
-                style={{
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.04em",
-                  padding: "2px 6px",
-                  borderRadius: 999,
-                  border: `1px solid ${islandTheme.color.cardBorder}`,
-                  color: islandTheme.color.textMuted
-                }}
-              >
-                {p}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        <HypeBar count={game.hypeCount} scale={hypeScale} />
-      </div>
-    </article>
-  );
-}
-
-function WishlistPriceBadge({ game }: { game: CrewWishlistGame }) {
+// Same poster treatment as the Steam library, with crew-hype + price in place of
+// ownership. The cover isn't clickable here (no detail drawer on the Games page).
+function WishlistPoster({ game }: { game: CrewWishlistGame }) {
   const onSale = typeof game.priceDiscountPct === "number" && game.priceDiscountPct > 0;
+  const priceLine = game.isFree
+    ? "Free"
+    : typeof game.priceFinalCents === "number"
+      ? formatWishlistPrice(game.priceFinalCents)
+      : null;
+  const displayName = game.name.startsWith("app-") ? `App ${game.appId}` : game.name;
 
-  if (onSale) {
-    return (
-      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-        <span
-          className="island-mono"
-          style={{
-            ...islandTagStyle({ color: islandTheme.color.successAccent }),
-            fontWeight: 700
-          }}
-        >
-          -{game.priceDiscountPct}%
-        </span>
-        {typeof game.priceFinalCents === "number" ? (
-          <span style={{ fontSize: 12, fontWeight: 700, color: islandTheme.color.textPrimary }}>
-            {formatWishlistPrice(game.priceFinalCents)}
-          </span>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (game.isFree) {
-    return (
-      <div style={{ marginTop: 6 }}>
-        <span className="island-mono" style={islandTagStyle({ color: islandTheme.color.primaryGlow })}>
-          Free
-        </span>
-      </div>
-    );
-  }
-
-  if (typeof game.priceFinalCents === "number") {
-    return (
-      <div style={{ marginTop: 6 }}>
-        <span style={{ fontSize: 12, fontWeight: 700, color: islandTheme.color.textSubtle }}>
-          {formatWishlistPrice(game.priceFinalCents)}
-        </span>
-      </div>
-    );
-  }
-
-  return null;
-}
-
-function HypeBar({ count, scale }: { count: number; scale: number }) {
-  const safeScale = Math.max(scale, 1);
-  const pct = Math.round(Math.min(100, (count / safeScale) * 100));
   return (
-    <div style={{ marginTop: 6 }}>
-      <div
-        style={{
-          height: 6,
-          borderRadius: 999,
-          background: islandTheme.color.panelMutedBg,
-          overflow: "hidden"
-        }}
-      >
-        <div
-          style={{
-            width: `${pct}%`,
-            height: "100%",
-            background: `linear-gradient(90deg, ${islandTheme.color.primaryGlow}, ${islandTheme.palette.sandWarmAccent})`
-          }}
-        />
-      </div>
-      <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 3 }}>
-        {count} crew {count === 1 ? "wants" : "want"} this
-      </div>
-    </div>
+    <PosterCard
+      appId={game.appId}
+      name={displayName}
+      category={categoryFor(game)}
+      capabilities={game}
+      owners={game.wishlistedBy}
+      caption={
+        <>
+          {game.hypeCount} want
+          {priceLine ? ` · ${priceLine}` : ""}
+        </>
+      }
+      badges={
+        <>
+          {onSale ? <IslandTag tone="success">-{game.priceDiscountPct}%</IslandTag> : null}
+          {game.isFree ? <IslandTag tone="primary">FREE</IslandTag> : null}
+        </>
+      }
+    />
   );
 }
 
