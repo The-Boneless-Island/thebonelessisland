@@ -340,6 +340,26 @@ function chipStyle(active: boolean): React.CSSProperties {
   };
 }
 
+function todayDateStr(): string {
+  return toLocalInput(new Date()).slice(0, 10);
+}
+
+// Build the "YYYY-MM-DDTHH:mm" local string the create flow expects from the
+// split date + time controls. Empty date → empty (Lock stays disabled).
+function combineDateTime(date: string, time: string): string {
+  if (!date) return "";
+  return `${date}T${time || "20:00"}`;
+}
+
+// 30-minute slots across the day for the scrollable time <select>.
+const TIME_SLOTS: Array<{ value: string; label: string }> = Array.from({ length: 48 }, (_, i) => {
+  const h = Math.floor(i / 2);
+  const m = i % 2 === 1 ? 30 : 0;
+  const ampm = h < 12 ? "AM" : "PM";
+  const hr12 = h % 12 === 0 ? 12 : h % 12;
+  return { value: `${pad2(h)}:${pad2(m)}`, label: `${hr12}:${pad2(m)} ${ampm}` };
+});
+
 function PlanNightCard(props: GamesPageProps) {
   const {
     crewGames,
@@ -456,7 +476,10 @@ function PlanNightCard(props: GamesPageProps) {
                 setShowCustomTime(false);
                 onNewNightScheduledForChange(iso);
               }}
-              onCustom={() => setShowCustomTime(true)}
+              onCustom={() => {
+                setShowCustomTime(true);
+                if (!newNightScheduledFor) onNewNightScheduledForChange(toLocalInput(tonightAt(20)));
+              }}
               onCustomChange={onNewNightScheduledForChange}
             />
           </FieldRow>
@@ -846,12 +869,28 @@ function TimeChips({
         📅 Custom…
       </button>
       {showCustom ? (
-        <input
-          type="datetime-local"
-          value={value}
-          onChange={(e) => onCustomChange(e.target.value)}
-          style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control }}
-        />
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            type="date"
+            aria-label="Date"
+            value={value.slice(0, 10)}
+            min={todayDateStr()}
+            onChange={(e) => onCustomChange(combineDateTime(e.target.value, value.slice(11, 16) || "20:00"))}
+            style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control }}
+          />
+          <select
+            aria-label="Time"
+            value={value.slice(11, 16) || "20:00"}
+            onChange={(e) => onCustomChange(combineDateTime(value.slice(0, 10) || todayDateStr(), e.target.value))}
+            style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control, cursor: "pointer" }}
+          >
+            {TIME_SLOTS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
       ) : null}
     </div>
   );
