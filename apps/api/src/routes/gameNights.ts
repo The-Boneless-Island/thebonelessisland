@@ -2,7 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { env } from "../config.js";
 import { db } from "../db/client.js";
-import { getGuildId } from "../lib/serverSettings.js";
+import { getGuildId, getParentRoleName } from "../lib/serverSettings.js";
 import { requireSession } from "../lib/auth.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { broadcast } from "../lib/eventBus.js";
@@ -12,7 +12,12 @@ import { generateRecommendationBlurb } from "../lib/recommendBlurb.js";
 const createGameNightSchema = z.object({
   title: z.string().trim().min(1).max(120),
   scheduledFor: z.iso.datetime(),
-  attendeeIds: z.array(z.string().trim().min(1)).optional()
+  attendeeIds: z.array(z.string().trim().min(1)).optional(),
+  selectedAppId: z.number().int().positive().nullish()
+});
+
+const setNightGameSchema = z.object({
+  appId: z.number().int().positive().nullable()
 });
 
 const recommendationSchema = z.object({
@@ -32,6 +37,28 @@ async function getAuthedUser(discordUserId: string): Promise<AuthedUser | null> 
     [discordUserId]
   );
   return result.rows[0] ?? null;
+}
+
+async function gameExists(appId: number): Promise<boolean> {
+  const result = await db.query<{ app_id: number }>(`SELECT app_id FROM games WHERE app_id = $1`, [appId]);
+  return Boolean(result.rows[0]);
+}
+
+// Parent-role check usable mid-handler (the requireParentRole middleware would
+// reject a non-admin host outright, but a host may set their own night's game).
+async function isParentRole(discordUserId: string): Promise<boolean> {
+  const guildId = getGuildId();
+  if (!guildId) return false;
+  const result = await db.query<{ role_names: string[] }>(
+    `
+      SELECT COALESCE(role_names, '{}'::text[]) AS role_names
+      FROM guild_members
+      WHERE guild_id = $1 AND discord_user_id = $2 AND in_guild = TRUE
+      LIMIT 1
+    `,
+    [guildId, discordUserId]
+  );
+  return (result.rows[0]?.role_names ?? []).includes(getParentRoleName());
 }
 
 export const gameNightRouter = express.Router();
@@ -107,6 +134,9 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
     return;
   }
 
+  // Parent-role admins can manage any night's game; computed once per request.
+  const isAdmin = await isParentRole(discordUserId);
+
   const nights = await db.query<{
     id: number;
     title: string;
@@ -121,10 +151,12 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
     selected_is_shared_split_coop: boolean | null;
     selected_is_online_pvp: boolean | null;
     selected_is_mmo: boolean | null;
+    selected_max_players: number | null;
+    selected_tags: string[] | null;
     selected_at: string | null;
     attendee_count: number;
     current_user_attending: boolean;
-    attendees: Array<{ displayName: string; avatarUrl: string | null }>;
+    attendees: Array<{ displayName: string; avatarUrl: string | null; ownsSelected: boolean }>;
   }>(
     `
       SELECT
@@ -141,13 +173,15 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
         selected_game.is_shared_split_coop AS selected_is_shared_split_coop,
         selected_game.is_online_pvp        AS selected_is_online_pvp,
         selected_game.is_mmo               AS selected_is_mmo,
+        selected_game.mp_max_players_approx AS selected_max_players,
+        selected_game.tags                  AS selected_tags,
         gn.selected_at,
         COUNT(gna.user_id)::int AS attendee_count,
         COALESCE(BOOL_OR(gna.user_id = $1), false) AS current_user_attending,
         (
           SELECT COALESCE(
             JSON_AGG(
-              JSON_BUILD_OBJECT('displayName', a.display_name, 'avatarUrl', a.avatar_url)
+              JSON_BUILD_OBJECT('displayName', a.display_name, 'avatarUrl', a.avatar_url, 'ownsSelected', a.owns_selected)
               ORDER BY a.display_name ASC
             ),
             '[]'::json
@@ -155,7 +189,11 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
           FROM (
             SELECT
               COALESCE(gm.display_name, gm.username, dp.username, 'islander') AS display_name,
-              COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url
+              COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
+              EXISTS (
+                SELECT 1 FROM shareable_user_games sug
+                WHERE sug.user_id = u2.id AND sug.app_id = gn.selected_app_id
+              ) AS owns_selected
             FROM game_night_attendees gna2
             INNER JOIN users u2 ON u2.id = gna2.user_id
             LEFT JOIN guild_members gm
@@ -192,6 +230,7 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
       title: row.title,
       scheduledFor: row.scheduled_for,
       createdByUserId: row.created_by_user_id,
+      canManageGame: row.created_by_user_id === user.id || isAdmin,
       selectedGameName: row.selected_game_name,
       selectedAppId: row.selected_app_id,
       selectedGameImage: row.selected_game_image,
@@ -206,6 +245,8 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
           }
         : null,
       selectedAt: row.selected_at,
+      selectedMaxPlayers: row.selected_max_players,
+      selectedTags: row.selected_tags ?? [],
       attendeeCount: row.attendee_count,
       currentUserAttending: row.current_user_attending,
       attendees: row.attendees
@@ -223,13 +264,19 @@ gameNightRouter.post("/", requireSession, async (req, res) => {
     return;
   }
 
+  const selectedAppId = body.selectedAppId ?? null;
+  if (selectedAppId !== null && !(await gameExists(selectedAppId))) {
+    res.status(400).json({ error: "Selected game not found" });
+    return;
+  }
+
   const created = await db.query<{ id: number }>(
     `
-      INSERT INTO game_nights (title, scheduled_for, created_by_user_id)
-      VALUES ($1, $2::timestamptz, $3)
+      INSERT INTO game_nights (title, scheduled_for, created_by_user_id, selected_app_id, selected_at)
+      VALUES ($1, $2::timestamptz, $3, $4, CASE WHEN $4::int IS NULL THEN NULL ELSE NOW() END)
       RETURNING id
     `,
-    [body.title, body.scheduledFor, user.id]
+    [body.title, body.scheduledFor, user.id, selectedAppId]
   );
 
   const gameNightId = created.rows[0]?.id;
@@ -242,10 +289,81 @@ gameNightRouter.post("/", requireSession, async (req, res) => {
       targetGameNightId: gameNightId,
       payload: { title: body.title, scheduledFor: body.scheduledFor }
     });
+    if (selectedAppId !== null) {
+      void recordEvent({
+        eventType: "game_night.game_picked",
+        actorDiscordUserId: discordUserId,
+        targetGameNightId: gameNightId,
+        targetAppId: selectedAppId,
+        payload: { appId: selectedAppId }
+      });
+    }
     broadcast("nights-changed");
   }
 
   res.status(201).json({ id: gameNightId });
+});
+
+gameNightRouter.patch("/:id/game", requireSession, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid game night id" });
+    return;
+  }
+
+  const body = setNightGameSchema.parse(req.body);
+  const discordUserId = String(res.locals.userId);
+  const user = await getAuthedUser(discordUserId);
+  if (!user) {
+    res.status(401).json({ error: "User not found for active session" });
+    return;
+  }
+
+  const night = await db.query<{ created_by_user_id: number }>(
+    `SELECT created_by_user_id FROM game_nights WHERE id = $1`,
+    [id]
+  );
+  const row = night.rows[0];
+  if (!row) {
+    res.status(404).json({ error: "Game night not found" });
+    return;
+  }
+
+  // Only the host who created the night (or a parent-role admin) may set/clear
+  // the game. A non-admin host can still manage their own night.
+  const isHost = row.created_by_user_id === user.id;
+  if (!isHost && !(await isParentRole(discordUserId))) {
+    res.status(403).json({ error: "Only the host or an admin can set the game" });
+    return;
+  }
+
+  if (body.appId !== null && !(await gameExists(body.appId))) {
+    res.status(400).json({ error: "Selected game not found" });
+    return;
+  }
+
+  await db.query(
+    `
+      UPDATE game_nights
+         SET selected_app_id = $1,
+             selected_at = CASE WHEN $1::int IS NULL THEN NULL ELSE NOW() END
+       WHERE id = $2
+    `,
+    [body.appId, id]
+  );
+
+  if (body.appId !== null) {
+    void recordEvent({
+      eventType: "game_night.game_picked",
+      actorDiscordUserId: discordUserId,
+      targetGameNightId: id,
+      targetAppId: body.appId,
+      payload: { appId: body.appId }
+    });
+  }
+
+  broadcast("nights-changed");
+  res.json({ ok: true, selectedAppId: body.appId });
 });
 
 gameNightRouter.get("/:id/attendees", requireSession, async (req, res) => {

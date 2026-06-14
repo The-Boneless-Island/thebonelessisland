@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
-import { GameCover, coverUrl } from "../steamArt.js";
+import { GameCover, LogoCover, coverUrl, steamArt } from "../steamArt.js";
 import { modePills } from "../gameModes.js";
+import { gameAccent, countdownLabel, seatPips, type CountdownTone } from "../gameAccent.js";
+import { ConfettiBurst } from "../system/celebration.js";
 import type {
   CrewOwnedGame,
   CrewWishlistGame,
@@ -32,11 +34,15 @@ type GamesPageProps = {
   crewWishlist: CrewWishlistGame[];
   gameNews: GameNewsItem[];
   composerScrollNonce: number;
+  draftAppId: number | null;
+  lockNonce: number;
   onSelectNight: (id: number, title: string) => void;
   onNewNightTitleChange: (value: string) => void;
   onNewNightScheduledForChange: (value: string) => void;
   onToggleSelectedMember: (discordUserId: string) => void;
   onCreateGameNight: () => void;
+  onSetNightGame: (nightId: number, appId: number | null) => void;
+  onDraftAppIdChange: (appId: number | null) => void;
   onJoinSelectedNight: () => void;
   onLeaveSelectedNight: () => void;
   onAddSelectedMembersToNight: () => void;
@@ -80,17 +86,18 @@ function GamesPageImpl(props: GamesPageProps) {
       <GamesHero view={view} onViewChange={setView} />
       {view === "tonight" ? (
         <>
-          <SessionComposer {...props} />
+          <PlanNightCard {...props} />
           <ScheduledNights {...props} />
+          <CrewChat onSend={props.onSendChatMessage} />
           <EverythingTeaser onOpen={() => setView("everything")} />
         </>
       ) : (
         <>
           <SessionAndPatchesRow {...props} />
-          <CrewChat onSend={props.onSendChatMessage} />
           <ScheduledNights {...props} />
           <GroupWishlist crewWishlist={props.crewWishlist} />
           <LibrarySnapshot onNavigate={props.onNavigate} />
+          <CrewChat onSend={props.onSendChatMessage} />
           <StreamDrawer members={props.filteredGuildMembers} />
         </>
       )}
@@ -216,21 +223,11 @@ function SessionAndPatchesRow(props: GamesPageProps) {
         alignItems: "start"
       }}
     >
-      <SessionComposer {...props} />
+      <PlanNightCard {...props} />
       <PatchesRolodex gameNews={props.gameNews} />
     </section>
   );
 }
-
-const AI_MODES = ["Tonight", "Weekend", "Quick", "Cozy", "Spicy"] as const;
-type AIMode = (typeof AI_MODES)[number];
-
-const SESSION_COMPOSER_FALLBACK = {
-  title: "Pick a crew to see the AI pick",
-  reason:
-    "Tap members in the roster below to populate a session — we'll surface the strongest crew-overlap and why it fits.",
-  cover: "linear-gradient(135deg,#0f172a 0%,#1e293b 100%)"
-};
 
 function buildComposerPick(props: GamesPageProps): ComposerPick | null {
   const { composerRecommendations, featuredRecommendation, crewGames, selectedMemberIds } = props;
@@ -271,20 +268,6 @@ function buildComposerPick(props: GamesPageProps): ComposerPick | null {
   return null;
 }
 
-function pickStats(pick: ComposerPick): Array<{ k: string; v: string }> {
-  const stats: Array<{ k: string; v: string }> = [
-    { k: "crew own", v: `${pick.ownersInScope} / ${pick.scopeSize}` }
-  ];
-  if (typeof pick.maxPlayers === "number") {
-    stats.push({ k: "max players", v: `${pick.maxPlayers}` });
-  }
-  if (pick.tags.length > 0) {
-    stats.push({ k: "tag", v: pick.tags[0].toLowerCase() });
-  }
-  stats.push({ k: "scope", v: pick.source === "selection" ? "selected crew" : "island crew" });
-  return stats.slice(0, 5);
-}
-
 function pickCoverInitials(name: string): string {
   return name
     .split(/\s+/)
@@ -294,138 +277,317 @@ function pickCoverInitials(name: string): string {
     .join("");
 }
 
-function SessionComposer(props: GamesPageProps) {
-  const [mode, setMode] = useState<AIMode>("Tonight");
-  const pick = useMemo(() => buildComposerPick(props), [props]);
-  const pickCover = coverUrl(pick?.appId, pick?.headerImageUrl);
-  const composerRef = useRef<HTMLDivElement>(null);
-  const { composerScrollNonce } = props;
+// ── Plan a night ──────────────────────────────────────────────────────────────
+// One no-scroll card: pick a game (AI / search / later), pick a time, pick the
+// crew, lock it. Replaces the old split SessionComposer + CreateNightStrip.
+
+type GameSource = "ai" | "search" | "later";
+
+type PickView = {
+  appId: number | null;
+  name: string;
+  matchPct: number | null;
+  tags: string[];
+  maxPlayers: number | null;
+  ownersInScope: number | null;
+  scopeSize: number | null;
+  headerImageUrl: string | null;
+  source: GameSource;
+};
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function toLocalInput(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function tonightAt(hour: number): Date {
+  const d = new Date();
+  d.setHours(hour, 0, 0, 0);
+  return d;
+}
+
+function nextWeekdayAt(weekday: number, hour: number): Date {
+  const now = new Date();
+  const d = new Date(now);
+  d.setHours(hour, 0, 0, 0);
+  let diff = (weekday - d.getDay() + 7) % 7;
+  if (diff === 0 && d.getTime() <= now.getTime()) diff = 7;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+function whenLabel(value: string): string {
+  if (!value) return "no time set";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "no time set";
+  return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+function chipStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
+    background: active ? islandTheme.color.primary : "transparent",
+    color: active ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
+    fontSize: 13,
+    fontWeight: active ? 700 : 600,
+    padding: "7px 14px",
+    borderRadius: 999,
+    cursor: "pointer",
+    font: "inherit"
+  };
+}
+
+function PlanNightCard(props: GamesPageProps) {
+  const {
+    crewGames,
+    selectedMemberIds,
+    draftAppId,
+    onDraftAppIdChange,
+    newNightTitle,
+    newNightScheduledFor,
+    onNewNightTitleChange,
+    onNewNightScheduledForChange,
+    onCreateGameNight,
+    composerScrollNonce,
+    lockNonce
+  } = props;
+
+  const [source, setSource] = useState<GameSource>("ai");
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [showCustomTime, setShowCustomTime] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  const aiPick = useMemo(() => buildComposerPick(props), [props]);
+
+  // Keep the parent draft app id in lockstep with the chosen source. AI mode
+  // tracks the live recommendation; "later" clears it; search sets it on click.
+  useEffect(() => {
+    if (source === "ai") onDraftAppIdChange(aiPick?.appId ?? null);
+    else if (source === "later") onDraftAppIdChange(null);
+  }, [source, aiPick?.appId, onDraftAppIdChange]);
 
   useEffect(() => {
     if (composerScrollNonce === 0) return;
-    composerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [composerScrollNonce]);
 
-  return (
-    <div ref={composerRef} style={{ scrollMarginTop: 90 }}>
-    <IslandCard style={{ padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <div
-        style={{
-          padding: "14px 16px 12px",
-          borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
-          display: "flex",
-          alignItems: "center",
-          gap: 12
-        }}
-      >
-        <IslandTag tone="primary">★ AI pick</IslandTag>
-        {pick ? (
-          <>
-            <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-              Match strength{" "}
-              <strong style={{ color: islandTheme.color.textPrimary }}>{pick.matchPct}%</strong>
-            </span>
-            <IslandTag tone="default">
-              {pick.source === "selection" ? "your crew" : "island default"}
-            </IslandTag>
-          </>
-        ) : (
-          <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-            Empty shore — sync some crew Steam libraries to populate.
-          </span>
-        )}
-      </div>
+  const pick: PickView | null = useMemo(() => {
+    if (source === "later") return null;
+    if (source === "search") {
+      const g = crewGames.find((c) => c.appId === draftAppId);
+      if (!g) return null;
+      const ownersInScope = selectedMemberIds.length
+        ? g.owners.filter((o) => selectedMemberIds.includes(o.discordUserId)).length
+        : g.ownerCount;
+      return {
+        appId: g.appId,
+        name: g.name,
+        matchPct: null,
+        tags: g.tags,
+        maxPlayers: g.maxPlayers ?? g.mpMaxPlayersApprox ?? null,
+        ownersInScope,
+        scopeSize: selectedMemberIds.length || g.ownerCount,
+        headerImageUrl: g.headerImageUrl,
+        source: "search"
+      };
+    }
+    if (!aiPick) return null;
+    return {
+      appId: aiPick.appId,
+      name: aiPick.name,
+      matchPct: aiPick.matchPct,
+      tags: aiPick.tags,
+      maxPlayers: aiPick.maxPlayers,
+      ownersInScope: aiPick.ownersInScope,
+      scopeSize: aiPick.scopeSize,
+      headerImageUrl: aiPick.headerImageUrl,
+      source: "ai"
+    };
+  }, [source, aiPick, crewGames, draftAppId, selectedMemberIds]);
 
-      <div style={{ display: "grid", gap: 12, padding: 16 }}>
-        {/* Featured-banner treatment: the picked game gets the same wide
-            art-with-gradient presentation as the home featured card. */}
+  const accent = gameAccent(pick?.tags);
+  const goingCount = selectedMemberIds.length + 1; // host always joins
+  const canLock = Boolean(newNightScheduledFor);
+
+  return (
+    <div ref={cardRef} style={{ scrollMarginTop: 90 }}>
+      <IslandCard style={{ padding: 0, overflow: "hidden", position: "relative" }}>
+        <ConfettiBurst trigger={lockNonce} />
+
         <div
-          role={pick ? "img" : undefined}
-          aria-label={pick ? pick.name : undefined}
           style={{
-            minHeight: pick ? 120 : 88,
-            borderRadius: 12,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            display: "flex",
-            alignItems: "flex-end",
             padding: "12px 16px",
-            overflow: "hidden",
-            background: pickCover
-              ? `linear-gradient(135deg, rgba(8,16,34,0.88) 25%, rgba(8,16,34,0.45) 70%, rgba(8,16,34,0.15) 100%), url("${pickCover}") center / cover no-repeat`
-              : SESSION_COMPOSER_FALLBACK.cover
+            borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap"
           }}
         >
-          <div style={{ minWidth: 0 }}>
-            {!pickCover && pick ? (
-              <div
-                className="island-mono"
-                style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", color: "rgba(255,255,255,0.55)", marginBottom: 2 }}
-              >
-                {pickCoverInitials(pick.name)}
-              </div>
-            ) : null}
-            <h2
-              className="island-display"
-              style={{
-                margin: 0,
-                fontSize: 22,
-                fontWeight: 800,
-                color: "#f8fafc",
-                textShadow: "0 2px 10px rgba(0,0,0,0.55)"
-              }}
-            >
-              {pick?.name ?? SESSION_COMPOSER_FALLBACK.title}
-            </h2>
-          </div>
+          <span style={{ fontSize: 16 }} aria-hidden="true">🗓️</span>
+          <h2 className="island-display" style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>
+            Plan a night
+          </h2>
+          <SourceSegmented value={source} onChange={setSource} />
         </div>
-        <div style={{ minWidth: 0 }}>
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: islandTheme.color.textSubtle, maxWidth: "68ch" }}>
-            {pick?.blurb ?? pick?.reason ?? SESSION_COMPOSER_FALLBACK.reason}
-          </p>
-          <ModeBar value={mode} onChange={setMode} />
-          {pick ? <StatStrip stats={pickStats(pick)} /> : null}
-        </div>
-      </div>
 
-      <RosterPicker {...props} />
-    </IslandCard>
+        <div style={{ display: "grid", gap: 12, padding: 16 }}>
+          <PlanHero pick={pick} accent={accent} />
+          <StatChips pick={pick} />
+
+          {source === "search" ? (
+            <LibraryResults
+              crewGames={crewGames}
+              query={librarySearch}
+              onQueryChange={setLibrarySearch}
+              selectedAppId={draftAppId}
+              onPick={(appId) => onDraftAppIdChange(appId)}
+            />
+          ) : null}
+
+          <FieldRow label="When">
+            <TimeChips
+              value={newNightScheduledFor}
+              showCustom={showCustomTime}
+              onPick={(iso) => {
+                setShowCustomTime(false);
+                onNewNightScheduledForChange(iso);
+              }}
+              onCustom={() => setShowCustomTime(true)}
+              onCustomChange={onNewNightScheduledForChange}
+            />
+          </FieldRow>
+
+          <FieldRow label="Title">
+            <input
+              value={newNightTitle}
+              onChange={(e) => onNewNightTitleChange(e.target.value)}
+              placeholder="Friday Island Session"
+              style={{ ...islandInputStyle, width: "100%", fontSize: 13, borderRadius: islandTheme.radius.control }}
+            />
+          </FieldRow>
+
+          <FieldRow label="Who">
+            <RosterPanel
+              members={props.filteredGuildMembers}
+              selectedMemberIds={selectedMemberIds}
+              onToggle={props.onToggleSelectedMember}
+            />
+          </FieldRow>
+        </div>
+
+        <div
+          style={{
+            padding: "12px 16px",
+            borderTop: `1px solid ${islandTheme.color.cardBorder}`,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap"
+          }}
+        >
+          <span style={{ fontSize: 13, color: islandTheme.color.textMuted, display: "flex", alignItems: "center", gap: 6 }}>
+            <span aria-hidden="true" style={{ color: pick ? islandTheme.color.successAccent : islandTheme.color.textMuted }}>●</span>
+            <span>
+              <strong style={{ color: islandTheme.color.textPrimary }}>{pick?.name ?? "No game yet"}</strong>
+              {" · "}
+              {whenLabel(newNightScheduledFor)}
+              {" · "}
+              <strong style={{ color: islandTheme.color.textPrimary }}>{goingCount} going</strong>
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={onCreateGameNight}
+            disabled={!canLock}
+            style={{
+              marginLeft: "auto",
+              background: canLock ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
+              border: "none",
+              color: canLock ? islandTheme.color.primaryText : islandTheme.color.textMuted,
+              padding: "9px 20px",
+              borderRadius: 999,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: canLock ? "pointer" : "default",
+              font: "inherit"
+            }}
+          >
+            ⚓ Lock the night
+          </button>
+        </div>
+      </IslandCard>
     </div>
   );
 }
 
-function ModeBar({ value, onChange }: { value: AIMode; onChange: (m: AIMode) => void }) {
+function FieldRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "52px 1fr", gap: 12, alignItems: "start" }}>
+      <span
+        className="island-mono"
+        style={{
+          fontSize: 12,
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: islandTheme.color.textMuted,
+          paddingTop: 7
+        }}
+      >
+        {label}
+      </span>
+      <div style={{ minWidth: 0 }}>{children}</div>
+    </div>
+  );
+}
+
+const SOURCE_TABS: Array<{ id: GameSource; label: string }> = [
+  { id: "ai", label: "✨ AI pick" },
+  { id: "search", label: "🔍 Search" },
+  { id: "later", label: "🕒 Later" }
+];
+
+function SourceSegmented({ value, onChange }: { value: GameSource; onChange: (v: GameSource) => void }) {
   return (
     <div
+      role="tablist"
+      aria-label="Game source"
       style={{
-        marginTop: 12,
-        display: "flex",
-        gap: 0,
-        borderBottom: `1px solid ${islandTheme.color.cardBorder}`
+        marginLeft: "auto",
+        display: "inline-flex",
+        gap: 2,
+        padding: 3,
+        borderRadius: 999,
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
-      {AI_MODES.map((m) => {
-        const active = m === value;
+      {SOURCE_TABS.map((t) => {
+        const active = t.id === value;
         return (
           <button
-            key={m}
+            key={t.id}
             type="button"
-            onClick={() => onChange(m)}
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(t.id)}
+            className="island-btn"
             style={{
-              padding: "8px 12px",
+              padding: "5px 12px",
+              borderRadius: 999,
               border: "none",
-              background: "transparent",
-              color: active ? islandTheme.color.textPrimary : islandTheme.color.textMuted,
+              background: active ? islandTheme.color.primary : "transparent",
+              color: active ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
               fontSize: 12,
-              fontWeight: 600,
+              fontWeight: 700,
               cursor: "pointer",
-              borderBottom: active
-                ? `2px solid ${islandTheme.color.primaryGlow}`
-                : "2px solid transparent",
-              marginBottom: -1,
               font: "inherit"
             }}
           >
-            {m}
+            {t.label}
           </button>
         );
       })}
@@ -433,82 +595,300 @@ function ModeBar({ value, onChange }: { value: AIMode; onChange: (m: AIMode) => 
   );
 }
 
-function StatStrip({ stats }: { stats: Array<{ k: string; v: string }> }) {
+function MatchRing({ pct, accent }: { pct: number; accent: string }) {
+  const r = 20;
+  const c = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(100, pct));
+  const offset = c * (1 - clamped / 100);
+  return (
+    <svg width="52" height="52" viewBox="0 0 52 52" role="img" aria-label={`${clamped}% match`}>
+      <circle cx="26" cy="26" r={r} fill="rgba(2,6,23,0.55)" stroke="rgba(148,163,184,0.25)" strokeWidth="5" />
+      <circle
+        cx="26"
+        cy="26"
+        r={r}
+        fill="none"
+        stroke={accent}
+        strokeWidth="5"
+        strokeLinecap="round"
+        strokeDasharray={c}
+        strokeDashoffset={offset}
+        transform="rotate(-90 26 26)"
+      />
+      <text x="26" y="28" textAnchor="middle" fontSize="13" fontWeight="800" fill="#f8fafc">
+        {clamped}
+      </text>
+      <text x="26" y="37" textAnchor="middle" fontSize="7" fill="rgba(226,232,240,0.7)">
+        MATCH
+      </text>
+    </svg>
+  );
+}
+
+function PlanHero({ pick, accent }: { pick: PickView | null; accent: ReturnType<typeof gameAccent> }) {
+  const [logoBroken, setLogoBroken] = useState(false);
+  useEffect(() => setLogoBroken(false), [pick?.appId]);
+
+  const heroUrl = coverUrl(pick?.appId, pick?.headerImageUrl);
+
+  if (!pick) {
+    return (
+      <div
+        style={{
+          minHeight: 96,
+          borderRadius: 12,
+          border: `1px dashed ${islandTheme.color.cardBorder}`,
+          background: "linear-gradient(135deg, #0f172a 0%, #1e293b 100%)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 6,
+          textAlign: "center",
+          padding: 16
+        }}
+      >
+        <span style={{ fontSize: 26 }} aria-hidden="true">🎲</span>
+        <div style={{ fontSize: 13, fontWeight: 700, color: islandTheme.color.textSecondary }}>No game locked yet</div>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, maxWidth: 380, lineHeight: 1.5 }}>
+          Tap <strong>AI pick</strong> for the strongest crew match, <strong>Search</strong> the crew library, or leave it for
+          the host to call at game-time.
+        </div>
+      </div>
+    );
+  }
+
+  const showLogo = Boolean(pick.appId) && !logoBroken;
+
   return (
     <div
       style={{
-        marginTop: 12,
-        display: "grid",
-        gridTemplateColumns: `repeat(${stats.length}, 1fr)`,
-        border: `1px solid ${islandTheme.color.cardBorder}`,
-        borderRadius: 10,
+        position: "relative",
+        minHeight: 150,
+        borderRadius: 12,
         overflow: "hidden",
-        background: islandTheme.color.panelMutedBg
+        border: `1px solid ${accent.accent}`,
+        display: "flex",
+        alignItems: "flex-end"
       }}
     >
-      {stats.map((s, i) => (
-        <div
-          key={s.k}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: heroUrl ? `url("${heroUrl}") center / cover no-repeat` : "linear-gradient(135deg,#0f172a 0%,#1e293b 100%)"
+        }}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "linear-gradient(135deg, rgba(8,16,34,0.86) 22%, rgba(8,16,34,0.4) 70%, rgba(8,16,34,0.15) 100%)"
+        }}
+      />
+      <div
+        aria-hidden="true"
+        style={{ position: "absolute", inset: 0, background: accent.accent, opacity: 0.16, mixBlendMode: "overlay" }}
+      />
+
+      {pick.source === "ai" ? (
+        <span
           style={{
-            padding: "8px 10px",
-            borderRight: i < stats.length - 1 ? `1px solid ${islandTheme.color.cardBorder}` : "none",
-            textAlign: "left"
+            position: "absolute",
+            top: 10,
+            left: 12,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            background: "rgba(8,16,34,0.7)",
+            padding: "3px 9px",
+            borderRadius: 999,
+            fontSize: 11,
+            fontWeight: 700,
+            color: accent.soft
           }}
         >
-          <div
-            className="island-mono"
+          <span aria-hidden="true">🍗</span> Nuggie suggests
+        </span>
+      ) : null}
+
+      {pick.matchPct != null ? (
+        <div style={{ position: "absolute", top: 8, right: 10 }}>
+          <MatchRing pct={pick.matchPct} accent={accent.accent} />
+        </div>
+      ) : null}
+
+      <div style={{ position: "relative", padding: "12px 16px", minWidth: 0, zIndex: 1 }}>
+        {showLogo ? (
+          <img
+            src={steamArt.logo(pick.appId as number)}
+            alt={pick.name}
+            onError={() => setLogoBroken(true)}
+            style={{ maxWidth: "60%", maxHeight: 56, objectFit: "contain", filter: "drop-shadow(0 2px 6px rgba(0,0,0,0.6))" }}
+          />
+        ) : (
+          <>
+            {!heroUrl ? (
+              <div
+                className="island-mono"
+                style={{ fontSize: 12, fontWeight: 800, letterSpacing: "0.1em", color: "rgba(255,255,255,0.55)", marginBottom: 2 }}
+              >
+                {pickCoverInitials(pick.name)}
+              </div>
+            ) : null}
+            <h3
+              className="island-display"
+              style={{ margin: 0, fontSize: 22, fontWeight: 800, color: "#f8fafc", textShadow: "0 2px 10px rgba(0,0,0,0.55)" }}
+            >
+              {pick.name}
+            </h3>
+          </>
+        )}
+        <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span
             style={{
-              fontSize: 12,
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              color: islandTheme.color.textMuted
+              fontSize: 11,
+              fontWeight: 700,
+              color: accent.soft,
+              background: "rgba(8,16,34,0.55)",
+              padding: "2px 8px",
+              borderRadius: 999
             }}
           >
-            {s.k}
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 700, marginTop: 2 }}>{s.v}</div>
+            {accent.label}
+          </span>
+          {pick.ownersInScope != null && pick.scopeSize != null ? (
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                color: "#bbf7d0",
+                background: "rgba(20,54,31,0.7)",
+                padding: "2px 8px",
+                borderRadius: 999
+              }}
+            >
+              {pick.ownersInScope}/{pick.scopeSize} own it
+            </span>
+          ) : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function StatChips({ pick }: { pick: PickView | null }) {
+  if (!pick) return null;
+  const chips: Array<{ icon: string; text: string }> = [];
+  if (typeof pick.maxPlayers === "number" && pick.maxPlayers > 0) {
+    chips.push({ icon: "👥", text: `up to ${pick.maxPlayers}` });
+  }
+  for (const tag of pick.tags.slice(0, 3)) {
+    chips.push({ icon: "🏷️", text: tag.toLowerCase() });
+  }
+  if (chips.length === 0) return null;
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {chips.map((c, i) => (
+        <span
+          key={`${c.text}-${i}`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            fontSize: 12,
+            color: islandTheme.color.textSubtle,
+            background: islandTheme.color.panelMutedBg,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            padding: "4px 10px",
+            borderRadius: 999
+          }}
+        >
+          <span aria-hidden="true">{c.icon}</span>
+          {c.text}
+        </span>
       ))}
     </div>
   );
 }
 
-function RosterPicker({
-  filteredGuildMembers,
+function TimeChips({
+  value,
+  showCustom,
+  onPick,
+  onCustom,
+  onCustomChange
+}: {
+  value: string;
+  showCustom: boolean;
+  onPick: (iso: string) => void;
+  onCustom: () => void;
+  onCustomChange: (v: string) => void;
+}) {
+  const options = useMemo(
+    () => [
+      { id: "tonight", label: "Tonight", value: toLocalInput(tonightAt(20)) },
+      { id: "fri", label: "Fri 8pm", value: toLocalInput(nextWeekdayAt(5, 20)) },
+      { id: "sat", label: "Sat night", value: toLocalInput(nextWeekdayAt(6, 20)) }
+    ],
+    []
+  );
+  return (
+    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+      {options.map((o) => (
+        <button key={o.id} type="button" onClick={() => onPick(o.value)} style={chipStyle(value === o.value && !showCustom)}>
+          {o.label}
+        </button>
+      ))}
+      <button type="button" onClick={onCustom} style={chipStyle(showCustom)}>
+        📅 Custom…
+      </button>
+      {showCustom ? (
+        <input
+          type="datetime-local"
+          value={value}
+          onChange={(e) => onCustomChange(e.target.value)}
+          style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function RosterPanel({
+  members,
   selectedMemberIds,
-  onToggleSelectedMember
-}: GamesPageProps) {
-  const display = filteredGuildMembers.slice(0, 8);
+  onToggle
+}: {
+  members: GuildMember[];
+  selectedMemberIds: string[];
+  onToggle: (discordUserId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = q ? members.filter((m) => m.displayName.toLowerCase().includes(q)) : members;
+    return list.slice(0, 60);
+  }, [members, query]);
   const ready = selectedMemberIds.length;
   return (
-    <div
-      style={{
-        borderTop: `1px solid ${islandTheme.color.cardBorder}`,
-        padding: "12px 16px"
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
-        <span
-          className="island-mono"
-          style={{
-            fontSize: 12,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: islandTheme.color.textMuted
-          }}
-        >
-          Crew roster
-        </span>
-        <span style={{ fontSize: 12, color: islandTheme.color.textPrimary, fontWeight: 700 }}>
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search crew…"
+          style={{ ...islandInputStyle, flex: 1, fontSize: 13, borderRadius: islandTheme.radius.control }}
+        />
+        <span style={{ fontSize: 12, fontWeight: 700, color: islandTheme.color.primaryGlow, whiteSpace: "nowrap" }}>
           {ready} ready
         </span>
-        <span style={{ fontSize: 12, color: islandTheme.color.textMuted, marginLeft: "auto" }}>
-          tap to add to invite
-        </span>
       </div>
-      {display.length ? (
-        <div style={{ display: "grid", gap: 4 }}>
-          {display.map((m) => {
+      {filtered.length ? (
+        <div style={{ display: "grid", gap: 4, maxHeight: 220, overflowY: "auto" }}>
+          {filtered.map((m) => {
             const selected = selectedMemberIds.includes(m.discordUserId);
             const status = m.inVoice ? "voice" : m.richPresenceText ? "online" : "idle";
             const dotColor =
@@ -522,7 +902,8 @@ function RosterPicker({
                 key={m.discordUserId}
                 type="button"
                 className="island-btn"
-                onClick={() => onToggleSelectedMember(m.discordUserId)}
+                aria-pressed={selected}
+                onClick={() => onToggle(m.discordUserId)}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "16px 1fr auto",
@@ -530,21 +911,14 @@ function RosterPicker({
                   alignItems: "center",
                   padding: "6px 8px",
                   borderRadius: 8,
-                  border: selected
-                    ? `1px solid ${islandTheme.color.primaryGlow}`
-                    : `1px solid transparent`,
+                  border: selected ? `1px solid ${islandTheme.color.primaryGlow}` : "1px solid transparent",
                   background: selected ? "rgba(96, 165, 250, 0.12)" : "transparent",
                   color: islandTheme.color.textPrimary,
                   cursor: "pointer",
                   font: "inherit"
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={selected}
-                  readOnly
-                  style={{ pointerEvents: "none" }}
-                />
+                <input type="checkbox" checked={selected} readOnly style={{ pointerEvents: "none" }} />
                 <span
                   style={{
                     fontSize: 13,
@@ -578,6 +952,89 @@ function RosterPicker({
         </div>
       ) : (
         <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>No crew loaded yet.</p>
+      )}
+    </div>
+  );
+}
+
+function LibraryResults({
+  crewGames,
+  query,
+  onQueryChange,
+  selectedAppId,
+  onPick
+}: {
+  crewGames: CrewOwnedGame[];
+  query: string;
+  onQueryChange: (v: string) => void;
+  selectedAppId: number | null;
+  onPick: (appId: number) => void;
+}) {
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const list = q ? crewGames.filter((g) => g.name.toLowerCase().includes(q)) : crewGames;
+    return list.slice(0, 8);
+  }, [crewGames, query]);
+  return (
+    <div
+      style={{
+        display: "grid",
+        gap: 8,
+        border: `1px solid ${islandTheme.color.cardBorder}`,
+        borderRadius: 10,
+        padding: 10,
+        background: islandTheme.color.panelMutedBg
+      }}
+    >
+      <input
+        value={query}
+        onChange={(e) => onQueryChange(e.target.value)}
+        placeholder="Search the crew library…"
+        style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control }}
+      />
+      {results.length ? (
+        <div style={{ display: "grid", gap: 4, maxHeight: 200, overflowY: "auto" }}>
+          {results.map((g) => {
+            const selected = g.appId === selectedAppId;
+            return (
+              <button
+                key={g.appId}
+                type="button"
+                onClick={() => onPick(g.appId)}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr auto",
+                  gap: 10,
+                  alignItems: "center",
+                  padding: 6,
+                  borderRadius: 8,
+                  border: selected ? `1px solid ${islandTheme.color.primaryGlow}` : "1px solid transparent",
+                  background: selected ? "rgba(96,165,250,0.12)" : "transparent",
+                  color: islandTheme.color.textPrimary,
+                  cursor: "pointer",
+                  font: "inherit",
+                  textAlign: "left"
+                }}
+              >
+                <GameCover
+                  appId={g.appId}
+                  storedUrl={g.headerImageUrl}
+                  variant="header"
+                  alt={g.name}
+                  style={{ width: 48, height: 22, borderRadius: 4 }}
+                />
+                <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {g.name}
+                </span>
+                <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+                  {g.ownerCount} own
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textMuted }}>No crew-owned games match.</p>
       )}
     </div>
   );
@@ -971,27 +1428,18 @@ function ScheduledNights({
   selectedNightId,
   selectedNight,
   currentUserAttendingSelectedNight,
-  newNightTitle,
-  newNightScheduledFor,
+  crewGames,
   onSelectNight,
-  onNewNightTitleChange,
-  onNewNightScheduledForChange,
-  onCreateGameNight,
   onJoinSelectedNight,
-  onLeaveSelectedNight
+  onLeaveSelectedNight,
+  onSetNightGame
 }: GamesPageProps) {
   return (
     <section style={{ display: "grid", gap: 12 }}>
+      <NightCardStyles />
       <SectionHead
         title="Scheduled game nights"
         meta="Hosts pick the game. RSVP to lock in a seat — no voting, no vibes lost."
-      />
-      <CreateNightStrip
-        title={newNightTitle}
-        scheduledFor={newNightScheduledFor}
-        onTitleChange={onNewNightTitleChange}
-        onScheduledForChange={onNewNightScheduledForChange}
-        onCreate={onCreateGameNight}
       />
       {gameNights.length ? (
         <div
@@ -1011,77 +1459,92 @@ function ScheduledNights({
           ))}
         </div>
       ) : (
-        <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>No nights scheduled yet.</p>
+        <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>No nights scheduled yet — plan one above.</p>
       )}
       {selectedNight ? (
         <SelectedNightDetail
           night={selectedNight}
           currentUserAttending={currentUserAttendingSelectedNight}
+          crewGames={crewGames}
           onJoin={onJoinSelectedNight}
           onLeave={onLeaveSelectedNight}
+          onSetNightGame={onSetNightGame}
         />
       ) : null}
     </section>
   );
 }
 
-function CreateNightStrip({
-  title,
-  scheduledFor,
-  onTitleChange,
-  onScheduledForChange,
-  onCreate
-}: {
-  title: string;
-  scheduledFor: string;
-  onTitleChange: (v: string) => void;
-  onScheduledForChange: (v: string) => void;
-  onCreate: () => void;
-}) {
+function NightCardStyles() {
   return (
-    <IslandCard style={{ padding: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-      <span
-        className="island-mono"
-        style={{
-          fontSize: 12,
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          color: islandTheme.color.textMuted
-        }}
-      >
-        New
-      </span>
-      <input
-        value={title}
-        onChange={(e) => onTitleChange(e.target.value)}
-        placeholder="Friday Island Session"
-        style={{ ...islandInputStyle, flex: "1 1 220px", minWidth: 220, fontSize: 13, borderRadius: islandTheme.radius.control }}
-      />
-      <input
-        type="datetime-local"
-        value={scheduledFor}
-        onChange={(e) => onScheduledForChange(e.target.value)}
-        style={{ ...islandInputStyle, fontSize: 13, borderRadius: islandTheme.radius.control }}
-      />
-      <button
-        type="button"
-        onClick={onCreate}
-        style={{
-          background: islandTheme.color.primary,
-          border: `1px solid ${islandTheme.color.primary}`,
-          color: islandTheme.color.primaryText,
-          padding: "7px 14px",
-          borderRadius: 999,
-          fontSize: 12,
-          fontWeight: 700,
-          cursor: "pointer",
-          font: "inherit"
-        }}
-      >
-        Drop a night
-      </button>
-    </IslandCard>
+    <style>{`
+      .bi-night-card { transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease; }
+      @media (hover: hover) {
+        .bi-night-card:hover { transform: translateY(-3px); }
+      }
+      @keyframes bi-countdown-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+      .bi-countdown-live { animation: bi-countdown-pulse 1.4s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        .bi-night-card { transition: none; }
+        .bi-night-card:hover { transform: none; }
+        .bi-countdown-live { animation: none; }
+      }
+    `}</style>
   );
+}
+
+const COUNTDOWN_TONE: Record<CountdownTone, string> = {
+  far: islandTheme.color.panelMutedBg,
+  soon: "#fbbf24",
+  imminent: "#fb923c",
+  live: islandTheme.color.successAccent,
+  past: islandTheme.color.panelMutedBg
+};
+
+function SeatPips({ pips, accent }: { pips: NonNullable<ReturnType<typeof seatPips>>; accent: string }) {
+  return (
+    <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }} aria-label={`${pips.filled} of ${pips.total} seats filled`}>
+      {Array.from({ length: pips.total }).map((_, i) => (
+        <span
+          key={i}
+          style={{ width: 7, height: 7, borderRadius: 999, background: i < pips.filled ? accent : "rgba(148,163,184,0.3)" }}
+        />
+      ))}
+      {pips.overflow > 0 ? (
+        <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+          +{pips.overflow}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function rsvpBtnStyle(attending: boolean): React.CSSProperties {
+  return {
+    background: attending ? "transparent" : islandTheme.color.primary,
+    border: `1px solid ${attending ? islandTheme.color.danger : islandTheme.color.primary}`,
+    color: attending ? islandTheme.color.dangerText : islandTheme.color.primaryText,
+    padding: "7px 14px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    font: "inherit"
+  };
+}
+
+function ghostBtnStyle(): React.CSSProperties {
+  return {
+    background: "transparent",
+    border: `1px solid ${islandTheme.color.cardBorder}`,
+    color: islandTheme.color.textSubtle,
+    padding: "6px 12px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    font: "inherit"
+  };
 }
 
 function NightCard({
@@ -1093,10 +1556,20 @@ function NightCard({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const accent = gameAccent(night.selectedTags);
+  const countdown = countdownLabel(night.scheduledFor);
+  const pips = seatPips(night.attendeeCount, night.selectedMaxPlayers);
+  const urgent = countdown.tone === "soon" || countdown.tone === "imminent" || countdown.tone === "live";
+  const borderColor = isSelected
+    ? islandTheme.color.primaryGlow
+    : night.selectedAppId
+      ? accent.accent
+      : islandTheme.color.cardBorder;
   return (
     <button
       type="button"
       onClick={onSelect}
+      className="bi-night-card"
       style={{
         textAlign: "left",
         position: "relative",
@@ -1105,9 +1578,7 @@ function NightCard({
         background: islandTheme.color.panelBg,
         backdropFilter: islandTheme.glass.blur,
         WebkitBackdropFilter: islandTheme.glass.blur,
-        border: isSelected
-          ? `1px solid ${islandTheme.color.primaryGlow}`
-          : `1px solid ${islandTheme.color.cardBorder}`,
+        border: `1px solid ${borderColor}`,
         borderRadius: 14,
         padding: 14,
         cursor: "pointer",
@@ -1131,21 +1602,51 @@ function NightCard({
           }}
         />
       ) : null}
-      {night.selectedAppId ? (
-        <GameCover
-          appId={night.selectedAppId}
-          storedUrl={night.selectedGameImage}
-          variant="header"
-          alt={night.selectedGameName ?? "Selected game"}
+      <div style={{ position: "relative", marginBottom: 10 }}>
+        {night.selectedAppId ? (
+          <LogoCover
+            appId={night.selectedAppId}
+            storedUrl={night.selectedGameImage}
+            variant="capsule"
+            alt={night.selectedGameName ?? "Selected game"}
+            style={{ width: "100%", aspectRatio: "460 / 215", borderRadius: 10, border: `1px solid ${accent.accent}` }}
+          />
+        ) : (
+          <div
+            style={{
+              width: "100%",
+              aspectRatio: "460 / 215",
+              borderRadius: 10,
+              border: `1px dashed ${islandTheme.color.cardBorder}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              color: islandTheme.color.textMuted,
+              fontSize: 13,
+              background: "linear-gradient(135deg,#0f172a,#1e293b)"
+            }}
+          >
+            <span aria-hidden="true">🎲</span> No game yet
+          </div>
+        )}
+        <span
+          className={countdown.tone === "live" ? "bi-countdown-live" : undefined}
           style={{
-            width: "100%",
-            aspectRatio: "460 / 215",
-            borderRadius: 10,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            marginBottom: 10
+            position: "absolute",
+            top: 7,
+            right: 7,
+            fontSize: 11,
+            fontWeight: 700,
+            color: urgent ? "#0b1220" : islandTheme.color.textSubtle,
+            background: COUNTDOWN_TONE[countdown.tone],
+            padding: "2px 8px",
+            borderRadius: 999
           }}
-        />
-      ) : null}
+        >
+          ⏱ {countdown.text}
+        </span>
+      </div>
       <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4 }}>{night.title}</div>
       <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
         {formatNightDate(night.scheduledFor)}
@@ -1169,54 +1670,78 @@ function NightCard({
         style={{
           marginTop: 10,
           display: "flex",
-          gap: 6,
-          flexWrap: "wrap"
+          gap: 10,
+          flexWrap: "wrap",
+          alignItems: "center"
         }}
       >
         <Pill tone={night.currentUserAttending ? "success" : "muted"}>
-          {night.currentUserAttending ? "You're in" : "Not joined"}
+          {night.currentUserAttending ? "You're in" : "Open seats"}
         </Pill>
-        <Pill tone="muted">{night.attendeeCount} crew</Pill>
+        {pips ? <SeatPips pips={pips} accent={accent.accent} /> : <Pill tone="muted">{night.attendeeCount} crew</Pill>}
+        <AttendeeAvatars attendees={night.attendees} total={night.attendeeCount} hasGame={Boolean(night.selectedAppId)} />
       </div>
     </button>
   );
 }
 
-function AttendeeAvatars({ attendees, total }: { attendees: GameNight["attendees"]; total: number }) {
+function AttendeeAvatars({
+  attendees,
+  total,
+  hasGame = false
+}: {
+  attendees: GameNight["attendees"];
+  total: number;
+  hasGame?: boolean;
+}) {
   if (!attendees || attendees.length === 0) return null;
   const shown = attendees.slice(0, 8);
   const overflow = total - shown.length;
+  // Won't-run signal: when a game is locked, members who don't own it are faded
+  // and counted. Meaningless (and hidden) until a game is selected.
+  const missing = hasGame ? attendees.filter((a) => !a.ownsSelected).length : 0;
   return (
     <div style={{ display: "flex", alignItems: "center" }}>
-      {shown.map((a, i) => (
-        <span
-          key={`${a.displayName}-${i}`}
-          title={a.displayName}
-          style={{
-            width: 26,
-            height: 26,
-            borderRadius: 999,
-            marginLeft: i === 0 ? 0 : -8,
-            border: `2px solid ${islandTheme.color.panelBg}`,
-            background: a.avatarUrl ? `url("${a.avatarUrl}") center/cover` : islandTheme.color.panelMutedBg,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 11,
-            fontWeight: 800,
-            color: islandTheme.color.textSubtle,
-            flexShrink: 0
-          }}
-        >
-          {a.avatarUrl ? "" : (a.displayName || "?").trim().slice(0, 1).toUpperCase()}
-        </span>
-      ))}
+      {shown.map((a, i) => {
+        const dontOwn = hasGame && !a.ownsSelected;
+        return (
+          <span
+            key={`${a.displayName}-${i}`}
+            title={dontOwn ? `${a.displayName} — doesn't own this game` : a.displayName}
+            style={{
+              width: 26,
+              height: 26,
+              borderRadius: 999,
+              marginLeft: i === 0 ? 0 : -8,
+              border: `2px solid ${dontOwn ? islandTheme.color.dangerAccent : islandTheme.color.panelBg}`,
+              background: a.avatarUrl ? `url("${a.avatarUrl}") center/cover` : islandTheme.color.panelMutedBg,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 11,
+              fontWeight: 800,
+              color: islandTheme.color.textSubtle,
+              flexShrink: 0,
+              opacity: dontOwn ? 0.45 : 1,
+              filter: dontOwn ? "grayscale(1)" : "none"
+            }}
+          >
+            {a.avatarUrl ? "" : (a.displayName || "?").trim().slice(0, 1).toUpperCase()}
+          </span>
+        );
+      })}
       {overflow > 0 ? (
+        <span className="island-mono" style={{ marginLeft: 6, fontSize: 12, color: islandTheme.color.textMuted }}>
+          +{overflow}
+        </span>
+      ) : null}
+      {missing > 0 ? (
         <span
           className="island-mono"
-          style={{ marginLeft: 6, fontSize: 12, color: islandTheme.color.textMuted }}
+          style={{ marginLeft: 8, fontSize: 11, color: islandTheme.color.dangerSoft }}
+          title="Members who don't own the picked game"
         >
-          +{overflow}
+          {missing} can't run it
         </span>
       ) : null}
     </div>
@@ -1226,14 +1751,21 @@ function AttendeeAvatars({ attendees, total }: { attendees: GameNight["attendees
 function SelectedNightDetail({
   night,
   currentUserAttending,
+  crewGames,
   onJoin,
-  onLeave
+  onLeave,
+  onSetNightGame
 }: {
   night: GameNight;
   currentUserAttending: boolean;
+  crewGames: CrewOwnedGame[];
   onJoin: () => void;
   onLeave: () => void;
+  onSetNightGame: (nightId: number, appId: number | null) => void;
 }) {
+  const [swapping, setSwapping] = useState(false);
+  const [swapQuery, setSwapQuery] = useState("");
+  const accent = gameAccent(night.selectedTags);
   return (
     <IslandCard style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -1243,28 +1775,13 @@ function SelectedNightDetail({
         <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
           {formatNightDate(night.scheduledFor)}
         </span>
-        <button
-          type="button"
-          onClick={currentUserAttending ? onLeave : onJoin}
-          style={{
-            marginLeft: "auto",
-            background: currentUserAttending ? "transparent" : islandTheme.color.primary,
-            border: `1px solid ${currentUserAttending ? islandTheme.color.danger : islandTheme.color.primary}`,
-            color: currentUserAttending ? islandTheme.color.dangerText : islandTheme.color.primaryText,
-            padding: "7px 14px",
-            borderRadius: 999,
-            fontSize: 12,
-            fontWeight: 700,
-            cursor: "pointer",
-            font: "inherit"
-          }}
-        >
+        <button type="button" onClick={currentUserAttending ? onLeave : onJoin} style={{ marginLeft: "auto", ...rsvpBtnStyle(currentUserAttending) }}>
           {currentUserAttending ? "Leave" : "RSVP"}
         </button>
       </div>
       {night.selectedAppId ? (
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-          <GameCover
+          <LogoCover
             appId={night.selectedAppId}
             storedUrl={night.selectedGameImage}
             variant="capsule"
@@ -1273,7 +1790,7 @@ function SelectedNightDetail({
               width: 184,
               aspectRatio: "460 / 215",
               borderRadius: 10,
-              border: `1px solid ${islandTheme.color.cardBorder}`,
+              border: `1px solid ${accent.accent}`,
               flexShrink: 0
             }}
           />
@@ -1290,13 +1807,42 @@ function SelectedNightDetail({
                 ))}
               </div>
             ) : null}
+            {night.canManageGame ? (
+              <div style={{ display: "flex", gap: 8, marginTop: 2 }}>
+                <button type="button" onClick={() => setSwapping((v) => !v)} style={ghostBtnStyle()}>
+                  🔄 Swap game
+                </button>
+                <button type="button" onClick={() => onSetNightGame(night.id, null)} style={ghostBtnStyle()}>
+                  Clear
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
-        <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>Host hasn't locked a game yet.</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13, color: islandTheme.color.textMuted }}>Host hasn't locked a game yet.</span>
+          {night.canManageGame ? (
+            <button type="button" onClick={() => setSwapping((v) => !v)} style={ghostBtnStyle()}>
+              🎮 Pick a game
+            </button>
+          ) : null}
+        </div>
       )}
+      {swapping ? (
+        <LibraryResults
+          crewGames={crewGames}
+          query={swapQuery}
+          onQueryChange={setSwapQuery}
+          selectedAppId={night.selectedAppId}
+          onPick={(appId) => {
+            onSetNightGame(night.id, appId);
+            setSwapping(false);
+          }}
+        />
+      ) : null}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-        <AttendeeAvatars attendees={night.attendees} total={night.attendeeCount} />
+        <AttendeeAvatars attendees={night.attendees} total={night.attendeeCount} hasGame={Boolean(night.selectedAppId)} />
         <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
           {night.attendeeCount} attending
         </span>

@@ -39,6 +39,7 @@ export type GameModeFlags = {
 export type GameNightAttendeeAvatar = {
   displayName: string;
   avatarUrl: string | null;
+  ownsSelected: boolean;
 };
 
 export type GameNight = {
@@ -46,11 +47,14 @@ export type GameNight = {
   title: string;
   scheduledFor: string;
   createdByUserId: number;
+  canManageGame: boolean;
   selectedGameName: string | null;
   selectedAppId: number | null;
   selectedGameImage: string | null;
   selectedGameModes: GameModeFlags | null;
   selectedAt: string | null;
+  selectedMaxPlayers: number | null;
+  selectedTags: string[];
   attendeeCount: number;
   currentUserAttending: boolean;
   attendees: GameNightAttendeeAvatar[];

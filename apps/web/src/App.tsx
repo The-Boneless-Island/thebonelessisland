@@ -121,6 +121,8 @@ export function App() {
   const [crewWishlist, setCrewWishlist] = useState<CrewWishlistGame[]>([]);
   const [featuredRecommendation, setFeaturedRecommendation] = useState<FeaturedRecommendation | null>(null);
   const [composerRecommendations, setComposerRecommendations] = useState<Recommendation[]>([]);
+  const [draftAppId, setDraftAppId] = useState<number | null>(null);
+  const [lockNonce, setLockNonce] = useState(0);
   const [gameNews, setGameNews] = useState<GameNewsItem[]>([]);
   const [generalNews, setGeneralNews] = useState<GeneralNewsItem[]>([]);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
@@ -1449,6 +1451,7 @@ export function App() {
         body: JSON.stringify({
           title: newNightTitle,
           scheduledFor: iso,
+          selectedAppId: draftAppId,
           attendeeIds: selectedMemberIds.length ? selectedMemberIds : undefined
         })
       });
@@ -1460,9 +1463,29 @@ export function App() {
       if (data?.id) {
         await selectNight(data.id);
       }
+      setLockNonce((n) => n + 1);
       setStatus("Created game night");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Create game night failed");
+    }
+  }
+
+  async function setNightGame(nightId: number, appId: number | null) {
+    setStatus(appId === null ? "Clearing game..." : "Setting game...");
+    try {
+      const response = await apiFetch(`/game-nights/${nightId}/game`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ appId })
+      });
+      const data = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok) throw new Error(data?.error ?? `Set game failed (${response.status})`);
+      await loadGameNights();
+      if (selectedNightId === nightId) await loadAttendees(nightId);
+      setStatus(appId === null ? "Cleared game" : "Set game for night");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Set game failed");
     }
   }
 
@@ -1715,10 +1738,14 @@ export function App() {
           crewWishlist={crewWishlist}
           gameNews={gameNews}
           composerScrollNonce={composerScrollNonce}
+          draftAppId={draftAppId}
+          lockNonce={lockNonce}
           onSelectNight={(id, title) => void selectNight(id, title)}
           onNewNightTitleChange={setNewNightTitle}
           onNewNightScheduledForChange={setNewNightScheduledFor}
           onToggleSelectedMember={toggleSelectedMember}
+          onDraftAppIdChange={setDraftAppId}
+          onSetNightGame={(nightId, appId) => void setNightGame(nightId, appId)}
           onCreateGameNight={createGameNight}
           onJoinSelectedNight={joinSelectedNight}
           onLeaveSelectedNight={leaveSelectedNight}
