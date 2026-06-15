@@ -14,7 +14,7 @@
 # ── Stage 1: build the static bundle ────────────────────────────────────────
 # Node 22 LTS: required by rollup-plugin-visualizer (ANALYZE builds) and the
 # precompression plugins.
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 
