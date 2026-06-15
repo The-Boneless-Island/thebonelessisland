@@ -16,6 +16,10 @@
 # precompression plugins.
 FROM node:22-alpine AS build
 
+# Patch OS packages (e.g. libcrypto3/libssl3) to the latest alpine release so
+# the build stage doesn't carry known-fixed CVEs the base tag hasn't picked up.
+RUN apk upgrade --no-cache
+
 WORKDIR /app
 
 # Workspace manifests first for a cacheable install layer.
@@ -41,6 +45,10 @@ RUN npm run build -w @island/web
 
 # ── Stage 2: serve ──────────────────────────────────────────────────────────
 FROM caddy:2-alpine
+
+# Patch OS packages in the runtime image too (caddy:2-alpine ships its own
+# alpine base) so the public edge image stays CVE-clean.
+RUN apk upgrade --no-cache
 
 # Static build → Caddy web root.
 COPY --from=build /app/apps/web/dist /srv

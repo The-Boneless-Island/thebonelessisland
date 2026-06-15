@@ -41,6 +41,13 @@ updates:
       - "docker"
     commit-message:
       prefix: "chore(docker)"
+    ignore:
+      # Stay on a pinned LTS line for the Node base image. Patch/minor + digest
+      # updates still come through; major jumps (e.g. 22 -> 26) are opted out so
+      # production doesn't auto-move to a non-LTS Node. Bump the major by hand.
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
 
   # ── GitHub Actions used by the CI/deploy workflows ────────────────────────
   - package-ecosystem: "github-actions"

@@ -11,6 +11,10 @@
 
 FROM node:22-alpine
 
+# Patch OS packages (e.g. libcrypto3/libssl3) to the latest alpine release so
+# the image doesn't ship known-fixed CVEs the base tag hasn't picked up yet.
+RUN apk upgrade --no-cache
+
 # tini is a minimal init process that reaps zombies and forwards signals
 # correctly — Node alone misbehaves as PID 1 (Ctrl+C / SIGTERM gets ignored).
 RUN apk add --no-cache tini

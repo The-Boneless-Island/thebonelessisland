@@ -19,5 +19,8 @@
     "concurrently": "^10.0.3",
     "prettier": "^3.8.4",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "picomatch": "^4.0.4"
   }
 }
