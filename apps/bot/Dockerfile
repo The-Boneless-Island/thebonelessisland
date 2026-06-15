@@ -7,7 +7,7 @@
 # Run (the bot has no inbound listener — outbound only to Discord gateway):
 #   docker run -d --env-file .env boneless-bot:latest
 
-FROM node:20-alpine
+FROM node:26-alpine
 
 RUN apk add --no-cache tini
 
