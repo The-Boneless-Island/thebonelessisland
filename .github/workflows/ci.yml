@@ -44,6 +44,11 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          # npm ships bundled inside the node base image here and is never run
+          # at container runtime (CMD runs the app via tsx), so its bundled deps
+          # aren't part of the service's attack surface. Scope them out — the
+          # app's own node_modules and the OS layer are still scanned.
+          skip-dirs: usr/local/lib/node_modules/npm
 
       - name: Trivy scan — bot
         uses: aquasecurity/trivy-action@master
@@ -53,6 +58,11 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          # npm ships bundled inside the node base image here and is never run
+          # at container runtime (CMD runs the app via tsx), so its bundled deps
+          # aren't part of the service's attack surface. Scope them out — the
+          # app's own node_modules and the OS layer are still scanned.
+          skip-dirs: usr/local/lib/node_modules/npm
 
       - name: Trivy scan — web
         uses: aquasecurity/trivy-action@master
@@ -62,3 +72,8 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          # npm ships bundled inside the node base image here and is never run
+          # at container runtime (CMD runs the app via tsx), so its bundled deps
+          # aren't part of the service's attack surface. Scope them out — the
+          # app's own node_modules and the OS layer are still scanned.
+          skip-dirs: usr/local/lib/node_modules/npm
