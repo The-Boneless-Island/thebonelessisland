@@ -1,0 +1,46 @@
+/* design-sync tokens (gitignored build input — not app code).
+   The app injects --bi-* custom properties at runtime from theme.ts
+   (nightThemeVars / dayThemeVars). No stylesheet ships them, so previews
+   would render unstyled. This materializes the default NIGHT theme as :root
+   custom properties and loads the brand fonts the app serves from Google Fonts. */
+
+@import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* --- nightThemeVars (theme.ts, default surface theme) --- */
+  --bi-app-bg: rgba(10, 24, 44, 0.62);
+  --bi-panel-bg: rgba(15, 32, 54, 0.74);
+  --bi-menu-bg: rgba(10, 22, 40, 0.97);
+  --bi-panel-muted-bg: #0b1220;
+  --bi-text-primary: #e5e7eb;
+  --bi-text-secondary: #e2e8f0;
+  --bi-text-muted: #a3b2c7;
+  --bi-text-subtle: #cbd5e1;
+  --bi-text-inverted: #f8fafc;
+  --bi-border: #334155;
+  --bi-card-border: #253042;
+  --bi-primary: #2563eb;
+  --bi-primary-text: #eff6ff;
+  --bi-primary-strong: #3b82f6;
+  --bi-primary-glow: #60a5fa;
+  --bi-secondary: #1e293b;
+  --bi-info: #1e3a8a;
+  --bi-info-text: #dbeafe;
+  --bi-tool-accent: #22d3ee;
+}
+
+/* The app renders panels as translucent glass over an island scene canvas.
+   Approximate that backdrop so glass surfaces and borders read correctly in
+   isolated preview cards. */
+html,
+body {
+  margin: 0;
+}
+body {
+  background:
+    radial-gradient(1200px 600px at 20% -10%, #14365c 0%, transparent 55%),
+    linear-gradient(160deg, #081427 0%, #0e2c47 55%, #14506a 100%);
+  background-attachment: fixed;
+  color: var(--bi-text-primary);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+}

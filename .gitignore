@@ -14,3 +14,12 @@ infra/certs/
 
 # Forum image uploads — stored on the local volume, served at /uploads
 apps/api/data/
+# design-sync: regenerated build output + staged scripts + machine state
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+# NOTE: apps/web/.ds-entry.tsx and apps/web/.ds-tokens.css are committed sync
+# inputs (the scoped bundle entry + materialized tokens). They are .ds-* dotfiles
+# the app never imports; re-sync needs them, so they are NOT ignored.
