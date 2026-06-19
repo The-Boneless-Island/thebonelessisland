@@ -1,18 +1,39 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
+import { Link, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
-import { IslandCard, islandTagStyle } from "../islandUi.js";
+import { IslandCard, IslandSkeletonRow, accentHex, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
-import type { ActivityEvent, NuggiesLeaderboardEntry, PageId } from "../types.js";
+import { activityHref, pathForIslander } from "../lib/routes.js";
+import type { ActivityActor, ActivityEvent, GameNight, GuildMember, NuggiesLeaderboardEntry, PageId } from "../types.js";
 
 type CommunityPageProps = {
   isAdmin: boolean;
   activityEvents: ActivityEvent[];
+  guildMembers: GuildMember[];
+  gameNights: GameNight[];
   onNavigate: (page: PageId) => void;
+  openProfile: (discordUserId: string) => void;
 };
 
-export function CommunityPage({ isAdmin, activityEvents, onNavigate }: CommunityPageProps) {
+type ForumCategory = {
+  id: number;
+  slug: string;
+  name: string;
+  description: string;
+  accentColor: string;
+  threadCount: number;
+  lastActivity: {
+    threadId: number;
+    threadTitle: string | null;
+    at: string | null;
+    userDisplayName: string | null;
+  } | null;
+};
+
+function CommunityPageInner({ isAdmin, activityEvents, guildMembers, gameNights, onNavigate, openProfile }: CommunityPageProps) {
   const [nuggiesLeaderboard, setNuggiesLeaderboard] = useState<NuggiesLeaderboardEntry[]>([]);
+  const [forums, setForums] = useState<ForumCategory[] | null>(null);
 
   useEffect(() => {
     void apiFetch("/nuggies/leaderboard")
@@ -22,16 +43,27 @@ export function CommunityPage({ isAdmin, activityEvents, onNavigate }: Community
       });
   }, []);
 
+  useEffect(() => {
+    void apiFetch("/forums/categories")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { categories: ForumCategory[] } | null) => {
+        setForums(d?.categories ?? []);
+      })
+      .catch(() => setForums([]));
+  }, []);
+
   return (
     <div style={{ display: "grid", gap: 24 }}>
       <Hero />
-      <CrewCarousel isAdmin={isAdmin} onNavigate={onNavigate} />
-      <ClipsAndActivityRow events={activityEvents} />
-      <ForumsAndClubsRow />
-      <EventsAndLeaderboardsRow nuggiesLeaderboard={nuggiesLeaderboard} />
+      <CrewCarousel members={guildMembers} isAdmin={isAdmin} onNavigate={onNavigate} openProfile={openProfile} />
+      <ActivitySection events={activityEvents} />
+      <ForumsRow forums={forums} onNavigate={onNavigate} />
+      <EventsAndLeaderboardsRow gameNights={gameNights} nuggiesLeaderboard={nuggiesLeaderboard} onNavigate={onNavigate} />
     </div>
   );
 }
+
+export const CommunityPage = memo(CommunityPageInner);
 
 function Hero() {
   return (
@@ -39,7 +71,7 @@ function Hero() {
       <span
         className="island-mono"
         style={{
-          fontSize: 11,
+          fontSize: 12,
           textTransform: "uppercase",
           letterSpacing: "0.1em",
           color: islandTheme.color.textMuted
@@ -51,71 +83,94 @@ function Hero() {
         Community
       </h1>
       <p style={{ margin: 0, fontSize: 14, lineHeight: 1.5, color: islandTheme.color.textSubtle, maxWidth: 640 }}>
-        The crew, the clips, the threads, and the events. Everyone hanging out on the island, all in one place.
+        The crew, the threads, and the game nights. Everyone hanging out on the island, all in one place.
       </p>
     </header>
   );
 }
 
-type CrewCardData = {
-  name: string;
-  initials: string;
-  color: string;
-  status: "online" | "live" | "idle";
-  blurb: string;
-  presence: string;
-  banner: string;
-};
+function memberStatus(m: GuildMember): { label: string; color: string } {
+  if (m.inVoice) return { label: "live", color: islandTheme.color.dangerAccent };
+  if (m.presenceStatus === "online") return { label: "online", color: islandTheme.color.successAccent };
+  if (m.presenceStatus === "idle") return { label: "idle", color: islandTheme.palette.sandWarmAccent };
+  if (m.presenceStatus === "dnd") return { label: "dnd", color: islandTheme.color.dangerAccent };
+  return { label: "offline", color: islandTheme.color.textMuted };
+}
 
-const CREW_CARDS: CrewCardData[] = [
-  { name: "jkraken", initials: "JK", color: "#22d3ee", status: "online", blurb: "Captain · streams Fri", presence: "Cosmic Cruiser", banner: "linear-gradient(135deg,#1e3a8a,#0f172a)" },
-  { name: "aloha-pirate", initials: "AP", color: "#ef8354", status: "live", blurb: "Late-boat regular", presence: "Lethal Company", banner: "linear-gradient(135deg,#7c2d12,#1c1917)" },
-  { name: "palmwave", initials: "PW", color: "#86efac", status: "online", blurb: "Cozy crew", presence: "Stardew Valley", banner: "linear-gradient(135deg,#064e3b,#052e16)" },
-  { name: "LoreNugget", initials: "LN", color: "#a78bfa", status: "idle", blurb: "Forum lore-keeper", presence: "idle 2h", banner: "linear-gradient(135deg,#4c1d95,#1e1b4b)" },
-  { name: "ChefNugget", initials: "CN", color: "#fbbf24", status: "online", blurb: "Co-op cook", presence: "Chef's Kitchen", banner: "linear-gradient(135deg,#9a3412,#431407)" },
-  { name: "SpeedyNugget", initials: "SN", color: "#22d3ee", status: "live", blurb: "Speedrunner", presence: "Cosmic Cruiser", banner: "linear-gradient(135deg,#0c4a6e,#082f49)" },
-  { name: "ReefTroll", initials: "RT", color: "#94a3b8", status: "idle", blurb: "Salt veteran", presence: "idle 6h", banner: "linear-gradient(135deg,#1e293b,#0f172a)" },
-  { name: "dawson", initials: "DA", color: "#f4a261", status: "online", blurb: "Builder", presence: "Outer Wilds", banner: "linear-gradient(135deg,#312e81,#0c4a6e)" }
-];
+function memberPresenceText(m: GuildMember): string {
+  if (m.richPresenceText) return m.richPresenceText;
+  if (m.inVoice) return "In voice";
+  if (m.presenceStatus === "online") return "Online";
+  if (m.presenceStatus === "idle") return "Idle";
+  if (m.presenceStatus === "dnd") return "Do not disturb";
+  return "Offline";
+}
 
-function CrewCarousel({ isAdmin, onNavigate }: { isAdmin: boolean; onNavigate: (page: PageId) => void }) {
-  const onlineCount = CREW_CARDS.filter((c) => c.status !== "idle").length;
-  const liveCount = CREW_CARDS.filter((c) => c.status === "live").length;
+function CrewCarousel({
+  members,
+  isAdmin,
+  onNavigate,
+  openProfile
+}: {
+  members: GuildMember[];
+  isAdmin: boolean;
+  onNavigate: (page: PageId) => void;
+  openProfile: (discordUserId: string) => void;
+}) {
+  const onlineCount = members.filter(
+    (m) => m.inVoice || m.presenceStatus === "online" || m.presenceStatus === "idle" || m.presenceStatus === "dnd"
+  ).length;
+  const liveCount = members.filter((m) => m.inVoice).length;
   return (
     <section style={{ display: "grid", gap: 12 }}>
       <SectionHead
         title="The crew"
-        meta={`${CREW_CARDS.length} islanders · ${onlineCount} online · ${liveCount} streaming.`}
-        action="See all islanders →"
+        meta={`${members.length} islanders · ${onlineCount} online · ${liveCount} in voice.`}
       />
-      <div
-        style={{
-          display: "flex",
-          gap: 14,
-          overflowX: "auto",
-          paddingBottom: 8,
-          scrollbarWidth: "thin"
-        }}
-      >
-        {CREW_CARDS.map((c) => (
-          <CrewCard key={c.name} card={c} isAdmin={isAdmin} onNavigate={onNavigate} />
-        ))}
-      </div>
+      {members.length === 0 ? (
+        <IslandCard style={{ padding: "16px 14px", textAlign: "center", fontSize: 13, color: islandTheme.color.textMuted }}>
+          No islanders synced yet.
+        </IslandCard>
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            overflowX: "auto",
+            paddingBottom: 8,
+            scrollbarWidth: "thin"
+          }}
+        >
+          {members.map((m) => (
+            <CrewCard key={m.discordUserId} member={m} isAdmin={isAdmin} onNavigate={onNavigate} openProfile={openProfile} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
 
 function CrewCard({
-  card,
+  member,
   isAdmin,
-  onNavigate
+  onNavigate,
+  openProfile
 }: {
-  card: CrewCardData;
+  member: GuildMember;
   isAdmin: boolean;
   onNavigate: (page: PageId) => void;
+  openProfile: (discordUserId: string) => void;
 }) {
-  const statusColor =
-    card.status === "online" ? islandTheme.color.successAccent : card.status === "live" ? islandTheme.color.dangerAccent : islandTheme.color.textMuted;
+  const status = memberStatus(member);
+  const color = communityColorFor(member.discordUserId);
+  // Real Discord banner > accent-color gradient > hashed-color gradient. The
+  // banner makes member cards personal instead of eight identical tints.
+  const accent = accentHex(member.accentColor);
+  const bannerBackground = member.bannerUrl
+    ? `url("${member.bannerUrl}") center/cover`
+    : accent
+      ? `linear-gradient(135deg, ${accent}88, ${islandTheme.color.panelMutedBg})`
+      : `linear-gradient(135deg, ${color}55, ${islandTheme.color.panelMutedBg})`;
   return (
     <article
       style={{
@@ -130,46 +185,61 @@ function CrewCard({
         border: `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
-      <div style={{ height: 90, background: card.banner, position: "relative" }}>
+      <div style={{ height: 90, background: bannerBackground, position: "relative" }}>
         <span
           className="island-mono"
           style={{
-            ...islandTagStyle({ color: statusColor }),
+            ...islandTagStyle({ color: status.color }),
             position: "absolute",
             top: 8,
             right: 8,
             gap: 4
           }}
         >
-          <span style={{ width: 6, height: 6, borderRadius: 999, background: statusColor }} />
-          {card.status}
+          <span style={{ width: 6, height: 6, borderRadius: 999, background: status.color }} />
+          {status.label}
         </span>
       </div>
       <div style={{ padding: "0 14px 14px", marginTop: -28, position: "relative" }}>
-        <div
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: 999,
-            background: card.color,
-            border: `3px solid ${islandTheme.color.panelMutedBg}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontWeight: 800,
-            color: islandTheme.color.textInverted,
-            fontSize: 18
-          }}
-        >
-          {card.initials}
-        </div>
-        <div style={{ fontWeight: 700, marginTop: 8 }}>{card.name}</div>
-        <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>{card.blurb}</div>
+        {member.avatarUrl ? (
+          <img
+            src={member.avatarUrl}
+            alt=""
+            width={56}
+            height={56}
+            style={{
+              borderRadius: 999,
+              border: `3px solid ${islandTheme.color.panelMutedBg}`,
+              objectFit: "cover",
+              display: "block"
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: 999,
+              background: color,
+              border: `3px solid ${islandTheme.color.panelMutedBg}`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 800,
+              color: islandTheme.color.textInverted,
+              fontSize: 18
+            }}
+          >
+            {communityInitialsFor(member.displayName)}
+          </div>
+        )}
+        <div style={{ fontWeight: 700, marginTop: 8 }}>{member.displayName}</div>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>@{member.username}</div>
         <div
           className="island-mono"
-          style={{ fontSize: 11, color: islandTheme.color.primaryGlow, marginTop: 4 }}
+          style={{ fontSize: 12, color: islandTheme.color.primaryGlow, marginTop: 4 }}
         >
-          {card.presence}
+          {memberPresenceText(member)}
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
           {isAdmin ? (
@@ -184,7 +254,7 @@ function CrewCard({
                 color: islandTheme.color.textSubtle,
                 padding: "5px 8px",
                 borderRadius: 999,
-                fontSize: 10,
+                fontSize: 12,
                 fontWeight: 700,
                 cursor: "pointer",
                 display: "flex",
@@ -199,9 +269,9 @@ function CrewCard({
                   width: 12,
                   height: 12,
                   borderRadius: 999,
-                  background: "linear-gradient(135deg,#f59e0b,#d97706)",
+                  background: islandTheme.gradient.crownAmber,
                   color: islandTheme.color.textDark,
-                  fontSize: 9,
+                  fontSize: 12,
                   fontWeight: 900,
                   display: "inline-flex",
                   alignItems: "center",
@@ -216,14 +286,15 @@ function CrewCard({
           <button
             type="button"
             className="island-btn"
+            onClick={() => openProfile(member.discordUserId)}
             style={{
               flex: 1,
-              background: islandTheme.color.primary,
-              border: `1px solid ${islandTheme.color.primary}`,
-              color: islandTheme.color.primaryText,
+              background: islandTheme.color.panelMutedBg,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              color: islandTheme.color.textSubtle,
               padding: "5px 8px",
               borderRadius: 999,
-              fontSize: 10,
+              fontSize: 12,
               fontWeight: 700,
               cursor: "pointer",
               font: "inherit"
@@ -237,14 +308,7 @@ function CrewCard({
   );
 }
 
-const CLIPS = [
-  { title: "kraken bossfight, no deaths", author: "@jkraken", duration: "2:14", art: "🐙", cover: "linear-gradient(135deg,#1e3a8a,#0f172a)" },
-  { title: "helix-IV in 47 seconds", author: "@SpeedyNugget", duration: "0:47", art: "🚀", cover: "linear-gradient(135deg,#0c4a6e,#082f49)" },
-  { title: "kitchen meltdown lvl 9", author: "@ChefNugget", duration: "1:32", art: "🍳", cover: "linear-gradient(135deg,#7c2d12,#431407)" },
-  { title: "V60 moon, full team wipe", author: "@aloha-pirate", duration: "3:08", art: "👻", cover: "linear-gradient(135deg,#064e3b,#052e16)" }
-];
-
-const COMMUNITY_ACTOR_COLORS = ["#22d3ee", "#a855f7", "#f4a261", "#86efac", "#fbbf77", "#ef8354", "#4ade80", "#60a5fa"];
+const COMMUNITY_ACTOR_COLORS = islandTheme.categorical.avatars;
 
 function communityColorFor(id: string | null | undefined): string {
   if (!id) return COMMUNITY_ACTOR_COLORS[0];
@@ -279,6 +343,19 @@ function communityRelativeAgo(iso: string): string {
 
 type CommunityActivityCopy = { action: string; target: string; detail: string };
 
+function communityCasinoLabel(game: string): string {
+  switch (game) {
+    case "coinflip":
+      return "Coinflip";
+    case "blackjack":
+      return "Blackjack";
+    case "guessnumber":
+      return "Guess the Number";
+    default:
+      return game;
+  }
+}
+
 function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
   const payload = event.payload as Record<string, unknown>;
   const gameName = event.game?.name ?? null;
@@ -295,6 +372,15 @@ function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
       return { action: "stepped away from", target: "the next game night", detail: "Off the dock for now" };
     case "game_night.game_picked":
       return { action: "picked", target: gameName ?? "a game", detail: "Locked in for the next session" };
+    case "achievement.steam_progress": {
+      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
+      const game = typeof payload.gameName === "string" ? payload.gameName : gameName ?? "a game";
+      return {
+        action: "unlocked",
+        target: `${delta} achievement${delta === 1 ? "" : "s"} in ${game}`,
+        detail: "Steam progress on the island"
+      };
+    }
     case "steam.linked":
       return { action: "linked", target: "their Steam account", detail: "Library now visible to the crew" };
     case "steam.unlinked":
@@ -307,218 +393,216 @@ function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
         detail: `${synced} game${synced === 1 ? "" : "s"} on the boat`
       };
     }
+    case "forum_thread_created":
+      return {
+        action: "started",
+        target: typeof payload.title === "string" ? payload.title : "a new thread",
+        detail: "New forum thread"
+      };
+    case "forum_reply_created":
+      return {
+        action: "replied to",
+        target: typeof payload.threadTitle === "string" ? payload.threadTitle : "a thread",
+        detail: "Forum reply"
+      };
+    case "news.card_published":
+      return {
+        action: "posted",
+        target: typeof payload.title === "string" ? payload.title : "an update",
+        detail: "Drift log"
+      };
+    case "forum.reactions_milestone": {
+      const count = typeof payload.count === "number" ? payload.count : 0;
+      return {
+        action: "earned",
+        target: `${count} reactions`,
+        detail: typeof payload.threadTitle === "string" ? payload.threadTitle : "A popular post"
+      };
+    }
+    case "member.joined":
+      return { action: "joined", target: "the crew", detail: "New islander 🌴 — welcome aboard" };
+    case "nuggies.daily_claimed": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      return { action: "claimed their daily", target: `₦${amount.toLocaleString()}`, detail: "Daily Nuggies" };
+    }
+    case "casino.big_win": {
+      const net = typeof payload.net === "number" ? payload.net : 0;
+      const g = typeof payload.game === "string" ? payload.game : "the casino";
+      return { action: "won big at", target: communityCasinoLabel(g), detail: `+₦${net.toLocaleString()}` };
+    }
+    case "nuggies.loan_accepted": {
+      const principal = typeof payload.principal === "number" ? payload.principal : 0;
+      return { action: "took a loan of", target: `₦${principal.toLocaleString()}`, detail: "Loan accepted" };
+    }
+    case "nuggies.loan_repaid": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      return { action: "repaid", target: `₦${amount.toLocaleString()}`, detail: "Loan repaid" };
+    }
     default:
       return { action: "fired", target: event.eventType, detail: "Crew activity" };
   }
 }
 
-function ClipsAndActivityRow({ events }: { events: ActivityEvent[] }) {
+function ActivitySection({ events }: { events: ActivityEvent[] }) {
   return (
-    <section
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1.6fr) minmax(0, 1fr)",
-        gap: 16
-      }}
-    >
-      <div>
-        <SectionHead title="Recent clips & captures" meta="Crew highlights from this week." action="Open gallery →" />
-        <div
-          style={{
-            marginTop: 12,
-            display: "grid",
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-            gap: 14
-          }}
-        >
-          {CLIPS.map((c) => (
-            <ClipCard key={c.title} clip={c} />
-          ))}
+    <section>
+      <SectionHead title="Activity feed" meta="What the crew is up to." />
+      <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
+        <div style={{ maxHeight: 400, overflowY: "auto" }}>
+          {events.length === 0 ? (
+            <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+              No island activity yet.
+            </div>
+          ) : (
+            events.slice(0, 20).map((event, i) => (
+              <ActivityRow key={event.id} event={event} firstRow={i === 0} />
+            ))
+          )}
         </div>
-      </div>
-      <div>
-        <SectionHead title="Activity feed" meta="What the crew is up to." />
-        <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
-          <div style={{ maxHeight: 400, overflowY: "auto" }}>
-            {events.length === 0 ? (
-              <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-                No island activity yet.
-              </div>
-            ) : (
-              events.slice(0, 20).map((event, i) => (
-                <ActivityRow key={event.id} event={event} firstRow={i === 0} />
-              ))
-            )}
-          </div>
-        </IslandCard>
-      </div>
+      </IslandCard>
     </section>
   );
 }
 
-function ClipCard({ clip }: { clip: (typeof CLIPS)[number] }) {
+function CommunityActorName({ actor }: { actor: ActivityActor | null }) {
+  const name = actor?.displayName ?? "A crew member";
+  if (!actor?.discordUserId) return <strong>{name}</strong>;
   return (
-    <article
-      style={{
-        padding: 0,
-        overflow: "hidden",
-        borderRadius: 14,
-        background: islandTheme.color.panelBg,
-        backdropFilter: islandTheme.glass.blur,
-        WebkitBackdropFilter: islandTheme.glass.blur,
-        border: `1px solid ${islandTheme.color.cardBorder}`
-      }}
+    <Link
+      to={pathForIslander(actor.discordUserId)}
+      onClick={(e) => e.stopPropagation()}
+      style={{ fontWeight: 700, color: "inherit", textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
     >
-      <div
-        style={{
-          height: 130,
-          background: clip.cover,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          position: "relative",
-          fontSize: 42
-        }}
-      >
-        {clip.art}
-        <span
-          className="island-mono"
-          style={{
-            position: "absolute",
-            bottom: 8,
-            left: 8,
-            background: "rgba(0,0,0,0.7)",
-            color: islandTheme.color.textInverted,
-            fontSize: 10,
-            padding: "2px 6px",
-            borderRadius: islandTheme.radius.control
-          }}
-        >
-          {clip.duration}
-        </span>
-        <span
-          style={{
-            position: "absolute",
-            top: 8,
-            right: 8,
-            width: 28,
-            height: 28,
-            borderRadius: 999,
-            background: "rgba(0,0,0,0.6)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: islandTheme.color.textInverted,
-            fontSize: 14
-          }}
-        >
-          ▶
-        </span>
-      </div>
-      <div style={{ padding: "10px 12px" }}>
-        <div style={{ fontWeight: 700, fontSize: 13 }}>{clip.title}</div>
-        <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>{clip.author}</div>
-      </div>
-    </article>
+      {name}
+    </Link>
   );
 }
 
 function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: boolean }) {
+  const navigate = useNavigate();
   const copy = describeCommunityEvent(event);
   const actorName = event.actor?.displayName ?? "A crew member";
+  const actorId = event.actor?.discordUserId ?? null;
   const avatar = event.actor?.avatarUrl ?? null;
   const ago = communityRelativeAgo(event.createdAt);
+  const href = activityHref(event);
+  const avatarCircle = (
+    <div
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: 999,
+        background: avatar
+          ? `center / cover no-repeat url(${JSON.stringify(avatar)})`
+          : communityColorFor(actorId),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontWeight: 800,
+        color: islandTheme.color.textInverted,
+        fontSize: 12
+      }}
+    >
+      {avatar ? null : communityInitialsFor(actorName)}
+    </div>
+  );
   return (
     <div
+      onClick={href ? () => navigate(href) : undefined}
+      role={href ? "link" : undefined}
+      tabIndex={href ? 0 : undefined}
+      aria-label={href ? "View details for this activity" : undefined}
+      onKeyDown={
+        href
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                navigate(href);
+              }
+            }
+          : undefined
+      }
+      onMouseEnter={href ? (e) => (e.currentTarget.style.background = islandTheme.color.panelMutedBg) : undefined}
+      onMouseLeave={href ? (e) => (e.currentTarget.style.background = "transparent") : undefined}
       style={{
         display: "grid",
         gridTemplateColumns: "36px 1fr auto",
         gap: 12,
         padding: "14px 16px",
         alignItems: "center",
-        borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`
+        borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
+        cursor: href ? "pointer" : "default",
+        background: "transparent",
+        transition: "background 140ms ease"
       }}
     >
-      <div
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 999,
-          background: avatar
-            ? `center / cover no-repeat url(${JSON.stringify(avatar)})`
-            : communityColorFor(event.actor?.discordUserId ?? null),
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontWeight: 800,
-          color: islandTheme.color.textInverted,
-          fontSize: 12
-        }}
-      >
-        {avatar ? null : communityInitialsFor(actorName)}
-      </div>
+      {actorId ? (
+        <Link
+          to={pathForIslander(actorId)}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`${actorName} profile`}
+          style={{ display: "block", borderRadius: 999, textDecoration: "none" }}
+        >
+          {avatarCircle}
+        </Link>
+      ) : (
+        avatarCircle
+      )}
       <div>
         <div style={{ fontSize: 14 }}>
-          <strong>{actorName}</strong> {copy.action} <strong>{copy.target}</strong>
+          <CommunityActorName actor={event.actor} /> {copy.action} <strong>{copy.target}</strong>
         </div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>{copy.detail}</div>
       </div>
-      <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+      <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
         {ago}
       </div>
     </div>
   );
 }
 
-const FORUMS = [
-  { tag: "#general", desc: "Island chatter, what's everyone up to", color: "#22d3ee", count: 418 },
-  { tag: "#strategies", desc: "Builds, tips, dirty tricks", color: "#fbbf24", count: 212 },
-  { tag: "#stories", desc: "Lore, recap threads, screenshots", color: "#a78bfa", count: 174 },
-  { tag: "#late-boat", desc: "After-hours weirdness", color: "#ef4444", count: 89 },
-  { tag: "#cozy", desc: "Stardew, Dorfromantik, vibes", color: "#86efac", count: 103 },
-  { tag: "#tech", desc: "Setups, mods, troubleshooting", color: "#94a3b8", count: 67 }
-];
-
-const CLUBS = [
-  { name: "Reef Raiders", blurb: "Deep Sea Dunkers · Sweats", icon: "🌊", color: "#22d3ee", members: 12 },
-  { name: "Cozy Coconuts", blurb: "Cozy games · Sun nights", icon: "🥥", color: "#86efac", members: 8 },
-  { name: "Late Boat Club", blurb: "Horror co-op · Sat 11pm", icon: "⚓", color: "#ef4444", members: 6 }
-];
-
-function ForumsAndClubsRow() {
+function ForumsRow({ forums, onNavigate }: { forums: ForumCategory[] | null; onNavigate: (page: PageId) => void }) {
+  const threadTotal = forums ? forums.reduce((sum, f) => sum + f.threadCount, 0) : 0;
+  const meta =
+    forums === null
+      ? "Loading channels…"
+      : `${forums.length} channel${forums.length === 1 ? "" : "s"}, ${threadTotal} thread${threadTotal === 1 ? "" : "s"} on the island.`;
   return (
-    <section
-      style={{
-        display: "grid",
-        gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)",
-        gap: 16
-      }}
-    >
-      <div>
-        <SectionHead title="Forums · ~ island chatter" meta="6 channels, 1,063 threads, somehow always something new." action="Open all →" />
-        <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
-          {FORUMS.map((f, i) => (
-            <ForumRow key={f.tag} entry={f} firstRow={i === 0} />
-          ))}
-        </IslandCard>
-      </div>
-      <div>
-        <SectionHead title="Clubs" meta="Tighter crews inside the crew." action="All clubs →" />
-        <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-          {CLUBS.map((c) => (
-            <ClubCard key={c.name} club={c} />
-          ))}
-        </div>
-      </div>
+    <section>
+      <SectionHead title="Forums · ~ island chatter" meta={meta} action="Open all →" onAction={() => onNavigate("community-forums")} />
+      <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
+        {forums === null ? (
+          <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+            Loading channels…
+          </div>
+        ) : forums.length === 0 ? (
+          <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+            No forum channels yet.
+          </div>
+        ) : (
+          forums.map((f, i) => (
+            <ForumRow key={f.id} entry={f} firstRow={i === 0} onOpen={() => onNavigate("community-forums")} />
+          ))
+        )}
+      </IslandCard>
     </section>
   );
 }
 
-function ForumRow({ entry, firstRow }: { entry: (typeof FORUMS)[number]; firstRow: boolean }) {
+function ForumRow({ entry, firstRow, onOpen }: { entry: ForumCategory; firstRow: boolean; onOpen: () => void }) {
+  const accent = entry.accentColor || islandTheme.color.primaryGlow;
+  const lastBits = entry.lastActivity
+    ? [entry.lastActivity.userDisplayName, entry.lastActivity.at ? communityRelativeAgo(entry.lastActivity.at) : null]
+        .filter(Boolean)
+        .join(" · ")
+    : null;
   return (
     <button
       type="button"
       className="island-btn"
+      onClick={onOpen}
       style={{
         display: "grid",
         gridTemplateColumns: "36px 1fr auto",
@@ -540,82 +624,51 @@ function ForumRow({ entry, firstRow }: { entry: (typeof FORUMS)[number]; firstRo
           width: 36,
           height: 36,
           borderRadius: 8,
-          background: `${entry.color}33`,
+          background: `${accent}33`,
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           fontWeight: 800,
-          color: entry.color,
+          color: accent,
           fontSize: 14
         }}
       >
         #
       </div>
       <div>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>{entry.tag}</div>
-        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>{entry.desc}</div>
+        <div style={{ fontWeight: 700, fontSize: 14 }}>{entry.name}</div>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
+          {entry.lastActivity?.threadTitle ?? entry.description ?? "No threads yet"}
+        </div>
+        {lastBits ? (
+          <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
+            {lastBits}
+          </div>
+        ) : null}
       </div>
-      <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-        {entry.count} threads
+      <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+        {entry.threadCount} thread{entry.threadCount === 1 ? "" : "s"}
       </span>
     </button>
   );
 }
 
-function ClubCard({ club }: { club: (typeof CLUBS)[number] }) {
-  return (
-    <article
-      style={{
-        padding: 16,
-        borderRadius: 14,
-        background: islandTheme.color.panelBg,
-        backdropFilter: islandTheme.glass.blur,
-        WebkitBackdropFilter: islandTheme.glass.blur,
-        border: `1px solid ${islandTheme.color.cardBorder}`,
-        display: "flex",
-        flexDirection: "column",
-        gap: 10
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 10,
-            background: `${club.color}33`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 22
-          }}
-        >
-          {club.icon}
-        </div>
-        <div>
-          <div className="island-display" style={{ fontWeight: 800, fontSize: 15 }}>
-            {club.name}
-          </div>
-          <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>{club.blurb}</div>
-        </div>
-      </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 12 }}>
-        <div style={{ color: islandTheme.color.textMuted }}>{club.members} members</div>
-        <a href="#" onClick={(e) => e.preventDefault()} style={{ color: islandTheme.color.primaryGlow, fontWeight: 600, textDecoration: "none" }}>
-          View →
-        </a>
-      </div>
-    </article>
-  );
-}
-
-const EVENTS = [
-  { month: "MAY", day: "03", title: "Beach BBQ Tournament", detail: "Deep Sea Dunkers · 4v4 · $500 prize pool", count: "14 signed up" },
-  { month: "MAY", day: "10", title: "Speedrun Sunday", detail: "Cosmic Cruiser · Helix-IV any%", count: "8 signed up" },
-  { month: "MAY", day: "17", title: "Cozy Game Jam Watch Party", detail: "Stream + chat · 7pm", count: "22 going" }
-];
-
-function EventsAndLeaderboardsRow({ nuggiesLeaderboard }: { nuggiesLeaderboard: NuggiesLeaderboardEntry[] }) {
+function EventsAndLeaderboardsRow({
+  gameNights,
+  nuggiesLeaderboard,
+  onNavigate
+}: {
+  gameNights: GameNight[];
+  nuggiesLeaderboard: NuggiesLeaderboardEntry[];
+  onNavigate: (page: PageId) => void;
+}) {
+  const upcoming = [...gameNights]
+    .filter((n) => {
+      const t = new Date(n.scheduledFor).getTime();
+      return !Number.isFinite(t) || t >= Date.now() - 6 * 60 * 60 * 1000;
+    })
+    .sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime())
+    .slice(0, 5);
   return (
     <section
       style={{
@@ -625,19 +678,25 @@ function EventsAndLeaderboardsRow({ nuggiesLeaderboard }: { nuggiesLeaderboard: 
       }}
     >
       <div>
-        <SectionHead title="Upcoming events" meta="Tournaments, watch parties, jams." action="Calendar →" />
+        <SectionHead title="Upcoming game nights" meta="Sessions on the calendar." action="Games →" onAction={() => onNavigate("games")} />
         <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
-          {EVENTS.map((e, i) => (
-            <EventRow key={e.day + e.title} entry={e} firstRow={i === 0} />
-          ))}
+          {upcoming.length === 0 ? (
+            <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
+              No game nights scheduled yet.
+            </div>
+          ) : (
+            upcoming.map((night, i) => <EventRow key={night.id} night={night} firstRow={i === 0} />)
+          )}
         </IslandCard>
       </div>
       <div>
-        <SectionHead title="Nuggies · top islanders" meta="Most Nuggies earned on the island." action="Full leaderboard →" />
+        <SectionHead title="Nuggies · top islanders" meta="Most Nuggies earned on the island." action="Full leaderboard →" onAction={() => onNavigate("community-leaderboard")} />
         <IslandCard style={{ padding: 0, overflow: "hidden", marginTop: 12 }}>
           {nuggiesLeaderboard.length === 0 ? (
-            <div style={{ padding: "16px 14px", fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-              Leaderboard loading…
+            <div style={{ display: "grid", gap: 12, padding: "14px 16px" }} aria-busy="true" aria-label="Loading leaderboard">
+              <IslandSkeletonRow />
+              <IslandSkeletonRow />
+              <IslandSkeletonRow />
             </div>
           ) : (
             nuggiesLeaderboard.map((entry, i) => (
@@ -650,7 +709,27 @@ function EventsAndLeaderboardsRow({ nuggiesLeaderboard }: { nuggiesLeaderboard: 
   );
 }
 
-function EventRow({ entry, firstRow }: { entry: (typeof EVENTS)[number]; firstRow: boolean }) {
+function nightDateTile(iso: string): { month: string; day: string } {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { month: "TBD", day: "--" };
+  return {
+    month: d.toLocaleString([], { month: "short" }).toUpperCase(),
+    day: d.toLocaleString([], { day: "2-digit" })
+  };
+}
+
+function nightTimeLabel(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Time TBD";
+  return d.toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+function EventRow({ night, firstRow }: { night: GameNight; firstRow: boolean }) {
+  const tile = nightDateTile(night.scheduledFor);
+  const detail = night.selectedGameName
+    ? `${nightTimeLabel(night.scheduledFor)} · ${night.selectedGameName}`
+    : `${nightTimeLabel(night.scheduledFor)} · Host hasn't picked yet`;
+  const attending = night.currentUserAttending;
   return (
     <div
       style={{
@@ -674,41 +753,33 @@ function EventRow({ entry, firstRow }: { entry: (typeof EVENTS)[number]; firstRo
         <div
           className="island-mono"
           style={{
-            fontSize: 9,
+            fontSize: 12,
             color: islandTheme.palette.sandWarmAccent,
             letterSpacing: "0.1em"
           }}
         >
-          {entry.month}
+          {tile.month}
         </div>
         <div className="island-display" style={{ fontWeight: 800, fontSize: 18 }}>
-          {entry.day}
+          {tile.day}
         </div>
       </div>
       <div>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>{entry.title}</div>
-        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>{entry.detail}</div>
-        <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.primaryGlow, marginTop: 4 }}>
-          {entry.count}
+        <div style={{ fontWeight: 700, fontSize: 14 }}>{night.title}</div>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>{detail}</div>
+        <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.primaryGlow, marginTop: 4 }}>
+          {night.attendeeCount} crew {night.attendeeCount === 1 ? "is" : "are"} in
         </div>
       </div>
-      <button
-        type="button"
-        className="island-btn"
+      <span
+        className="island-mono"
         style={{
-          background: islandTheme.color.primary,
-          border: `1px solid ${islandTheme.color.primary}`,
-          color: islandTheme.color.primaryText,
-          fontSize: 11,
-          padding: "6px 12px",
-          borderRadius: 999,
-          fontWeight: 700,
-          cursor: "pointer",
-          font: "inherit"
+          ...islandTagStyle({ color: attending ? islandTheme.color.successAccent : islandTheme.color.textMuted }),
+          fontSize: 12
         }}
       >
-        RSVP
-      </button>
+        {attending ? "You're in" : "Not joined"}
+      </span>
     </div>
   );
 }
@@ -775,7 +846,7 @@ function NuggiesLeaderRow({ entry, firstRow }: { entry: NuggiesLeaderboardEntry;
   );
 }
 
-function SectionHead({ title, meta, action }: { title: string; meta: string; action?: string }) {
+function SectionHead({ title, meta, action, onAction }: { title: string; meta: string; action?: string; onAction?: () => void }) {
   return (
     <div
       style={{
@@ -794,7 +865,7 @@ function SectionHead({ title, meta, action }: { title: string; meta: string; act
           className="island-mono"
           style={{
             marginTop: 4,
-            fontSize: 11,
+            fontSize: 12,
             color: islandTheme.color.textMuted,
             textTransform: "uppercase",
             letterSpacing: "0.06em"
@@ -804,18 +875,22 @@ function SectionHead({ title, meta, action }: { title: string; meta: string; act
         </div>
       </div>
       {action ? (
-        <a
-          href="#"
-          onClick={(e) => e.preventDefault()}
+        <button
+          type="button"
+          onClick={() => onAction?.()}
           style={{
+            background: "transparent",
+            border: "none",
+            padding: 0,
             color: islandTheme.color.primaryGlow,
             fontSize: 13,
             fontWeight: 600,
-            textDecoration: "none"
+            cursor: onAction ? "pointer" : "default",
+            font: "inherit"
           }}
         >
           {action}
-        </a>
+        </button>
       ) : null}
     </div>
   );

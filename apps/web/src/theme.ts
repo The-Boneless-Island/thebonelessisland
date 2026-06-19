@@ -26,13 +26,40 @@ export const islandTheme = {
     success: "#14532d",
     successText: "#dcfce7",
     successAccent: "#22c55e",
+    // Soft on-dark text variants for inline status copy (readable on panelBg
+    // where successAccent/dangerAccent are too saturated for body-size text).
+    successSoft: "#86efac",
+    dangerSoft: "#fca5a5",
     warnAccent: "#f59e0b",
+    // The Nuggies brand gold — balances, claim CTAs, trending highlights.
+    nuggieGold: "#fbbf77",
+    // "Earned/unlocked" lime — achievement chips.
+    limeEarned: "#a3e635",
+    // Game-night vote feedback (theme-static, identifies actions not surfaces).
+    voteUp: "#38bdf8",
+    voteDown: "#f87171",
+    voteMaybe: "#facc15",
     textDark: "#0f172a"
   },
+  // Semantic type scale (px). Use instead of inline fontSize literals so
+  // hierarchy stays consistent and globally tunable.
+  text: {
+    xs: 11,
+    sm: 12,
+    md: 13,
+    base: 14,
+    lg: 16,
+    xl: 20,
+    h2: 22,
+    display: "clamp(28px, 4vw, 38px)"
+  },
+  // 4px-base spacing scale. space[1]=4 … space[6]=32.
+  space: [0, 4, 8, 12, 16, 24, 32],
   radius: {
     control: 10,
     card: 12,
-    surface: 14
+    surface: 14,
+    chip: 6
   },
   spacing: {
     cardPadding: "0.95rem",
@@ -57,14 +84,29 @@ export const islandTheme = {
   gradient: {
     gameNightTile: "linear-gradient(160deg, rgba(7,15,35,0.45), rgba(10,18,30,0.8))",
     toolsTile: "linear-gradient(160deg, rgba(7,15,35,0.45), rgba(10,18,30,0.82))",
-    comingSoonTile: "linear-gradient(160deg, #0b1220, #0f172a)"
+    comingSoonTile: "linear-gradient(160deg, #0b1220, #0f172a)",
+    gameArtFallback: "linear-gradient(140deg, #0b1220, #132640)",
+    crownAmber: "linear-gradient(135deg, #f59e0b, #d97706)",
+    nuggieCoin: "linear-gradient(135deg, #fbbf77, #ef8354)",
+    progressDone: "linear-gradient(90deg, #16a34a, #4ade80)",
+    progressActive: "linear-gradient(90deg, #0369a1, #38bdf8)"
   },
   shadow: {
     tileIdle: "0 4px 14px rgba(2,6,23,0.45)",
     tileComingSoon: "0 4px 14px rgba(2,6,23,0.35)",
     tileGameNightHover: "0 0 0 1px #60a5fa, 0 0 24px rgba(96,165,250,0.55)",
     tileToolsHover: "0 0 0 1px #22d3ee, 0 0 24px rgba(34,211,238,0.55)",
-    toast: "0 8px 24px rgba(2, 6, 23, 0.42)"
+    toast: "0 8px 24px rgba(2, 6, 23, 0.42)",
+    cardIdle: "0 6px 16px rgba(2,6,23,0.28)",
+    cardHover: "0 12px 32px rgba(0,0,0,0.28)",
+    cardHoverStrong: "0 20px 45px rgba(0,0,0,0.35)",
+    bladeHover: "0 0 0 1px rgba(96,165,250,0.6), 0 10px 24px rgba(10,20,45,0.5)",
+    menu: "0 20px 48px rgba(0,0,0,0.45)"
+  },
+  // Theme-static categorical palettes. These deliberately do not flip with
+  // day/night — they identify entities (people, tags), not surfaces.
+  categorical: {
+    avatars: ["#fbbf77", "#22d3ee", "#a855f7", "#4ade80", "#ef8354", "#86efac", "#facc15", "#60a5fa"]
   },
   motion: {
     dur: {
@@ -147,7 +189,7 @@ export const nightThemeVars: ThemeColorVars = {
   "--bi-panel-muted-bg": "#0b1220",
   "--bi-text-primary": "#e5e7eb",
   "--bi-text-secondary": "#e2e8f0",
-  "--bi-text-muted": "#94a3b8",
+  "--bi-text-muted": "#a3b2c7",
   "--bi-text-subtle": "#cbd5e1",
   "--bi-text-inverted": "#f8fafc",
   "--bi-border": "#334155",
@@ -169,7 +211,7 @@ export const dayThemeVars: ThemeColorVars = {
   "--bi-panel-muted-bg": "rgba(243, 233, 208, 0.92)",
   "--bi-text-primary": "#1e293b",
   "--bi-text-secondary": "#334155",
-  "--bi-text-muted": "#64748b",
+  "--bi-text-muted": "#566273",
   "--bi-text-subtle": "#475569",
   "--bi-text-inverted": "#ffffff",
   "--bi-border": "#b8c9d8",

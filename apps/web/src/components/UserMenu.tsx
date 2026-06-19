@@ -1,5 +1,5 @@
 import { type ReactNode, type RefObject } from "react";
-import { useDayNight } from "../scene/useDayNight.js";
+import { useDayNight, type DayNightMode, type DayNightPreference } from "../scene/useDayNight.js";
 import { islandTheme } from "../theme.js";
 import type { MeProfile, PageId } from "../types.js";
 import { UserAvatar, getInitials } from "./Topbar.js";
@@ -23,7 +23,7 @@ export function UserMenu({
   onNavigate,
   onLogout
 }: UserMenuProps) {
-  const { mode, toggle } = useDayNight();
+  const { mode, preference, cyclePreference } = useDayNight();
   const initials = getInitials(profile?.displayName ?? profile?.username ?? "??");
   const handle = profile?.username ?? "guest";
   const inVoice = profile?.inVoice ?? false;
@@ -120,7 +120,7 @@ export function UserMenu({
               className="island-mono"
               style={{
                 color: islandTheme.color.textMuted,
-                fontSize: 11,
+                fontSize: 12,
                 marginTop: 1
               }}
             >
@@ -141,11 +141,11 @@ export function UserMenu({
               borderRadius: 6,
               background: islandTheme.color.panelMutedBg,
               border: `1px solid ${islandTheme.color.cardBorder}`,
-              fontSize: 11,
+              fontSize: 12,
               color: islandTheme.color.textMuted
             }}
           >
-            <span style={{ fontSize: 11, flexShrink: 0 }}>🎮</span>
+            <span style={{ fontSize: 12, flexShrink: 0 }}>🎮</span>
             <span
               style={{
                 flex: 1,
@@ -199,7 +199,7 @@ export function UserMenu({
           Settings
         </NavItem>
 
-        <ThemeNavItem mode={mode} onToggle={toggle} />
+        <ThemeNavItem mode={mode} preference={preference} onCycle={cyclePreference} />
       </div>
 
       {/* ── Divider ── */}
@@ -328,7 +328,7 @@ function NavItem({ icon, children, active, danger, badge, badgeColor, onClick, r
             borderRadius: 999,
             background: `${badgeColor ?? islandTheme.color.primaryGlow}22`,
             color: badgeColor ?? islandTheme.color.primaryGlow,
-            fontSize: 9,
+            fontSize: 12,
             fontWeight: 800,
             letterSpacing: "0.06em",
             flexShrink: 0
@@ -454,21 +454,34 @@ function SteamNavItem({ linked, onClick }: { linked: boolean; onClick: () => voi
 
 /* ── Theme nav item ── */
 
-function ThemeNavItem({ mode, onToggle }: { mode: "day" | "night"; onToggle: () => void }) {
+function ThemeNavItem({
+  mode,
+  preference,
+  onCycle
+}: {
+  mode: DayNightMode;
+  preference: DayNightPreference;
+  onCycle: () => void;
+}) {
   const day = mode === "day";
+  const auto = preference === "auto";
+  // Auto reflects whatever the clock resolved to; explicit choices show their icon.
+  const icon = auto ? "🌗" : day ? "☀️" : "🌙";
+  // Show the resolved mode alongside auto so people discover auto exists.
+  const label = auto ? `${day ? "Day" : "Night"} · auto` : day ? "Day" : "Night";
   return (
     <NavItem
-      icon={day ? "☀️" : "🌙"}
-      onClick={onToggle}
+      icon={icon}
+      onClick={onCycle}
       rightSlot={
         <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
           <span
             className="island-mono"
-            style={{ fontSize: 10, color: islandTheme.color.textMuted }}
+            style={{ fontSize: 12, color: islandTheme.color.textMuted }}
           >
-            {day ? "Day" : "Night"}
+            {label}
           </span>
-          <ThemeSwitch on={day} />
+          <ThemeSwitch on={day} dimmed={auto} />
         </span>
       }
     >
@@ -477,7 +490,7 @@ function ThemeNavItem({ mode, onToggle }: { mode: "day" | "night"; onToggle: () 
   );
 }
 
-function ThemeSwitch({ on }: { on: boolean }) {
+function ThemeSwitch({ on, dimmed = false }: { on: boolean; dimmed?: boolean }) {
   return (
     <span
       style={{
@@ -489,7 +502,8 @@ function ThemeSwitch({ on }: { on: boolean }) {
         border: `1px solid ${islandTheme.color.cardBorder}`,
         position: "relative",
         transition: "background 280ms ease",
-        flexShrink: 0
+        flexShrink: 0,
+        opacity: dimmed ? 0.65 : 1
       }}
     >
       <span

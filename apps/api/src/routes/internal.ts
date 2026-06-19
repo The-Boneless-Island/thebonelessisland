@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db } from "../db/client.js";
 import { requireBotSecret } from "../lib/auth.js";
+import { recordEvent } from "../lib/activityEvents.js";
 import { getAIProvider, PROVIDER_DEFAULTS } from "../lib/ai/index.js";
 import { getNuggiePersona, buildSystemPrompt } from "../lib/persona/nuggie.js";
 import { getAISetting } from "../lib/serverSettings.js";
@@ -487,6 +488,39 @@ internalRouter.get(
     } catch (err) {
       console.error("[internal] GET /autocomplete/game-nights error:", err);
       res.status(500).json({ choices: [] });
+    }
+  }
+);
+
+/**
+ * POST /internal/events/member-joined
+ * Bot-only. Records a "member.joined" activity event when someone joins the
+ * Discord guild. The new member may not have a `users` row yet (created on
+ * first web login), so the actor's identity is carried in the payload for
+ * robust feed rendering + profile linking.
+ */
+internalRouter.post(
+  "/events/member-joined",
+  requireBotSecret,
+  async (req, res) => {
+    try {
+      const body = req.body ?? {};
+      const discordUserId = typeof body.discordUserId === "string" ? body.discordUserId : "";
+      const displayName = typeof body.displayName === "string" ? body.displayName : "";
+      const avatarUrl = typeof body.avatarUrl === "string" ? body.avatarUrl : null;
+      if (!/^\d{15,25}$/.test(discordUserId)) {
+        res.status(400).json({ error: "Invalid discordUserId" });
+        return;
+      }
+      await recordEvent({
+        eventType: "member.joined",
+        actorDiscordUserId: discordUserId,
+        payload: { discordUserId, displayName, avatarUrl }
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[internal] POST /events/member-joined error:", err);
+      res.status(500).json({ error: "Failed to record member-joined" });
     }
   }
 );

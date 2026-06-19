@@ -1,0 +1,62 @@
+# Dependabot keeps dependencies current automatically so this project doesn't
+# need a human watching CVE feeds. It opens PRs against `main`; the CI workflow
+# (typecheck + docker build + Trivy scan) gates each one before it can merge.
+#
+# Strategy for a solo-maintained repo:
+#   - minor/patch updates are grouped into ONE weekly PR (low-risk, batch-merge)
+#   - major updates get their own PR each (review individually — may break)
+#   - security fixes are opened immediately regardless of schedule
+version: 2
+updates:
+  # ── npm (single lockfile at the root drives all workspaces) ───────────────
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Batch all same-major bumps across every workspace into one PR.
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Major bumps fall outside the group above, so each opens its own PR.
+
+  # ── Docker base images (node:22-alpine, caddy:2-alpine) ───────────────────
+  - package-ecosystem: "docker"
+    directories:
+      - "/apps/api"
+      - "/apps/bot"
+      - "/apps/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "chore(docker)"
+    ignore:
+      # Stay on a pinned LTS line for the Node base image. Patch/minor + digest
+      # updates still come through; major jumps (e.g. 22 -> 26) are opted out so
+      # production doesn't auto-move to a non-LTS Node. Bump the major by hand.
+      - dependency-name: "node"
+        update-types:
+          - "version-update:semver-major"
+
+  # ── GitHub Actions used by the CI/deploy workflows ────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"

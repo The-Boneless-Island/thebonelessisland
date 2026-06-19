@@ -9,12 +9,12 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-ssm": "^3.1048.0",
-    "discord.js": "^14.25.1",
+    "@aws-sdk/client-ssm": "^3.1068.0",
+    "discord.js": "^14.26.4",
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
-    "@types/node": "^24.9.1",
-    "tsx": "^4.20.6"
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4"
   }
 }

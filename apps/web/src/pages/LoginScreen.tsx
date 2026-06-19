@@ -385,7 +385,7 @@ export function LoginScreen({ loading, authError, exiting }: LoginScreenProps) {
           className="island-mono"
           style={{
             textAlign: "center",
-            fontSize: 11,
+            fontSize: 12,
             color: islandTheme.color.textMuted,
             marginTop: 18,
             lineHeight: 1.6

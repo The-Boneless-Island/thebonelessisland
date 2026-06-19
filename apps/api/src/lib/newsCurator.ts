@@ -208,7 +208,7 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
       // Top 8 by 2-week playtime — what crew is playing RIGHT NOW
       db.query<{ game_name: string; playtime_2weeks: number }>(
         `SELECT g.name AS game_name, SUM(ug.playtime_2weeks)::int AS playtime_2weeks
-         FROM user_games ug
+         FROM shareable_user_games ug
          INNER JOIN games g ON g.app_id = ug.app_id
          WHERE ug.playtime_2weeks > 0
          GROUP BY g.name
@@ -218,7 +218,7 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
       // Active library — owned AND played within 180d. Drops bundle-freebie bloat.
       db.query<{ game_name: string; owners: number }>(
         `SELECT g.name AS game_name, COUNT(DISTINCT ug.user_id)::int AS owners
-         FROM user_games ug
+         FROM shareable_user_games ug
          INNER JOIN games g ON g.app_id = ug.app_id
          WHERE ug.playtime_minutes > 0
            AND (ug.last_played_at IS NULL OR ug.last_played_at > NOW() - INTERVAL '180 days')
@@ -229,7 +229,7 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
       // Wishlist top-10 — signals upcoming-release / hype relevance.
       db.query<{ game_name: string; wishlisters: number }>(
         `SELECT g.name AS game_name, COUNT(DISTINCT uw.user_id)::int AS wishlisters
-         FROM user_wishlists uw
+         FROM shareable_user_wishlists uw
          INNER JOIN games g ON g.app_id = uw.app_id
          GROUP BY g.name
          ORDER BY wishlisters DESC, g.name ASC
@@ -238,7 +238,7 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
       // Playtime-weighted tag preference — what genres crew ACTUALLY engages with.
       db.query<{ tag: string; weighted_minutes: string }>(
         `SELECT tag, SUM(ug.playtime_minutes)::bigint AS weighted_minutes
-         FROM user_games ug
+         FROM shareable_user_games ug
          INNER JOIN games g ON g.app_id = ug.app_id
          CROSS JOIN LATERAL unnest(g.tags) AS tag
          WHERE ug.playtime_minutes > 0
@@ -251,7 +251,7 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
         `SELECT g.name AS game_name,
                 ROUND(AVG(p.completion_pct))::int AS avg_completion,
                 COUNT(DISTINCT p.user_id)::int AS tracked
-         FROM user_game_progress p
+         FROM shareable_user_game_progress p
          INNER JOIN games g ON g.app_id = p.app_id
          WHERE p.completion_pct IS NOT NULL
          GROUP BY g.name

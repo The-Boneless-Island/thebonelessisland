@@ -1,27 +1,47 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 export type DayNightMode = "day" | "night";
+export type DayNightPreference = "auto" | "day" | "night";
 
 const STORAGE_KEY = "island.theme";
 
+// How often (ms) auto mode re-checks the local hour so it can flip at the
+// day/night boundary while the page stays open.
+const AUTO_REEVAL_MS = 5 * 60 * 1000;
+
 type DayNightContextValue = {
   mode: DayNightMode;
+  preference: DayNightPreference;
   isTransitioning: boolean;
   toggle: () => void;
   set: (mode: DayNightMode) => void;
+  setPreference: (preference: DayNightPreference) => void;
+  /** Cycle the preference: auto → day → night → auto. */
+  cyclePreference: () => void;
 };
 
 const DayNightContext = createContext<DayNightContextValue | null>(null);
 
-function readInitialMode(): DayNightMode {
-  if (typeof window === "undefined") return "night";
+function readInitialPreference(): DayNightPreference {
+  if (typeof window === "undefined") return "auto";
   try {
     const stored = window.localStorage.getItem(STORAGE_KEY);
-    if (stored === "day" || stored === "night") return stored;
+    if (stored === "auto" || stored === "day" || stored === "night") return stored;
   } catch {
     // ignore storage errors
   }
-  return "night";
+  return "auto";
+}
+
+// Day is roughly 7:00–19:00 local; night otherwise.
+function modeForHour(hour: number): DayNightMode {
+  return hour >= 7 && hour < 19 ? "day" : "night";
+}
+
+function resolveMode(preference: DayNightPreference): DayNightMode {
+  if (preference === "day" || preference === "night") return preference;
+  if (typeof window === "undefined") return "night";
+  return modeForHour(new Date().getHours());
 }
 
 type DayNightProviderProps = {
@@ -29,20 +49,25 @@ type DayNightProviderProps = {
 };
 
 export function DayNightProvider({ children }: DayNightProviderProps) {
-  const [mode, setMode] = useState<DayNightMode>(readInitialMode);
+  const [preference, setPreferenceState] = useState<DayNightPreference>(readInitialPreference);
+  const [mode, setMode] = useState<DayNightMode>(() => resolveMode(readInitialPreference()));
   const [isTransitioning, setIsTransitioning] = useState(false);
   const transitionTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = mode;
+  }, [mode]);
+
+  useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, mode);
+      window.localStorage.setItem(STORAGE_KEY, preference);
     } catch {
       // ignore
     }
-  }, [mode]);
+  }, [preference]);
 
-  const set = useCallback((next: DayNightMode) => {
+  // Drive the effective mode toward `next`, animating the flip via isTransitioning.
+  const driveMode = useCallback((next: DayNightMode) => {
     setMode((current) => {
       if (current === next) return current;
       setIsTransitioning(true);
@@ -55,6 +80,37 @@ export function DayNightProvider({ children }: DayNightProviderProps) {
       }, 2400);
       return next;
     });
+  }, []);
+
+  // When the preference is auto, derive the mode from the local hour and
+  // re-evaluate periodically so it flips at the 7:00 / 19:00 boundary.
+  useEffect(() => {
+    if (preference !== "auto") {
+      driveMode(preference);
+      return;
+    }
+    driveMode(resolveMode("auto"));
+    const id = window.setInterval(() => {
+      driveMode(resolveMode("auto"));
+    }, AUTO_REEVAL_MS);
+    return () => window.clearInterval(id);
+  }, [preference, driveMode]);
+
+  const set = useCallback(
+    (next: DayNightMode) => {
+      setPreferenceState(next);
+    },
+    []
+  );
+
+  const setPreference = useCallback((next: DayNightPreference) => {
+    setPreferenceState(next);
+  }, []);
+
+  const cyclePreference = useCallback(() => {
+    setPreferenceState((current) =>
+      current === "auto" ? "day" : current === "day" ? "night" : "auto"
+    );
   }, []);
 
   const toggle = useCallback(() => {
@@ -72,8 +128,8 @@ export function DayNightProvider({ children }: DayNightProviderProps) {
   );
 
   const value = useMemo<DayNightContextValue>(
-    () => ({ mode, isTransitioning, toggle, set }),
-    [mode, isTransitioning, toggle, set]
+    () => ({ mode, preference, isTransitioning, toggle, set, setPreference, cyclePreference }),
+    [mode, preference, isTransitioning, toggle, set, setPreference, cyclePreference]
   );
 
   return <DayNightContext.Provider value={value}>{children}</DayNightContext.Provider>;

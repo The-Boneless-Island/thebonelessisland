@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
+import { activityHref, pathForGame, pathForIslander } from "../lib/routes.js";
+import { ConfettiBurst } from "../system/celebration.js";
 import { LOGO_BG_URL } from "../assets.js";
-import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
+import { IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, islandInputStyle, useCountUp } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { islandTheme } from "../theme.js";
+import { GameCover, steamArt } from "../steamArt.js";
 import { useRefetchActivity } from "../system/activityContext.js";
 import type {
+  ActivityActor,
   ActivityCategory,
   ActivityEvent,
   GeneralNewsItem,
@@ -29,7 +34,7 @@ type HomePageProps = {
 
 type HeroPhase = "visible" | "fading" | "collapsing" | "gone";
 
-export function HomePage({
+function HomePageInner({
   profile,
   activeMembers,
   totalMemberCount,
@@ -54,6 +59,7 @@ export function HomePage({
   }, []);
 
   const featuredArticle = generalNews[0] ?? null;
+  const trending = useCrewTrending();
 
   return (
     <div>
@@ -71,7 +77,13 @@ export function HomePage({
           }}
         >
           <div style={{ overflow: "hidden", minHeight: 0 }}>
-            <Hero profile={profile} onlineCount={activeMembers.length} tagline={tagline} onNavigate={onNavigate} />
+            <Hero
+              profile={profile}
+              onlineCount={activeMembers.length}
+              tagline={tagline}
+              collageGames={trending.games ?? []}
+              onNavigate={onNavigate}
+            />
           </div>
         </div>
       )}
@@ -86,30 +98,47 @@ export function HomePage({
           />
         </section>
         {featuredArticle && <FeaturedNewsCard item={featuredArticle} onNavigate={onNavigate} />}
+        <CrewTrending onNavigate={onNavigate} games={trending.games} loading={trending.loading} />
         <ActivityFeed events={activityEvents} onNavigate={onNavigate} />
-        <DriftLog cards={newsCards} />
-        <BotAndRitualRow />
+        <DriftLog cards={newsCards} onNavigate={onNavigate} />
+        <BotAndRitualRow guildId={profile?.guildId ?? null} onNavigate={onNavigate} />
       </div>
     </div>
   );
 }
 
+export const HomePage = memo(HomePageInner);
+
 function Hero({
   profile,
   onlineCount,
   tagline,
+  collageGames,
   onNavigate
 }: {
   profile: MeProfile | null;
   onlineCount: number;
   tagline?: string;
+  collageGames: TrendingGame[];
   onNavigate: (page: PageId) => void;
 }) {
   const name = profile?.displayName ?? "friend";
+  const hour = new Date().getHours();
+  const greeting =
+    hour < 5
+      ? { lead: "Still up,", subline: "The island's quiet and the tide's low. Night-owl co-op, anyone?" }
+      : hour < 12
+        ? { lead: "Morning,", subline: "Fresh coffee, calm waters. Plenty of daylight to fill the queue." }
+        : hour < 17
+          ? { lead: "Afternoon,", subline: "Game nights, low-stakes co-op, and a lounge that lives on Discord. Here's what's happening on the island today." }
+          : hour < 22
+            ? { lead: "Evening,", subline: "Prime time on the island. Round up the crew and pick something to play." }
+            : { lead: "Late night,", subline: "The good hours. Low-stakes co-op while the rest of the island sleeps." };
   return (
     <section
       style={{
         position: "relative",
+        isolation: "isolate",
         padding: "48px clamp(16px, 3vw, 32px) 56px",
         textAlign: "center",
         minHeight: "55vh",
@@ -120,6 +149,7 @@ function Hero({
         gap: 20
       }}
     >
+      <HeroCollage games={collageGames} />
       <IslandTag tone="success" style={{ gap: 6 }}>
         <span
           style={{
@@ -143,7 +173,7 @@ function Hero({
           textShadow: "0 4px 28px rgba(0,0,0,0.45)"
         }}
       >
-        Welcome back,
+        {greeting.lead}
         <br />
         <span style={{ fontStyle: "italic", color: islandTheme.palette.sandWarmAccent }}>{name}</span>
       </h1>
@@ -174,7 +204,8 @@ function Hero({
           opacity: 0.95
         }}
       >
-        Game nights, low-stakes co-op, and a lounge that lives on Discord. Here's what's happening on the island today.
+        {greeting.subline}{" "}
+        {onlineCount === 1 ? "1 crewmate is on the island right now." : `${onlineCount} crewmates are on the island right now.`}
       </p>
 
       <HeroButton variant="ghost" onClick={() => onNavigate("games")}>
@@ -184,6 +215,63 @@ function Hero({
   );
 }
 
+
+// Ambient backdrop for the hero, collaged from what the crew actually played
+// this fortnight. Header art (the most reliably-present Steam asset) blurred
+// into a wash — it sets mood, it isn't a showcase. Static first frame under
+// prefers-reduced-motion.
+function HeroCollage({ games }: { games: TrendingGame[] }) {
+  const top = games.slice(0, 3).map((g) => g.appId);
+  if (top.length === 0) return null;
+  // Pad to 3 slots so the fixed keyframe windows always cross-fade cleanly.
+  while (top.length < 3) top.push(top[top.length % games.length] ?? top[0]);
+  const allSame = top.every((id) => id === top[0]);
+
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", inset: 0, zIndex: -1, overflow: "hidden", borderRadius: 24 }}>
+      {top.map((appId, i) => {
+        if (allSame && i > 0) return null;
+        const layer: CSSProperties = {
+          position: "absolute",
+          inset: -24,
+          background: `center / cover no-repeat url(${JSON.stringify(steamArt.header(appId))})`,
+          filter: "blur(10px) saturate(118%)"
+        };
+        if (allSame) {
+          layer.opacity = 0.3;
+        } else {
+          layer.opacity = 0;
+          layer.animation = "biHeroCollage 24s linear infinite";
+          layer.animationDelay = `${i * 8}s`;
+        }
+        return <div key={`${appId}-${i}`} style={layer} />;
+      })}
+      {/* Scrim: readable text in the middle, dissolve into the scene at the edges. */}
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background:
+            "radial-gradient(ellipse at center, rgba(2,6,23,0.42) 0%, rgba(2,6,23,0.18) 55%, rgba(2,6,23,0) 100%)"
+        }}
+      />
+      <style>{`
+        @keyframes biHeroCollage {
+          0%   { opacity: 0; }
+          6%   { opacity: 0.3; }
+          33%  { opacity: 0.3; }
+          41%  { opacity: 0; }
+          100% { opacity: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          @keyframes biHeroCollage {
+            0%, 100% { opacity: 0.18; }
+          }
+        }
+      `}</style>
+    </div>
+  );
+}
 
 type HeroButtonProps = {
   variant: "primary" | "ghost";
@@ -254,7 +342,7 @@ function FeaturedNewsCard({
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = "translateY(-1px)";
-        e.currentTarget.style.boxShadow = "0 12px 32px rgba(0,0,0,0.28)";
+        e.currentTarget.style.boxShadow = islandTheme.shadow.cardHover;
       }}
       onMouseLeave={(e) => {
         e.currentTarget.style.transform = "translateY(0)";
@@ -283,7 +371,7 @@ function FeaturedNewsCard({
             {item.title}
           </h3>
           {item.aiSubtitle && (
-            <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textSubtle, opacity: 0.8, lineHeight: 1.35, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.35, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
               {item.aiSubtitle}
             </p>
           )}
@@ -310,6 +398,191 @@ function FeaturedNewsCard({
         </button>
       </div>
     </article>
+  );
+}
+
+// â"€â"€ Crew Trending (hot this week) â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+
+type TrendingGame = {
+  appId: number;
+  name: string;
+  headerImageUrl: string | null;
+  totalMinutes2Weeks: number;
+  /** Rolling window from ~a fortnight ago; null until snapshots accrue. */
+  prevMinutes2Weeks?: number | null;
+  players: number;
+  topPlayer: { displayName: string; minutes: number } | null;
+};
+
+// Fetched once at page level — the hero collage and the trending list share it.
+function useCrewTrending(): { games: TrendingGame[] | null; loading: boolean } {
+  const [games, setGames] = useState<TrendingGame[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void apiFetch("/steam/crew-trending")
+      .then(async (r) => {
+        if (!r.ok || cancelled) return;
+        const d = (await r.json().catch(() => null)) as { games?: TrendingGame[] } | null;
+        if (!cancelled) setGames(Array.isArray(d?.games) ? d.games : []);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  return { games, loading };
+}
+
+function CrewTrending({
+  onNavigate,
+  games,
+  loading
+}: {
+  onNavigate: (page: PageId) => void;
+  games: TrendingGame[] | null;
+  loading: boolean;
+}) {
+  // Hide entirely on a quiet week (no trending data) so the home page stays tidy.
+  if (!loading && (!games || games.length === 0)) return null;
+
+  return (
+    <section style={{ display: "grid", gap: 14 }}>
+      <SectionHead
+        title="Hot this week on the island"
+        meta="What the crew's actually bingeing — playtime from the last fortnight."
+        action="Browse games →"
+        onAction={() => onNavigate("games")}
+      />
+      <IslandCard style={{ display: "flex", flexDirection: "column", gap: 8, padding: 14 }}>
+        {loading ? (
+          // Skeleton mirrors the final row layout (rank · art · text · stats)
+          // so the card doesn't reflow when data lands.
+          <>
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                aria-hidden="true"
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "18px 92px minmax(0, 1fr) auto",
+                  gap: 12,
+                  alignItems: "center",
+                  padding: "8px 10px",
+                  borderRadius: 10,
+                  background: islandTheme.color.panelMutedBg,
+                  border: `1px solid ${islandTheme.color.cardBorder}`
+                }}
+              >
+                <IslandSkeleton width={14} height={16} />
+                <IslandSkeleton width={92} height={43} radius={8} />
+                <div style={{ display: "grid", gap: 6 }}>
+                  <IslandSkeleton width="55%" height={12} />
+                  <IslandSkeleton width="35%" height={10} />
+                </div>
+                <IslandSkeleton width={48} height={26} />
+              </div>
+            ))}
+          </>
+        ) : (
+          (games ?? []).map((game, i) => <TrendingRow key={game.appId} game={game} rank={i + 1} />)
+        )}
+      </IslandCard>
+    </section>
+  );
+}
+
+const TRENDING_RANK_COLORS = [islandTheme.color.nuggieGold, "#cbd5e1", "#d4956a"];
+
+function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
+  const hours = (game.totalMinutes2Weeks / 60).toFixed(1);
+  const leaderHours = game.topPlayer ? Math.round(game.topPlayer.minutes / 60) : 0;
+  // Delta vs the snapshot from ~14 days back; hidden until |Δ| ≥ 1h or no history.
+  const deltaMin =
+    typeof game.prevMinutes2Weeks === "number" ? game.totalMinutes2Weeks - game.prevMinutes2Weeks : null;
+  const deltaHours = deltaMin !== null ? Math.round(Math.abs(deltaMin) / 60) : 0;
+  const showDelta = deltaMin !== null && deltaHours >= 1;
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "18px 92px minmax(0, 1fr) auto",
+        gap: 12,
+        alignItems: "center",
+        padding: "8px 10px",
+        borderRadius: 10,
+        background: islandTheme.color.panelMutedBg,
+        border: `1px solid ${islandTheme.color.cardBorder}`
+      }}
+    >
+      <span
+        className="island-display"
+        aria-hidden="true"
+        style={{
+          fontSize: 15,
+          fontWeight: 800,
+          textAlign: "center",
+          color: TRENDING_RANK_COLORS[rank - 1] ?? islandTheme.color.textMuted
+        }}
+      >
+        {rank}
+      </span>
+      {/* GameCover walks stored URL → Steam CDN header → 🎮 placeholder, so the
+          row never renders an empty box when enrichment hasn't run yet. */}
+      <GameCover
+        appId={game.appId}
+        storedUrl={game.headerImageUrl}
+        alt={game.name}
+        style={{
+          width: 92,
+          height: 43,
+          borderRadius: 8,
+          border: `1px solid ${islandTheme.color.cardBorder}`
+        }}
+      />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {game.name}
+        </div>
+        {game.topPlayer ? (
+          <div
+            style={{
+              fontSize: 12,
+              color: islandTheme.color.textMuted,
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis"
+            }}
+          >
+            led by {game.topPlayer.displayName}
+            {leaderHours > 0 ? ` · ${leaderHours}h logged` : ""}
+          </div>
+        ) : null}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", lineHeight: 1.1 }}>
+        <span className="island-display" style={{ fontSize: 16, fontWeight: 800, color: islandTheme.color.nuggieGold }}>
+          {hours}h
+          {showDelta ? (
+            <span
+              className="island-mono"
+              title={`vs last fortnight: ${deltaMin! > 0 ? "+" : "−"}${deltaHours}h`}
+              style={{
+                marginLeft: 6,
+                fontSize: 12,
+                fontWeight: 700,
+                color: deltaMin! > 0 ? islandTheme.color.successAccent : islandTheme.color.dangerSoft
+              }}
+            >
+              {deltaMin! > 0 ? "↑" : "↓"}{deltaHours}h
+            </span>
+          ) : null}
+        </span>
+        <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          {game.players === 1 ? "1 player" : `${game.players} players`}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -420,6 +693,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   const [claimedToday, setClaimedToday] = useState<boolean | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [claimFlash, setClaimFlash] = useState<{ amount: number } | null>(null);
+  const [claimConfetti, setClaimConfetti] = useState(0);
   const [claimError, setClaimError] = useState<string | null>(null);
   const [msLeft, setMsLeft] = useState(() => msUntilNextDailyReset());
   const refetchActivity = useRefetchActivity();
@@ -429,8 +703,15 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
     let cancelled = false;
     void apiFetch("/nuggies/me").then(async (r) => {
       if (!r.ok || cancelled) return;
-      const d = (await r.json()) as { transactions?: DailyTx[] };
-      if (!cancelled) setClaimedToday(isClaimedToday(d.transactions ?? []));
+      const d = (await r.json()) as { claimedToday?: boolean; transactions?: DailyTx[] };
+      // Server-side flag is authoritative — the transactions list is capped at
+      // 20 rows, so a busy casino day pushes the daily claim off the page and
+      // the legacy scan would wrongly re-show the button.
+      if (!cancelled) {
+        setClaimedToday(
+          typeof d.claimedToday === "boolean" ? d.claimedToday : isClaimedToday(d.transactions ?? [])
+        );
+      }
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [optedOut]);
@@ -447,6 +728,8 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   }, [claimedToday]);
 
   const balance = balanceOverride ?? baseBalance;
+  // Count-up instead of snapping when the balance changes (claim, SSE update).
+  const animatedBalance = useCountUp(balance ?? 0);
 
   async function handleClaim() {
     if (claiming || claimedToday) return;
@@ -459,6 +742,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
         setBalanceOverride(body.newBalance);
         setClaimedToday(true);
         setClaimFlash({ amount: body.amount ?? 0 });
+        setClaimConfetti((n) => n + 1);
         setTimeout(() => setClaimFlash(null), 3500);
         void refetchActivity();
       } else if (res.status === 409) {
@@ -476,6 +760,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   return (
     <IslandCard
       style={{
+        position: "relative",
         display: "flex",
         flexDirection: "column",
         gap: 8,
@@ -484,6 +769,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
         border: `1px solid rgba(251,191,119,0.2)`
       }}
     >
+      <ConfettiBurst trigger={claimConfetti} />
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <h3 className="island-display" style={{ margin: 0, fontSize: 16 }}>Nuggies</h3>
         <NuggieCoin size={22} />
@@ -492,11 +778,11 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
       <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <span
           className="island-display"
-          style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1, color: "#fbbf77" }}
+          style={{ fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", lineHeight: 1, color: islandTheme.color.nuggieGold }}
         >
-          {balance !== undefined && !optedOut ? `₦${balance.toLocaleString()}` : "—"}
+          {balance !== undefined && !optedOut ? `₦${animatedBalance.toLocaleString()}` : "—"}
         </span>
-        <span className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           available
         </span>
       </div>
@@ -508,7 +794,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
             style={{
               display: "flex",
               gap: 6,
-              fontSize: 10,
+              fontSize: 12,
               color: islandTheme.color.textMuted,
               textTransform: "uppercase",
               letterSpacing: "0.06em"
@@ -536,13 +822,13 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
                     padding: "4px 6px",
                     borderRadius: 8,
                     border: `1px dashed ${islandTheme.color.cardBorder}`,
-                    fontSize: 10,
+                    fontSize: 12,
                     color: islandTheme.color.textMuted
                   }}
                   title={`No ${slot.label.toLowerCase()} equipped`}
                 >
                   <span style={{ opacity: 0.5 }}>{slot.emoji}</span>
-                  <span className="island-mono" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 9 }}>
+                  <span className="island-mono" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 12 }}>
                     {slot.label}
                   </span>
                 </div>
@@ -570,11 +856,11 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
             +{claimFlash.amount} <NuggieCoin size={16} /> claimed!
           </div>
         ) : !optedOut && claimedToday === true ? (
-          <div style={{ ...nuggieFooterBtnStyle("#fbbf77"), cursor: "default", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.1, padding: "4px 10px" }}>
-            <span className="island-mono" style={{ fontSize: 9, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          <div style={{ ...nuggieFooterBtnStyle(islandTheme.color.nuggieGold), cursor: "default", display: "flex", flexDirection: "column", alignItems: "center", gap: 1, lineHeight: 1.1, padding: "4px 10px" }}>
+            <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
               Next claim
             </span>
-            <span className="island-mono" style={{ fontSize: 12, color: "#fbbf77", fontWeight: 700 }}>
+            <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.nuggieGold, fontWeight: 700 }}>
               {formatCountdown(msLeft)}
             </span>
           </div>
@@ -584,14 +870,14 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
             onClick={() => void handleClaim()}
             disabled={claiming || optedOut || claimedToday === null}
             style={{
-              ...nuggieFooterBtnStyle("#fbbf77"),
+              ...nuggieFooterBtnStyle(islandTheme.color.nuggieGold),
               opacity: claiming || optedOut || claimedToday === null ? 0.6 : 1,
               cursor: claiming ? "wait" : optedOut ? "not-allowed" : "pointer"
             }}
           >
             {!claiming && !optedOut && claimedToday === false ? (
               <GlowFollower
-                accent="#fbbf77"
+                accent={islandTheme.color.nuggieGold}
                 colors={{ primary: "rgba(251, 191, 119, 0.55)", secondary: "rgba(245, 158, 11, 0.45)" }}
               />
             ) : null}
@@ -613,7 +899,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
         </button>
       </div>
       {claimError && (
-        <div style={{ fontSize: 11, color: islandTheme.color.dangerAccent, marginTop: 4 }}>
+        <div style={{ fontSize: 12, color: islandTheme.color.dangerAccent, marginTop: 4 }}>
           {claimError}
         </div>
       )}
@@ -738,7 +1024,7 @@ function FriendsOnline({
         </h3>
         <span
           className="island-mono"
-          style={{ fontSize: 11, color: islandTheme.color.textMuted }}
+          style={{ fontSize: 12, color: islandTheme.color.textMuted }}
         >
           {activeMembers.length} / {totalMemberCount || '—'}
         </span>
@@ -747,9 +1033,12 @@ function FriendsOnline({
         {display.length ? (
           display.map((m) => <CrewRow key={m.discordUserId} member={m} />)
         ) : (
-          <p style={{ margin: 0, fontSize: 13, opacity: 0.85 }}>
-            Quiet shoreline right now. Crew sync runs every minute.
-          </p>
+          <IslandEmptyState
+            pose="snooze"
+            compact
+            title="Quiet shoreline right now"
+            body="Crew sync runs every minute — friends show up here the moment they're online."
+          />
         )}
       </div>
       <button
@@ -822,7 +1111,7 @@ function CrewRow({ member }: { member: GuildMember }) {
         </div>
         <div
           style={{
-            fontSize: 11,
+            fontSize: 12,
             color: islandTheme.color.textMuted,
             whiteSpace: "nowrap",
             overflow: "hidden",
@@ -835,7 +1124,7 @@ function CrewRow({ member }: { member: GuildMember }) {
       <span
         className="island-mono"
         style={{
-          fontSize: 10,
+          fontSize: 12,
           textTransform: "uppercase",
           letterSpacing: "0.06em",
           color: badgeColor
@@ -868,7 +1157,7 @@ function CrewAvatar({ member }: { member: GuildMember }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontSize: 10,
+        fontSize: 12,
         fontWeight: 800,
         color: islandTheme.color.textDark
       }}
@@ -878,7 +1167,7 @@ function CrewAvatar({ member }: { member: GuildMember }) {
   );
 }
 
-const AVATAR_PALETTE = ["#fbbf77", "#22d3ee", "#a855f7", "#4ade80", "#ef8354", "#86efac", "#facc15"];
+const AVATAR_PALETTE = islandTheme.categorical.avatars;
 
 function pickColorFor(seed: string): string {
   let hash = 0;
@@ -895,12 +1184,14 @@ function Target({ children }: { children: ReactNode }) {
 const ACTIVITY_TABS: Array<{ id: ActivityCategory; label: string }> = [
   { id: "all", label: "All" },
   { id: "friends", label: "Friends" },
+  { id: "forums", label: "Forums" },
+  { id: "nuggies", label: "Nuggies" },
   { id: "achievements", label: "Achievements" },
   { id: "milestones", label: "Milestones" },
   { id: "patches", label: "Patch notes" }
 ];
 
-const ACTOR_COLORS = ["#22d3ee", "#a855f7", "#f4a261", "#86efac", "#fbbf77", "#ef8354", "#4ade80", "#60a5fa"];
+const ACTOR_COLORS = islandTheme.categorical.avatars;
 
 function colorForActor(id: string | null | undefined): string {
   if (!id) return ACTOR_COLORS[0];
@@ -939,8 +1230,39 @@ type ActivityRendered = {
   metaText: string;
 };
 
+// Actor name that links to the islander's profile (when we have their id).
+// stopPropagation so it wins over the whole-row click without double-firing.
+function ActorLink({ actor }: { actor: ActivityActor | null }) {
+  const name = actor?.displayName ?? "A crew member";
+  if (!actor?.discordUserId) return <strong>{name}</strong>;
+  return (
+    <Link
+      to={pathForIslander(actor.discordUserId)}
+      onClick={(e) => e.stopPropagation()}
+      style={{ fontWeight: 700, color: "inherit", textDecoration: "none" }}
+      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = "underline")}
+      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = "none")}
+    >
+      {name}
+    </Link>
+  );
+}
+
+function casinoGameLabel(game: string): string {
+  switch (game) {
+    case "coinflip":
+      return "Coinflip";
+    case "blackjack":
+      return "Blackjack";
+    case "guessnumber":
+      return "Guess the Number";
+    default:
+      return game;
+  }
+}
+
 function describeEvent(event: ActivityEvent): ActivityRendered | null {
-  const actorName = event.actor?.displayName ?? "A crew member";
+  const actorNode = <ActorLink actor={event.actor} />;
   const game = event.game;
   const ago = relativeAgo(event.createdAt);
   const payload = event.payload as Record<string, unknown>;
@@ -953,7 +1275,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> scheduled <Target>{title}</Target>.
+            {actorNode} scheduled <Target>{title}</Target>.
           </>
         )
       };
@@ -964,7 +1286,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> RSVP'd to the next <Target>game night</Target>.
+            {actorNode} RSVP'd to the next <Target>game night</Target>.
           </>
         )
       };
@@ -974,7 +1296,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> stepped off the dock for the next session.
+            {actorNode} stepped off the dock for the next session.
           </>
         )
       };
@@ -984,7 +1306,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> locked in <Target>{game?.name ?? "a game"}</Target> for the next session.
+            {actorNode} locked in <Target>{game?.name ?? "a game"}</Target> for the next session.
           </>
         )
       };
@@ -994,7 +1316,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> wired up their <Target>Steam library</Target>.
+            {actorNode} wired up their <Target>Steam library</Target>.
           </>
         )
       };
@@ -1004,7 +1326,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> unhooked their Steam library.
+            {actorNode} unhooked their Steam library.
           </>
         )
       };
@@ -1016,7 +1338,21 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> unlocked <Target>{name}</Target>.
+            {actorNode} unlocked <Target>{name}</Target>.
+          </>
+        )
+      };
+    }
+    case "achievement.steam_progress": {
+      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
+      const gameName = typeof payload.gameName === "string" ? payload.gameName : "a game";
+      return {
+        icon: "🏆",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} unlocked {delta} achievement{delta === 1 ? "" : "s"} in{" "}
+            <Target>{gameName}</Target>.
           </>
         )
       };
@@ -1030,8 +1366,136 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> hit <Target>{label}</Target>
+            {actorNode} hit <Target>{label}</Target>
             {threshold !== null ? ` (₦${threshold.toLocaleString()})` : ""}.
+          </>
+        )
+      };
+    }
+    case "forum_thread_created": {
+      const title = typeof payload.title === "string" ? payload.title : "a new thread";
+      return {
+        icon: "💬",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} started <Target>{title}</Target> in the forums.
+          </>
+        )
+      };
+    }
+    case "forum_reply_created": {
+      const title = typeof payload.threadTitle === "string" ? payload.threadTitle : "a thread";
+      return {
+        icon: "💬",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} replied to <Target>{title}</Target>.
+          </>
+        )
+      };
+    }
+    case "news.card_published": {
+      const title = typeof payload.title === "string" ? payload.title : "an update";
+      return {
+        icon: "📰",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} posted <Target>{title}</Target> to the drift log.
+          </>
+        )
+      };
+    }
+    case "forum.reactions_milestone": {
+      const title = typeof payload.threadTitle === "string" ? payload.threadTitle : "a post";
+      const count = typeof payload.count === "number" ? payload.count : 0;
+      return {
+        icon: "🔥",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode}'s post in <Target>{title}</Target> hit <strong>{count} reactions</strong>.
+          </>
+        )
+      };
+    }
+    case "member.joined": {
+      const name =
+        typeof payload.displayName === "string" && payload.displayName
+          ? payload.displayName
+          : event.actor?.displayName ?? "A new islander";
+      return {
+        icon: "🌴",
+        metaText: ago,
+        body: (
+          <>
+            <strong>{name}</strong> washed ashore — welcome aboard!
+          </>
+        )
+      };
+    }
+    case "nuggies.daily_claimed": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      return {
+        icon: "🍗",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} claimed their daily <Target>₦{amount.toLocaleString()}</Target>.
+          </>
+        )
+      };
+    }
+    case "casino.big_win": {
+      const net = typeof payload.net === "number" ? payload.net : 0;
+      const g = typeof payload.game === "string" ? payload.game : "the casino";
+      return {
+        icon: "🎰",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} won big at <Target>{casinoGameLabel(g)}</Target> —{" "}
+            <strong>+₦{net.toLocaleString()}</strong>.
+          </>
+        )
+      };
+    }
+    case "nuggies.loan_accepted": {
+      const principal = typeof payload.principal === "number" ? payload.principal : 0;
+      return {
+        icon: "🤝",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} took a <Target>₦{principal.toLocaleString()}</Target> loan
+            {event.target ? (
+              <>
+                {" "}
+                from <ActorLink actor={event.target} />
+              </>
+            ) : null}
+            .
+          </>
+        )
+      };
+    }
+    case "nuggies.loan_repaid": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      return {
+        icon: "💸",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} repaid a <Target>₦{amount.toLocaleString()}</Target> loan
+            {event.target ? (
+              <>
+                {" "}
+                to <ActorLink actor={event.target} />
+              </>
+            ) : null}
+            .
           </>
         )
       };
@@ -1042,7 +1506,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            <strong>{actorName}</strong> · {event.eventType}
+            {actorNode} · {event.eventType}
           </>
         )
       };
@@ -1062,6 +1526,31 @@ const ACTIVITY_DATE_WINDOWS: Record<Exclude<ActivityDateRange, "all">, number> =
   "30d": 30 * 24 * 60 * 60 * 1000
 };
 
+const ACTIVITY_LAST_SEEN_KEY = "bi:activity:last-seen";
+
+function readActivityLastSeen(): number {
+  try {
+    const v = localStorage.getItem(ACTIVITY_LAST_SEEN_KEY);
+    const n = v ? Number(v) : 0;
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeActivityLastSeen(ts: number): void {
+  try {
+    localStorage.setItem(ACTIVITY_LAST_SEEN_KEY, String(ts));
+  } catch {
+    // localStorage unavailable (private mode) — the "new" marker just stays off.
+  }
+}
+
+function eventTs(iso: string): number {
+  const n = new Date(iso).getTime();
+  return Number.isFinite(n) ? n : 0;
+}
+
 function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityEvent[]; onNavigate: (page: PageId) => void }) {
   const [tab, setTab] = useState<ActivityCategory>("all");
   const [search, setSearch] = useState("");
@@ -1073,6 +1562,23 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [reachedEnd, setReachedEnd] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // "New since last visit": baseline captured once on mount so the markers
+  // persist for this view; the newest seen timestamp is persisted so the next
+  // visit starts clean. 0 baseline (first-ever visit) shows no markers.
+  const [lastSeenBaseline] = useState(() => readActivityLastSeen());
+  useEffect(() => {
+    if (events.length === 0) return;
+    const newest = events.reduce((m, e) => Math.max(m, eventTs(e.createdAt)), 0);
+    if (newest > 0) writeActivityLastSeen(newest);
+  }, [events]);
+  const newCount = useMemo(
+    () =>
+      lastSeenBaseline > 0
+        ? events.filter((e) => eventTs(e.createdAt) > lastSeenBaseline).length
+        : 0,
+    [events, lastSeenBaseline]
+  );
 
   // Adopt parent refresh only when it has at least as much data as our local
   // copy, so paginated extras aren't wiped by a periodic refresh.
@@ -1156,6 +1662,8 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
     const c: Record<ActivityCategory, number> = {
       all: events.length,
       friends: 0,
+      forums: 0,
+      nuggies: 0,
       achievements: 0,
       milestones: 0,
       patches: 0,
@@ -1182,6 +1690,26 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
     return filtered.map(({ e }) => e);
   }, [indexed, tab, search, sortBy, dateRange]);
 
+  // Coalesce consecutive runs of the same actor + event type (+ same game) into
+  // one row with a ×N chip — five casino wins in a row read as one line, not a wall.
+  const grouped = useMemo(() => {
+    const items: Array<{ event: ActivityEvent; repeat: number }> = [];
+    for (const e of visible) {
+      const last = items[items.length - 1];
+      if (
+        last &&
+        last.event.eventType === e.eventType &&
+        (last.event.actor?.discordUserId ?? null) === (e.actor?.discordUserId ?? null) &&
+        (last.event.game?.name ?? null) === (e.game?.name ?? null)
+      ) {
+        last.repeat++;
+        continue;
+      }
+      items.push({ event: e, repeat: 1 });
+    }
+    return items;
+  }, [visible]);
+
   const filtersActive =
     tab !== "all" || dateRange !== "all" || search.trim().length > 0 || sortBy !== "newest";
 
@@ -1189,7 +1717,11 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
     <section id="activity" style={{ display: "grid", gap: 14 }}>
       <SectionHead
         title="Activity feed"
-        meta="Latest from your crew — RSVPs, game picks, and library syncs."
+        meta={
+          newCount > 0
+            ? `${newCount} new since your last visit`
+            : "Latest from your crew — RSVPs, game picks, and library syncs."
+        }
         action="Open community →"
         onAction={() => onNavigate("community")}
       />
@@ -1235,7 +1767,7 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
                 <span
                   aria-hidden="true"
                   style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: 700,
                     padding: "1px 7px",
                     borderRadius: 999,
@@ -1314,7 +1846,7 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
             className="island-mono"
             style={{
               marginLeft: "auto",
-              fontSize: 11,
+              fontSize: 12,
               color: islandTheme.color.textMuted,
               whiteSpace: "nowrap"
             }}
@@ -1348,7 +1880,15 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
                   : "Nothing in this category right now."}
             </div>
           ) : (
-            visible.map((event, i) => <ActivityRow key={event.id} event={event} firstRow={i === 0} />)
+            grouped.map((item, i) => (
+              <ActivityRow
+                key={item.event.id}
+                event={item.event}
+                repeat={item.repeat}
+                firstRow={i === 0}
+                isNew={lastSeenBaseline > 0 && eventTs(item.event.createdAt) > lastSeenBaseline}
+              />
+            ))
           )}
 
           <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />
@@ -1408,7 +1948,7 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
             <div
               style={{
                 padding: "10px 14px",
-                fontSize: 11,
+                fontSize: 12,
                 color: islandTheme.color.textMuted,
                 textAlign: "center",
                 fontFamily: islandTheme.font.mono
@@ -1445,45 +1985,164 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
   );
 }
 
-function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: boolean }) {
+// Tiny glyph keyed off the event type family — scannable feed without reading.
+function activityIcon(eventType: string): string {
+  if (eventType.startsWith("forum")) return "💬";
+  if (eventType.startsWith("casino.")) return "🎰";
+  if (eventType.startsWith("member.")) return "🌴";
+  if (eventType.includes("nuggie") || eventType.includes("daily") || eventType.includes("casino") || eventType.includes("loan")) return "🍗";
+  if (eventType.includes("game_night") || eventType.includes("rsvp")) return "🎮";
+  if (eventType.includes("achievement") || eventType.includes("milestone") || eventType.includes("rank")) return "🏆";
+  if (eventType.includes("steam") || eventType.includes("library") || eventType.includes("sync")) return "🔄";
+  if (eventType.includes("patch") || eventType.includes("news")) return "📰";
+  return "🌊";
+}
+
+function ActivityRow({
+  event,
+  repeat = 1,
+  firstRow,
+  isNew = false
+}: {
+  event: ActivityEvent;
+  repeat?: number;
+  firstRow: boolean;
+  isNew?: boolean;
+}) {
+  const navigate = useNavigate();
   const rendered = describeEvent(event);
   if (!rendered) return null;
   const actorAvatar = event.actor?.avatarUrl ?? null;
+  const actorId = event.actor?.discordUserId ?? null;
+  const href = activityHref(event);
+  // Subtle tint + left accent for events newer than the last visit.
+  const baseBg = isNew ? "var(--bi-primary)14" : "transparent";
+  const avatarCircle = (
+    <div
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 999,
+        background: actorAvatar
+          ? `center / cover no-repeat url(${JSON.stringify(actorAvatar)})`
+          : colorForActor(actorId),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 14,
+        fontWeight: 800,
+        color: islandTheme.color.textDark
+      }}
+    >
+      {actorAvatar ? null : initialsFor(event.actor?.displayName ?? null)}
+    </div>
+  );
   return (
     <div
+      onClick={href ? () => navigate(href) : undefined}
+      role={href ? "link" : undefined}
+      tabIndex={href ? 0 : undefined}
+      aria-label={href ? `View details for this activity` : undefined}
+      onKeyDown={
+        href
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                navigate(href);
+              }
+            }
+          : undefined
+      }
+      onMouseEnter={href ? (e) => (e.currentTarget.style.background = islandTheme.color.panelMutedBg) : undefined}
+      onMouseLeave={href ? (e) => (e.currentTarget.style.background = baseBg) : undefined}
       style={{
         display: "grid",
         gridTemplateColumns: "40px 1fr auto",
         gap: 12,
         padding: "12px 10px",
         borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
-        alignItems: "start"
+        alignItems: "start",
+        cursor: href ? "pointer" : "default",
+        background: baseBg,
+        boxShadow: isNew ? `inset 3px 0 0 ${islandTheme.color.primaryGlow}` : "none",
+        borderRadius: 10,
+        transition: "background 140ms ease"
       }}
     >
-      <div
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 999,
-          background: actorAvatar
-            ? `center / cover no-repeat url(${JSON.stringify(actorAvatar)})`
-            : colorForActor(event.actor?.discordUserId ?? null),
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 14,
-          fontWeight: 800,
-          color: "#0f172a"
-        }}
-      >
-        {actorAvatar ? null : initialsFor(event.actor?.displayName ?? null)}
+      <div style={{ position: "relative", width: 40, height: 40 }}>
+        {actorId ? (
+          <Link
+            to={pathForIslander(actorId)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`${event.actor?.displayName ?? "Crew member"} profile`}
+            style={{ display: "block", borderRadius: 999, textDecoration: "none" }}
+          >
+            {avatarCircle}
+          </Link>
+        ) : (
+          avatarCircle
+        )}
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            right: -4,
+            bottom: -4,
+            fontSize: 13,
+            lineHeight: 1,
+            filter: "drop-shadow(0 1px 2px rgba(0,0,0,0.5))"
+          }}
+        >
+          {activityIcon(event.eventType)}
+        </span>
       </div>
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 14, lineHeight: 1.45, color: islandTheme.color.textSubtle }}>
           {rendered.body}
+          {repeat > 1 ? (
+            <span
+              className="island-mono"
+              title={`${repeat} similar events in a row`}
+              style={{
+                marginLeft: 8,
+                fontSize: 12,
+                fontWeight: 800,
+                padding: "1px 8px",
+                borderRadius: 999,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                color: islandTheme.color.textMuted,
+                whiteSpace: "nowrap"
+              }}
+            >
+              ×{repeat}
+            </span>
+          ) : null}
+          {isNew ? (
+            <span
+              title="New since your last visit"
+              style={{
+                marginLeft: 8,
+                fontSize: 10,
+                fontWeight: 800,
+                letterSpacing: "0.06em",
+                padding: "1px 7px",
+                borderRadius: 999,
+                background: islandTheme.color.primaryGlow,
+                color: islandTheme.color.textDark,
+                whiteSpace: "nowrap",
+                verticalAlign: "middle"
+              }}
+            >
+              NEW
+            </span>
+          ) : null}
         </div>
         {event.game?.headerImageUrl ? (
-          <div
+          <Link
+            to={pathForGame(event.game.appId)}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Open ${event.game.name}`}
             style={{
               marginTop: 8,
               display: "grid",
@@ -1493,8 +2152,13 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
               padding: "8px 10px",
               borderRadius: 10,
               background: islandTheme.color.panelMutedBg,
-              border: `1px solid ${islandTheme.color.cardBorder}`
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              color: "inherit",
+              textDecoration: "none",
+              transition: "border-color 140ms ease"
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = islandTheme.color.primaryGlow)}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = islandTheme.color.cardBorder)}
           >
             <div
               style={{
@@ -1510,13 +2174,13 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
                 Featured game
               </div>
             </div>
-          </div>
+          </Link>
         ) : null}
         <div
           className="island-mono"
           style={{
             marginTop: 6,
-            fontSize: 11,
+            fontSize: 12,
             color: islandTheme.color.textMuted,
             display: "flex",
             alignItems: "center",
@@ -1547,18 +2211,19 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
   );
 }
 
-function DriftLog({ cards }: { cards: NewsCardData[] }) {
+function DriftLog({ cards, onNavigate }: { cards: NewsCardData[]; onNavigate: (page: PageId) => void }) {
   return (
     <section style={{ display: "grid", gap: 14 }}>
       <SectionHead
         title="Washed up on shore"
         meta="Drift log: news, patch notes, and crew gossip curated by the parents."
         action="Full feed →"
+        onAction={() => onNavigate("games-news")}
       />
       {cards.length === 0 ? (
         <IslandCard style={{ padding: "16px 18px" }}>
           <div style={{ fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.55 }}>
-            The drift log is quiet right now. Parents can post news cards from the Admin → News Curation page.
+            The drift log is quiet right now. Parents can post news cards from the Admin → Drift Log page.
           </div>
         </IslandCard>
       ) : (
@@ -1625,7 +2290,7 @@ function NewsCardTile({ card }: { card: NewsCardData }) {
         <div style={{ marginTop: 4, fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
           {card.body}
         </div>
-        <div className="island-mono" style={{ marginTop: 6, fontSize: 11, color: islandTheme.color.textMuted }}>
+        <div className="island-mono" style={{ marginTop: 6, fontSize: 12, color: islandTheme.color.textMuted }}>
           {meta}
         </div>
       </div>
@@ -1646,7 +2311,7 @@ function NewsCardTile({ card }: { card: NewsCardData }) {
   return content;
 }
 
-function BotAndRitualRow() {
+function BotAndRitualRow({ guildId, onNavigate }: { guildId: string | null; onNavigate: (page: PageId) => void }) {
   return (
     <section
       style={{
@@ -1662,14 +2327,24 @@ function BotAndRitualRow() {
         body="Drop the slash command in any island channel. The bot pings the API, scans the crew's libraries, and surfaces overlap and near-matches in three seconds."
         ctaLabel="Open in Discord ↗"
         primary
+        onCta={() => {
+          if (guildId) {
+            window.open(`https://discord.com/channels/${guildId}`, "_blank", "noopener");
+            return;
+          }
+          // No guild id available, so fall back to the in-app
+          // "what can we play" surface on the Games page.
+          onNavigate("games");
+        }}
       />
       <CtaCard
         accent={islandTheme.palette.sandWarmAccent}
-        eyebrow="Crew ritual"
-        title="Tide check, every Sunday"
-        body="The island sends one weekly digest: who showed up, what got played, what's queued. Quiet, opt-in, never pings the off-duty."
-        ctaLabel="See last week's tide →"
+        eyebrow="Sunday ritual"
+        title="Tide check"
+        body="Your weekly island recap — who showed up, what got played, what is queued. The tide rolls in every Sunday with the week's attendance, playtime, and wishlist drift."
+        ctaLabel="Read this week's tide →"
         primary={false}
+        onCta={() => onNavigate("tide-check")}
       />
     </section>
   );
@@ -1682,9 +2357,10 @@ type CtaCardProps = {
   body: string;
   ctaLabel: string;
   primary: boolean;
+  onCta?: () => void;
 };
 
-function CtaCard({ accent, eyebrow, title, body, ctaLabel, primary }: CtaCardProps) {
+function CtaCard({ accent, eyebrow, title, body, ctaLabel, primary, onCta }: CtaCardProps) {
   return (
     <article
       style={{
@@ -1699,7 +2375,7 @@ function CtaCard({ accent, eyebrow, title, body, ctaLabel, primary }: CtaCardPro
       <div
         className="island-mono"
         style={{
-          fontSize: 11,
+          fontSize: 12,
           color: accent,
           textTransform: "uppercase",
           letterSpacing: "0.1em",
@@ -1727,6 +2403,7 @@ function CtaCard({ accent, eyebrow, title, body, ctaLabel, primary }: CtaCardPro
       <button
         type="button"
         className="island-btn"
+        onClick={onCta}
         style={{
           background: primary ? islandTheme.color.primary : "transparent",
           border: `1px solid ${primary ? islandTheme.color.primary : islandTheme.color.cardBorder}`,
@@ -1782,23 +2459,27 @@ function SectionHead({
         </h2>
         <div
           className="island-mono"
-          style={{ marginTop: 4, fontSize: 11, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}
+          style={{ marginTop: 4, fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}
         >
           {meta}
         </div>
       </div>
-      <a
-        href="#"
-        onClick={(e) => { e.preventDefault(); onAction?.(); }}
+      <button
+        type="button"
+        onClick={() => onAction?.()}
         style={{
+          background: "transparent",
+          border: "none",
+          padding: 0,
           color: islandTheme.color.primaryGlow,
           fontSize: 13,
           fontWeight: 600,
-          textDecoration: "none"
+          cursor: "pointer",
+          font: "inherit"
         }}
       >
         {action}
-      </a>
+      </button>
     </div>
   );
 }

@@ -117,7 +117,12 @@ rule** / **rate-limiting rule** on `api.bonelessisland.com` (all free tier).
 ## 4. Get the code + configure env
 
 ```bash
-git clone <repo-url> boneless && cd boneless
+# Clone into the EXACT path the deploy pipeline expects.
+# .github/workflows/deploy.yml hardcodes `cd /home/ssm-user/thebonelessisland`,
+# so the repo must live there or every push-to-deploy will fail.
+sudo mkdir -p /home/ssm-user/thebonelessisland
+sudo chown "$USER" /home/ssm-user/thebonelessisland
+git clone <repo-url> /home/ssm-user/thebonelessisland && cd /home/ssm-user/thebonelessisland
 cp .env.example .env
 chmod 600 .env
 ```
@@ -133,7 +138,13 @@ Edit `.env`. **Production values that differ from the example:**
 ```dotenv
 NODE_ENV=production
 WEB_ORIGIN=https://bonelessisland.com
-API_BASE_URL=https://api.bonelessisland.com
+# API_BASE_URL is the bot's API target ONLY (the web uses VITE_API_BASE_URL, baked
+# at build time). The bot calls /internal/* routes, which Caddy 403s on the public
+# hostname — so it MUST use the in-container address, not the public URL. Setting
+# this to https://api.bonelessisland.com silently breaks every bot internal call
+# (milestone/achievement announcements, settings cache, slash-command autocomplete,
+# /nuggie ask). See infra/Caddyfile.
+API_BASE_URL=http://api:3000
 DATABASE_URL=postgresql://postgres:<POSTGRES_PASSWORD>@postgres:5432/boneless
 POSTGRES_PASSWORD=<same password as in DATABASE_URL>
 DISCORD_REDIRECT_URI=https://api.bonelessisland.com/auth/discord/callback

@@ -14,9 +14,12 @@ import {
   startGame,
   stepGame,
   withIdempotency,
+  type GameState,
   type Surface
 } from "../lib/nuggiesGames.js";
 import { db } from "../db/client.js";
+import { recordEvent } from "../lib/activityEvents.js";
+import { getAISetting } from "../lib/serverSettings.js";
 
 export const nuggiesGamesRouter = Router();
 
@@ -28,6 +31,35 @@ async function resolveInternalUserId(discordUserId: string): Promise<bigint | nu
     [discordUserId]
   );
   return r.rows[0] ? BigInt(r.rows[0].id) : null;
+}
+
+// Net win (payout − bet) at or above this posts a casino win to the activity
+// feed. Admin-tunable via server_settings (activity_casino_min_net).
+function casinoMinNet(): number {
+  const raw = getAISetting("activity_casino_min_net");
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) ? n : 250;
+}
+
+function isWin(state: GameState): boolean {
+  const r = state.result;
+  if (!r) return false;
+  if ("won" in r) return r.won === true;
+  return r.result === "win" || r.result === "blackjack";
+}
+
+// Fire-and-forget: post a "big win" activity event when a resolved game's net
+// gain clears the threshold. No-op on losses, pushes, sub-threshold wins, or
+// idempotent replays (caller passes replayed).
+function maybeEmitCasinoWin(discordUserId: string, state: GameState, replayed: boolean): void {
+  if (replayed || state.status !== "resolved" || !isWin(state)) return;
+  const net = (state.payout ?? 0) - state.bet;
+  if (net < casinoMinNet()) return;
+  void recordEvent({
+    eventType: "casino.big_win",
+    actorDiscordUserId: discordUserId,
+    payload: { game: state.gameType, bet: state.bet, payout: state.payout ?? 0, net }
+  });
 }
 
 function pickSurface(req: Request): Surface {
@@ -137,6 +169,11 @@ nuggiesGamesRouter.post("/:gameType/start", requireBotOrSession, async (req, res
       }
     });
     res.status(result.statusCode).json(result.body);
+    maybeEmitCasinoWin(
+      discordUserId,
+      result.body as GameState,
+      (result as { replayed?: boolean }).replayed === true
+    );
   } catch (err) {
     if (mapGameError(err, res)) return;
     res.status(500).json({ error: err instanceof Error ? err.message : "Internal error" });
@@ -176,6 +213,11 @@ nuggiesGamesRouter.post("/:sessionId/step", requireBotOrSession, async (req, res
       }
     });
     res.status(result.statusCode).json(result.body);
+    maybeEmitCasinoWin(
+      discordUserId,
+      result.body as GameState,
+      (result as { replayed?: boolean }).replayed === true
+    );
   } catch (err) {
     if (mapGameError(err, res)) return;
     res.status(500).json({ error: err instanceof Error ? err.message : "Internal error" });

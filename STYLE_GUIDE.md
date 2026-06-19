@@ -29,7 +29,7 @@ Resolved via CSS variables for theme awareness.
 - `panelMutedBg`: opaque inner panels (inputs, code blocks)
 - `textPrimary`, `textSecondary`, `textMuted`, `textSubtle`, `textInverted`: text scale
 - `border`, `cardBorder`: edge tones
-- `primary`, `primaryStrong`, `primaryGlow`, `primaryText`: blue CTA chain (cyan in day mode)
+- `primary`, `primaryStrong`, `primaryGlow`, `primaryText`: blue CTA chain (sky blue `#0284c7` in day mode; cyan `#0891b2` is `toolAccent`, not the primary)
 - `secondary`: secondary surface
 - `info`, `infoText`: informational tone
 - `toolAccent`: cyan tool accent
@@ -81,11 +81,11 @@ Static accent values for scene + branded components.
 - Cards: `panelBg` background + `cardBorder` border + glass blur.
 
 ## Information Architecture
-- Top nav: **Home** · **Games** · **Community** · **Achievements** · **Admin** (gated to Parent role)
+- Top nav: a **MegaMenu** with three hover groups — **Games** · **Community** · **Nuggies** — plus an **Admin** link (gated to Parent role). Home is the root route reached via the brand logo (no "Home" nav item); "Crew Achievements" lives under Community.
 - User menu (avatar dropdown): banner gradient, large avatar with presence dot, name/handle/Discord ID, custom status, rich presence card (when in voice), 3-stat strip, status picker (online/idle/dnd/hidden), View profile, Steam link state, Theme toggle row, Sign out
 - Sub-routes:
   - **Library** under Games (full Steam library with co-ownership)
-  - **Admin** has a hub + 9 sub-pages (News Curation, Recommendation Tester, Data Sync, Members & Roles, Game Night Moderation, Forum Moderation, Tournaments, Game Library, Audit Log)
+  - **Admin** has 18 deep-linkable pages (Dashboard, Members & Roles, Forum Moderation, Game Library, Game Nights, Recommendation Engine, Gaming News, Patch Sources, Drift Log, Economy Operations, Shop Items, Economy Rules, AI Provider, Nuggie Persona, Guild Identity, Discord Bridge, Data Sync, Audit Log)
 
 ## Shared UI Primitives
 Use `apps/web/src/islandUi.tsx` primitives before writing custom inline control styles.
@@ -94,7 +94,7 @@ Use `apps/web/src/islandUi.tsx` primitives before writing custom inline control 
 - `IslandTileButton` — large promo tile with background image (used on Home)
 - `IslandMemberChip` — selectable member pill
 - `IslandGameCard` — selectable game row/card
-- `IslandGameBlade` — dense interactive game row (legacy, kept for non-voting list use)
+- `IslandGameBlade` — dense interactive game row (dead/unused; its definition still carries voting UI but nothing imports or renders it — slated for removal)
 - `IslandComingSoonTile` — placeholder reserved-feature tile
 - `IslandNewsPlaceholderCard` — temporary news entry shell
 - `IslandActiveMemberRow` — member status row

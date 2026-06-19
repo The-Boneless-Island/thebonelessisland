@@ -4,16 +4,19 @@ import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../i
 import { islandTheme } from "../theme.js";
 import type { ServerSetting } from "../types.js";
 import type { SettingMeta } from "../pages/admin/settingMeta.js";
+import { AiModelSelect } from "./AiModelSelect.js";
 
 type SettingCardProps = {
   setting: ServerSetting;
   meta: SettingMeta;
   onSave: (key: string, value: string) => Promise<void> | void;
+  /** Current ai_provider value, threaded so the ai_model card can list provider models. */
+  aiProvider?: string;
 };
 
 const UNDO_WINDOW_MS = 30_000;
 
-export function SettingCard({ setting, meta, onSave }: SettingCardProps) {
+export function SettingCard({ setting, meta, onSave, aiProvider }: SettingCardProps) {
   const [draft, setDraft] = useState<string>(setting.value);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,12 +40,16 @@ export function SettingCard({ setting, meta, onSave }: SettingCardProps) {
   const confirmRequired = isHighRisk && !!meta.confirmPhrase;
   const confirmOk = !confirmRequired || confirmText.trim() === meta.confirmPhrase;
   const canSave = isDirty && confirmOk;
+  // Low-risk toggles and selects save the moment an option is clicked — no
+  // separate Save button. High-risk ones keep the explicit confirm+save flow.
+  const instantSave = !isHighRisk && (meta.type === "boolean" || meta.type === "select");
 
-  async function handleSave() {
+  async function handleSave(valueOverride?: string) {
     const previous = setting.value;
+    const next = valueOverride ?? draft;
     setError(null);
     try {
-      await onSave(setting.key, draft);
+      await onSave(setting.key, next);
       setSaved(true);
       if (savedTimer.current) clearTimeout(savedTimer.current);
       savedTimer.current = setTimeout(() => setSaved(false), 2200);
@@ -131,7 +138,16 @@ export function SettingCard({ setting, meta, onSave }: SettingCardProps) {
         meta={meta}
         setting={setting}
         draft={draft}
-        onChange={setDraft}
+        onChange={
+          instantSave
+            ? (v) => {
+                if (v === setting.value) return;
+                setDraft(v);
+                void handleSave(v);
+              }
+            : setDraft
+        }
+        aiProvider={aiProvider}
       />
 
       {/* Typed confirm (high-risk only) */}
@@ -151,26 +167,39 @@ export function SettingCard({ setting, meta, onSave }: SettingCardProps) {
       )}
 
       {/* Save row + error */}
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <IslandButton
-          variant={saved ? "secondary" : "primary"}
-          disabled={!canSave}
-          onClick={() => void handleSave()}
-          style={{ minWidth: 90 }}
-        >
-          {saved ? "✓ Saved" : "Save"}
-        </IslandButton>
-        {error && (
-          <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
-            {error}
+      {instantSave ? (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+            {saved ? "✓ Saved" : "Saves immediately when you pick an option."}
           </span>
-        )}
-        {isDirty && !saved && (
-          <span style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-            Unsaved changes
-          </span>
-        )}
-      </div>
+          {error && (
+            <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
+              {error}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <IslandButton
+            variant={saved ? "secondary" : "primary"}
+            disabled={!canSave}
+            onClick={() => void handleSave()}
+            style={{ minWidth: 90 }}
+          >
+            {saved ? "✓ Saved" : "Save"}
+          </IslandButton>
+          {error && (
+            <span style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
+              {error}
+            </span>
+          )}
+          {isDirty && !saved && (
+            <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+              Unsaved changes
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Undo banner */}
       {undoFrom && (
@@ -198,14 +227,14 @@ export function SettingCard({ setting, meta, onSave }: SettingCardProps) {
           style={dangerHeaderStyle(dangerExpanded)}
         >
           <span style={{ fontSize: 14 }}>{dangerExpanded ? "▼" : "▶"}</span>
-          <span className="island-mono" style={{ ...islandTagStyle({ color: "#ef4444" }), fontSize: 9 }}>
+          <span className="island-mono" style={{ ...islandTagStyle({ color: "#ef4444" }), fontSize: 12 }}>
             Sensitive
           </span>
           <span style={{ fontWeight: 700, fontSize: 14, color: islandTheme.color.textPrimary, flex: 1, textAlign: "left" }}>
             {meta.label}
           </span>
           {!dangerExpanded && setting.value && (
-            <span style={{ fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+            <span style={{ fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
               {summarize(meta, setting.value)}
             </span>
           )}
@@ -226,13 +255,19 @@ function SettingInput({
   meta,
   setting,
   draft,
-  onChange
+  onChange,
+  aiProvider
 }: {
   meta: SettingMeta;
   setting: ServerSetting;
   draft: string;
   onChange: (v: string) => void;
+  aiProvider?: string;
 }) {
+  if (meta.key === "ai_model") {
+    return <AiModelSelect value={draft} provider={aiProvider ?? ""} onChange={onChange} />;
+  }
+
   if (meta.type === "boolean") {
     const isOn = draft === "true";
     return (
@@ -315,7 +350,7 @@ function UndoBanner({ from, onUndo, onDismiss }: { from: string; onUndo: () => v
         Saved. <span style={{ color: islandTheme.color.textMuted }}>Undo to restore previous value</span>
       </span>
       <span style={{ flex: 1 }} />
-      <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+      <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
         {secondsLeft}s
       </span>
       <button
@@ -347,7 +382,7 @@ function FooterRow({ setting }: { setting: ServerSetting }) {
         display: "flex",
         gap: 10,
         flexWrap: "wrap",
-        fontSize: 10,
+        fontSize: 12,
         color: islandTheme.color.textMuted,
         paddingTop: 6,
         borderTop: `1px solid ${islandTheme.color.cardBorder}`
@@ -385,7 +420,7 @@ function relativeAgo(iso: string): string {
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const fallbackStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   color: islandTheme.color.textMuted,
   padding: "6px 10px",
   borderRadius: 7,
@@ -436,7 +471,7 @@ const dismissButtonStyle: CSSProperties = {
 };
 
 const confirmLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: 12,
   color: islandTheme.color.textMuted,
   textTransform: "uppercase",
   letterSpacing: "0.06em"

@@ -239,15 +239,68 @@ function relativeAgo(iso: string): string {
 type ActivityEvent = {
   id: string;
   eventType: string;
-  category: "all" | "friends" | "achievements" | "milestones" | "patches";
+  category: "all" | "friends" | "achievements" | "milestones" | "patches" | "forums" | "nuggies";
   createdAt: string;
-  actor: { displayName: string } | null;
-  target: { displayName: string } | null;
+  actor: { displayName: string; discordUserId?: string | null } | null;
+  target: { displayName: string; discordUserId?: string | null } | null;
   game: { name: string } | null;
   payload: Record<string, unknown>;
 };
 
+// ── Activity deep links (mirror apps/web/src/lib/routes.ts) ──────────────────
+const webOrigin = (process.env.WEB_ORIGIN ?? "http://localhost:5173").replace(/\/+$/, "");
+const webUrl = (path: string): string => `${webOrigin}${path}`;
+
+function posIntFrom(value: unknown): number | null {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function botCasinoLabel(game: string): string {
+  switch (game) {
+    case "coinflip": return "Coinflip";
+    case "blackjack": return "Blackjack";
+    case "guessnumber": return "Guess the Number";
+    default: return game;
+  }
+}
+
+// Site URL an activity row links to, or null when it has nowhere to go.
+function activityUrl(e: ActivityEvent): string | null {
+  const t = e.eventType;
+  const p = e.payload ?? {};
+  if (t.startsWith("forum")) {
+    const threadId = posIntFrom(p.threadId);
+    if (!threadId) return null;
+    const postId = posIntFrom(p.postId);
+    return webUrl(`/forums/thread/${threadId}${postId ? `/post/${postId}` : ""}`);
+  }
+  if (t.startsWith("game_night.")) return webUrl("/tide-check");
+  if (t.startsWith("news.")) return webUrl("/games/news");
+  if (t === "member.joined") {
+    const did = (typeof p.discordUserId === "string" && p.discordUserId) || e.actor?.discordUserId || null;
+    return did ? webUrl(`/islanders/${did}`) : null;
+  }
+  if (
+    t.startsWith("achievement.") ||
+    t.startsWith("milestone.") ||
+    t.startsWith("steam.") ||
+    t.startsWith("casino.") ||
+    t.startsWith("nuggies.")
+  ) {
+    return e.actor?.discordUserId ? webUrl(`/islanders/${e.actor.discordUserId}`) : null;
+  }
+  return null;
+}
+
+// Full feed line for Discord: human copy + a deep link back to the site.
 function describeActivity(e: ActivityEvent): string {
+  const line = activityLine(e);
+  const url = activityUrl(e);
+  return url ? `${line} · [open ↗](${url})` : line;
+}
+
+function activityLine(e: ActivityEvent): string {
   const actor = e.actor?.displayName ?? "A crew member";
   const ago = relativeAgo(e.createdAt);
   const game = e.game?.name;
@@ -272,11 +325,57 @@ function describeActivity(e: ActivityEvent): string {
       const emoji = typeof payload.emoji === "string" ? payload.emoji : "🏆";
       return `${emoji} **${actor}** unlocked **${name}** · ${ago}`;
     }
+    case "achievement.steam_progress": {
+      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
+      const gameName = typeof payload.gameName === "string" ? payload.gameName : "a game";
+      return `🏆 **${actor}** unlocked ${delta} achievement${delta === 1 ? "" : "s"} in **${gameName}** · ${ago}`;
+    }
     case "milestone.reached": {
       const label = typeof payload.label === "string" ? payload.label : "a new tier";
       const emoji = typeof payload.emoji === "string" ? payload.emoji : "⭐";
       const threshold = typeof payload.threshold === "number" ? `₦${payload.threshold.toLocaleString()}` : "";
       return `${emoji} **${actor}** hit **${label}**${threshold ? ` (${threshold})` : ""} · ${ago}`;
+    }
+    case "forum_thread_created": {
+      const title = typeof payload.title === "string" ? payload.title : "a new thread";
+      return `💬 **${actor}** started **${title}** in the forums · ${ago}`;
+    }
+    case "forum_reply_created": {
+      const title = typeof payload.threadTitle === "string" ? payload.threadTitle : "a thread";
+      return `💬 **${actor}** replied to **${title}** · ${ago}`;
+    }
+    case "forum.reactions_milestone": {
+      const title = typeof payload.threadTitle === "string" ? payload.threadTitle : "a post";
+      const count = typeof payload.count === "number" ? payload.count : 0;
+      return `🔥 **${actor}**'s post in **${title}** hit ${count} reactions · ${ago}`;
+    }
+    case "news.card_published": {
+      const title = typeof payload.title === "string" ? payload.title : "an update";
+      return `📰 **${actor}** posted **${title}** to the drift log · ${ago}`;
+    }
+    case "member.joined": {
+      const name =
+        typeof payload.displayName === "string" && payload.displayName ? payload.displayName : actor;
+      return `🌴 **${name}** washed ashore — welcome aboard! · ${ago}`;
+    }
+    case "nuggies.daily_claimed": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      return `🍗 **${actor}** claimed their daily ₦${amount.toLocaleString()} · ${ago}`;
+    }
+    case "casino.big_win": {
+      const net = typeof payload.net === "number" ? payload.net : 0;
+      const g = typeof payload.game === "string" ? payload.game : "the casino";
+      return `🎰 **${actor}** won big at **${botCasinoLabel(g)}** — +₦${net.toLocaleString()} · ${ago}`;
+    }
+    case "nuggies.loan_accepted": {
+      const principal = typeof payload.principal === "number" ? payload.principal : 0;
+      const to = e.target?.displayName ? ` from **${e.target.displayName}**` : "";
+      return `🤝 **${actor}** took a ₦${principal.toLocaleString()} loan${to} · ${ago}`;
+    }
+    case "nuggies.loan_repaid": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      const to = e.target?.displayName ? ` to **${e.target.displayName}**` : "";
+      return `💸 **${actor}** repaid a ₦${amount.toLocaleString()} loan${to} · ${ago}`;
     }
     default:
       return `✨ **${actor}** · ${e.eventType} · ${ago}`;
@@ -538,10 +637,26 @@ const client = new Client({
 
 const lastPushedStatus = new Map<string, string>();
 
-async function pushPresence(discordUserId: string, status: string): Promise<void> {
+// First non-custom activity (Playing/Streaming/Listening/Watching/Competing).
+// Custom Status (type 4) carries no game name in .name, so we skip it.
+function extractActivity(
+  activities: ReadonlyArray<{ name?: string | null; type?: number | null }> | undefined
+): { activityName: string | null; activityType: number | null } {
+  const act = (activities ?? []).find((a) => a.type !== 4);
+  if (!act?.name) return { activityName: null, activityType: null };
+  return { activityName: act.name, activityType: typeof act.type === "number" ? act.type : null };
+}
+
+async function pushPresence(
+  discordUserId: string,
+  status: string,
+  activityName: string | null = null,
+  activityType: number | null = null
+): Promise<void> {
   if (!botApiSharedSecret) return;
-  if (lastPushedStatus.get(discordUserId) === status) return;
-  lastPushedStatus.set(discordUserId, status);
+  const dedupeKey = `${status}|${activityName ?? ""}|${activityType ?? ""}`;
+  if (lastPushedStatus.get(discordUserId) === dedupeKey) return;
+  lastPushedStatus.set(discordUserId, dedupeKey);
   try {
     await fetch(`${apiBase}/members/presence/${discordUserId}`, {
       method: "POST",
@@ -549,7 +664,7 @@ async function pushPresence(discordUserId: string, status: string): Promise<void
         "content-type": "application/json",
         "x-island-bot-secret": botApiSharedSecret
       },
-      body: JSON.stringify({ status })
+      body: JSON.stringify({ status, activityName, activityType })
     });
   } catch {
     // Best-effort. Next presence event will retry.
@@ -562,7 +677,24 @@ client.on(Events.PresenceUpdate, (_oldPresence, newPresence) => {
   const status = newPresence?.status;
   if (!userId || !status) return;
   if (newPresence.guild?.id && newPresence.guild.id !== guildId) return;
-  void pushPresence(userId, status);
+  const { activityName, activityType } = extractActivity(newPresence.activities);
+  void pushPresence(userId, status, activityName, activityType);
+});
+
+// ── New-member welcome → activity feed ──────────────────────────────────────
+// Record a "member.joined" event when someone joins the guild. Identity is
+// carried in the payload because the new member won't have a web account yet.
+client.on(Events.GuildMemberAdd, (member) => {
+  if (member.guild?.id && member.guild.id !== guildId) return;
+  if (member.user?.bot) return;
+  const displayName =
+    member.displayName ?? member.user?.globalName ?? member.user?.username ?? "New islander";
+  const avatarUrl = member.user?.displayAvatarURL?.({ size: 128 }) ?? null;
+  void internalApi("POST", "/internal/events/member-joined", {
+    discordUserId: member.id,
+    displayName,
+    avatarUrl
+  });
 });
 
 // ── Milestone announcer (outbox poller) ─────────────────────────────────────
@@ -614,6 +746,29 @@ type AchievementUnlockedPayload = {
   name: string;
   emoji: string;
 };
+
+type TideWeeklyPayload = {
+  summary: string;
+  channelId?: string;
+};
+
+async function processTideWeekly(payload: TideWeeklyPayload): Promise<void> {
+  // The API already built the markdown summary; post it verbatim to the
+  // milestone channel (reuse milestone_channel_id like achievement/milestone
+  // announcements, allowing payload.channelId to override).
+  const channelId = payload.channelId ?? (await getCachedSetting("milestone_channel_id"));
+  if (!channelId) return;
+  if (!payload.summary) return;
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (channel && channel.isSendable()) {
+      await channel.send(payload.summary);
+    }
+  } catch (err) {
+    console.error("[tide] channel post failed", err);
+  }
+}
 
 async function processAchievementUnlocked(payload: AchievementUnlockedPayload): Promise<void> {
   const enabled = await getCachedSetting("achievement_announcements_enabled");
@@ -715,6 +870,8 @@ async function processPendingAnnouncements(): Promise<void> {
           await processMilestoneAnnouncement(row.payload as MilestonePayload);
         } else if (row.kind === "achievement.unlocked") {
           await processAchievementUnlocked(row.payload as AchievementUnlockedPayload);
+        } else if (row.kind === "tide.weekly") {
+          await processTideWeekly(row.payload as TideWeeklyPayload);
         }
       } catch (err) {
         console.error(`[announcements] handler failed for row ${row.id}`, err);
@@ -754,7 +911,8 @@ client.once(Events.ClientReady, async (readyClient) => {
           let pushed = 0;
           for (const [, member] of members) {
             const status = member.presence?.status ?? "offline";
-            void pushPresence(member.id, status);
+            const { activityName, activityType } = extractActivity(member.presence?.activities);
+            void pushPresence(member.id, status, activityName, activityType);
             pushed += 1;
           }
           console.log(`[presence] initial sweep queued ${pushed} member(s)`);

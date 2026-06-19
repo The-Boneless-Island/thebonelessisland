@@ -1,6 +1,7 @@
 import express from "express";
 import { db } from "../db/client.js";
 import { requireBotOrSession } from "../lib/auth.js";
+import { filterHiddenSteamEvents } from "../lib/steamPrivacy.js";
 
 export const activityRouter = express.Router();
 activityRouter.use(requireBotOrSession);
@@ -10,6 +11,7 @@ type ActivityRow = {
   event_type: string;
   created_at: string;
   payload: Record<string, unknown> | null;
+  actor_user_id: string | null;
   actor_discord_user_id: string | null;
   actor_username: string | null;
   actor_display_name: string | null;
@@ -24,7 +26,14 @@ type ActivityRow = {
   target_game_night_id: string | null;
 };
 
-type ActivityCategory = "all" | "friends" | "achievements" | "milestones" | "patches";
+type ActivityCategory =
+  | "all"
+  | "friends"
+  | "achievements"
+  | "milestones"
+  | "patches"
+  | "forums"
+  | "nuggies";
 
 function categorize(eventType: string): ActivityCategory {
   // Note: order matters — most-specific prefixes first.
@@ -32,6 +41,9 @@ function categorize(eventType: string): ActivityCategory {
     return "achievements";
   }
   if (eventType.startsWith("milestone.")) return "milestones";
+  if (eventType.startsWith("forum")) return "forums";
+  if (eventType.startsWith("casino.") || eventType.startsWith("nuggies.")) return "nuggies";
+  if (eventType.startsWith("member.")) return "friends";
   if (eventType.startsWith("game_night.")) return "friends";
   if (eventType.startsWith("steam.")) return "milestones";
   if (eventType.startsWith("news.")) return "patches";
@@ -49,6 +61,7 @@ activityRouter.get("/", async (req, res) => {
         ae.event_type,
         ae.created_at,
         ae.payload,
+        ae.actor_user_id::text AS actor_user_id,
         actor_user.discord_user_id AS actor_discord_user_id,
         actor_dp.username AS actor_username,
         actor_gm.display_name AS actor_display_name,
@@ -75,8 +88,12 @@ activityRouter.get("/", async (req, res) => {
     [limit]
   );
 
+  // Read-time privacy backstop: drop any steam/achievement event whose game the
+  // actor has since hidden (private library or per-game exclusion).
+  const visibleRows = await filterHiddenSteamEvents(result.rows);
+
   res.json({
-    events: result.rows.map((row) => ({
+    events: visibleRows.map((row) => ({
       id: row.id,
       eventType: row.event_type,
       category: categorize(row.event_type),

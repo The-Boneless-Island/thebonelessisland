@@ -5,6 +5,8 @@ import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
+import { resolveGameNamesFromAppList } from "../lib/steamAppList.js";
+import { syncAchievementSchema } from "../lib/steamAchievementSchema.js";
 import { ingestNewsForApps } from "../lib/gameNewsIngestion.js";
 import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
@@ -128,25 +130,40 @@ async function syncWishlistForUser(userId: string, steamId64: string): Promise<S
       [userId, appIds]
     );
 
-    // Enrich all wishlist items that are missing metadata or an image.
-    // Steam's appdetails endpoint supports batches; we chunk at 50 to stay
-    // well within unofficial limits and avoid overly long query strings.
-    const enrichTargets = await db.query<{ app_id: number }>(
-      `
-        SELECT app_id
-        FROM games
-        WHERE app_id = ANY($1::int[])
-          AND (metadata_updated_at IS NULL OR header_image_url IS NULL)
-        ORDER BY app_id ASC
-      `,
-      [appIds]
-    );
-    const enrichIds = enrichTargets.rows.map((row) => row.app_id);
-    for (let i = 0; i < enrichIds.length; i += 50) {
-      const chunk = enrichIds.slice(i, i + 50);
-      await enrichGameMetadataFromSteam(chunk);
-      await enrichMissingGameImages(chunk);
-    }
+    // Resolve human-readable names immediately from the cached Steam app-list.
+    // The wishlist API returns appids only (no names), so without this every
+    // freshly-synced wishlist row would render as "App <id>" until the slower
+    // per-app store enrichment below lands. This lookup is in-memory + one bulk
+    // UPDATE, so it's safe to await on the sync path.
+    await resolveGameNamesFromAppList(appIds).catch((error: unknown) => {
+      console.error("wishlist name resolution failed", error);
+    });
+
+    // Rich store enrichment (price, tags, art, capability flags) for items
+    // missing metadata or an image. Steam's appdetails endpoint rejects batched
+    // appids, so it is fetched one appid at a time and throttled — far too slow
+    // to block the sync response on. Fire-and-forget; the next read picks up the
+    // enriched data once it lands.
+    void (async () => {
+      const enrichTargets = await db.query<{ app_id: number }>(
+        `
+          SELECT app_id
+          FROM games
+          WHERE app_id = ANY($1::int[])
+            AND (metadata_updated_at IS NULL OR header_image_url IS NULL)
+          ORDER BY app_id ASC
+        `,
+        [appIds]
+      );
+      const enrichIds = enrichTargets.rows.map((row) => row.app_id);
+      for (let i = 0; i < enrichIds.length; i += 50) {
+        const chunk = enrichIds.slice(i, i + 50);
+        await enrichGameMetadataFromSteam(chunk);
+        await enrichMissingGameImages(chunk);
+      }
+    })().catch((error: unknown) => {
+      console.error("wishlist store enrichment failed", error);
+    });
   } else {
     await db.query(`DELETE FROM user_wishlists WHERE user_id = $1`, [userId]);
   }
@@ -324,6 +341,11 @@ steamRouter.post("/unlink", async (_req, res) => {
 });
 
 const OWNED_GAMES_COOLDOWN_MS = 30 * 60 * 1000;
+const RECENT_GAMES_COOLDOWN_MS = 4 * 60 * 1000;
+// In-memory per-user cooldown for recent-games sync. The web fires this every
+// 5 min per tab plus on refocus, so a lightweight module-scope gate avoids
+// hammering the Steam API without needing a DB column.
+const recentGamesLastSyncByUser = new Map<string, number>();
 const GROUPS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const ACHIEVEMENTS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const ACHIEVEMENT_TOP_N = 15;
@@ -448,6 +470,42 @@ async function runProfileContextSync(userId: string, steamId64: string): Promise
       `,
       [userId, ACHIEVEMENT_TOP_N]
     );
+
+    // Pre-fetch prior unlocked counts + game names for the candidate apps in a
+    // single query so we can diff per-app and emit progress activity events
+    // without an extra round-trip inside the throttled loop. A null prior value
+    // (no existing progress row) is treated as a baseline — we skip emitting on
+    // the first sync to avoid flooding the feed.
+    const candidateAppIds = topGames.rows.map((row) => row.app_id);
+    const priorUnlockedByApp = new Map<number, number>();
+    const gameNameByApp = new Map<number, string>();
+    let actorDiscordUserId: string | null = null;
+    if (candidateAppIds.length > 0) {
+      const priorRows = await db.query<{ app_id: number; achievements_unlocked: number | null; name: string }>(
+        `
+          SELECT g.app_id,
+                 p.achievements_unlocked,
+                 g.name
+          FROM games g
+          LEFT JOIN user_game_progress p
+            ON p.app_id = g.app_id AND p.user_id = $1
+          WHERE g.app_id = ANY($2::int[])
+        `,
+        [userId, candidateAppIds]
+      );
+      for (const prior of priorRows.rows) {
+        if (prior.achievements_unlocked != null) {
+          priorUnlockedByApp.set(prior.app_id, prior.achievements_unlocked);
+        }
+        gameNameByApp.set(prior.app_id, prior.name);
+      }
+      const actorRow = await db.query<{ discord_user_id: string }>(
+        `SELECT discord_user_id FROM users WHERE id = $1`,
+        [userId]
+      );
+      actorDiscordUserId = actorRow.rows[0]?.discord_user_id ?? null;
+    }
+
     for (const row of topGames.rows) {
       const r = await fetchAchievementsForApp(steamId64, row.app_id);
       if (r.ok) {
@@ -465,6 +523,28 @@ async function runProfileContextSync(userId: string, steamId64: string): Promise
           [userId, row.app_id, r.unlocked, r.total, r.completionPct]
         );
         result.achievementsSynced++;
+
+        // Diff against the prior unlocked count. Only emit when a baseline
+        // existed (prior was non-null) and the count actually increased — this
+        // skips the first-ever sync and any no-change re-syncs.
+        const priorUnlocked = priorUnlockedByApp.get(row.app_id);
+        if (priorUnlocked != null && actorDiscordUserId) {
+          const delta = r.unlocked - priorUnlocked;
+          if (delta > 0) {
+            void recordEvent({
+              eventType: "achievement.steam_progress",
+              actorDiscordUserId,
+              targetAppId: row.app_id,
+              payload: {
+                appId: row.app_id,
+                gameName: gameNameByApp.get(row.app_id) ?? `app-${row.app_id}`,
+                unlockedDelta: delta,
+                newUnlocked: r.unlocked,
+                total: r.total
+              }
+            });
+          }
+        }
       } else if (!r.hasStatsApi) {
         await db.query(
           `
@@ -536,6 +616,153 @@ steamRouter.post("/sync-profile-context", async (_req, res) => {
 });
 
 
+type SyncOwnedGamesResult =
+  | { ok: true; syncedGames: number; privateLibrary: boolean; wishlist?: SyncWishlistResult }
+  | { ok: false; rateLimited?: boolean; retryAfterSeconds?: number; reason: string };
+
+/**
+ * Sync a single user's owned Steam games into games/user_games, refresh the
+ * steam_links.last_synced_at marker, and fan out the usual side effects (top-8
+ * news ingest, profile-context backfill, wishlist sync). Reusable from both the
+ * POST /sync-owned-games route and the syncAllOwnedGames cron pass.
+ *
+ * By default the wishlist sync is fire-and-forget; pass opts.awaitWishlist to
+ * await it and surface its result (the interactive route needs this so the web
+ * client can show wishlist status).
+ */
+export async function syncOwnedGamesForUser(
+  userIdInternal: string,
+  steamId64: string,
+  opts?: { awaitWishlist?: boolean }
+): Promise<SyncOwnedGamesResult> {
+  if (!env.STEAM_WEB_API_KEY) {
+    return { ok: false, reason: "Missing STEAM_WEB_API_KEY in environment" };
+  }
+
+  const apiUrl =
+    "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/" +
+    `?key=${env.STEAM_WEB_API_KEY}&steamid=${steamId64}&include_appinfo=1&include_played_free_games=1`;
+  const steamResponse = await fetch(apiUrl);
+
+  if (steamResponse.status === 429) {
+    const retryAfterSeconds = parseInt(steamResponse.headers.get("Retry-After") ?? "60", 10);
+    return { ok: false, rateLimited: true, retryAfterSeconds, reason: "Steam API rate limited" };
+  }
+
+  if (!steamResponse.ok) {
+    return { ok: false, reason: "Steam API request failed" };
+  }
+
+  const steamJson = (await steamResponse.json()) as {
+    response?: {
+      game_count?: number;
+      games?: Array<{ appid: number; name: string; playtime_forever?: number; playtime_2weeks?: number }>;
+    };
+  };
+
+  if (!steamJson.response) {
+    return { ok: false, reason: "Steam API response format was invalid" };
+  }
+
+  const games = steamJson.response.games ?? [];
+  // When "Game details" privacy is not Public, Steam omits game_count and games
+  // entirely (response is {}). Detect that so callers can explain the empty
+  // library instead of silently succeeding with 0 games.
+  const privateLibrary = steamJson.response.game_count === undefined && games.length === 0;
+
+  for (const game of games) {
+    await db.query(
+      `
+        INSERT INTO games (app_id, name)
+        VALUES ($1, $2)
+        ON CONFLICT (app_id) DO UPDATE SET name = EXCLUDED.name
+      `,
+      [game.appid, game.name]
+    );
+    await db.query(
+      `
+        INSERT INTO user_games (user_id, app_id, playtime_minutes, playtime_2weeks)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, app_id)
+        DO UPDATE SET
+          playtime_minutes = EXCLUDED.playtime_minutes,
+          playtime_2weeks  = EXCLUDED.playtime_2weeks,
+          last_played_at   = CASE WHEN EXCLUDED.playtime_2weeks > 0 THEN NOW() ELSE user_games.last_played_at END
+      `,
+      [userIdInternal, game.appid, game.playtime_forever ?? 0, game.playtime_2weeks ?? 0]
+    );
+  }
+
+  await db.query(`UPDATE steam_links SET last_synced_at = NOW() WHERE user_id = $1`, [userIdInternal]);
+
+  const topAppIds = games
+    .sort((a, b) => (b.playtime_forever ?? 0) - (a.playtime_forever ?? 0))
+    .slice(0, 8)
+    .map((g) => g.appid);
+  if (topAppIds.length > 0) {
+    void ingestNewsForApps(topAppIds, { maxApps: 8 }).catch(() => {});
+  }
+
+  // Fire-and-forget profile-context backfill (groups + achievements). Runs its
+  // own 24h cooldown internally, so safe to invoke on every owned-games sync.
+  void runProfileContextSync(userIdInternal, steamId64).catch((error: unknown) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("Profile-context sync threw during owned-games sync:", msg);
+  });
+
+  let wishlist: SyncWishlistResult | undefined;
+  if (opts?.awaitWishlist) {
+    wishlist = await syncWishlistForUser(userIdInternal, steamId64).catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Wishlist sync threw during owned-games sync:", msg, error);
+      return { ok: false, status: null, reason: msg } as SyncWishlistResult;
+    });
+  } else {
+    void syncWishlistForUser(userIdInternal, steamId64).catch((error: unknown) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error("Wishlist sync threw during owned-games sync:", msg, error);
+    });
+  }
+
+  return { ok: true, syncedGames: games.length, privateLibrary, wishlist };
+}
+
+/**
+ * Server-side automatic pass: sync owned games for every linked user whose
+ * library has never been synced or is past the cooldown window. Runs gently
+ * (~1s between users, per-user try/catch) so a single failure or rate-limit
+ * doesn't abort the batch. Wishlist sync is fire-and-forget here.
+ */
+export async function syncAllOwnedGames(): Promise<{ usersSynced: number }> {
+  const cooldownSeconds = Math.ceil(OWNED_GAMES_COOLDOWN_MS / 1000);
+  const due = await db.query<{ user_id: string; steam_id64: string }>(
+    `
+      SELECT user_id, steam_id64
+      FROM steam_links
+      WHERE last_synced_at IS NULL
+         OR last_synced_at < NOW() - ($1 || ' seconds')::interval
+    `,
+    [cooldownSeconds]
+  );
+
+  let usersSynced = 0;
+  for (const row of due.rows) {
+    try {
+      const result = await syncOwnedGamesForUser(row.user_id, row.steam_id64);
+      if (result.ok) {
+        usersSynced += 1;
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error(`Automatic owned-games sync failed for user ${row.user_id}:`, msg);
+    }
+    // Gentle pacing between users to stay under Steam's rate limits.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+
+  return { usersSynced };
+}
+
 steamRouter.post("/sync-owned-games", async (_req, res) => {
   const discordUserId = String(res.locals.userId);
   const link = await db.query<{ user_id: string; steam_id64: string; last_synced_at: string | null }>(
@@ -567,87 +794,25 @@ steamRouter.post("/sync-owned-games", async (_req, res) => {
   }
 
   try {
-    const apiUrl =
-      "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/" +
-      `?key=${env.STEAM_WEB_API_KEY}&steamid=${link.rows[0].steam_id64}&include_appinfo=1`;
-    const steamResponse = await fetch(apiUrl);
+    const result = await syncOwnedGamesForUser(link.rows[0].user_id, link.rows[0].steam_id64, { awaitWishlist: true });
 
-    if (steamResponse.status === 429) {
-      const retryAfter = steamResponse.headers.get("Retry-After") ?? "60";
-      res.setHeader("Retry-After", retryAfter);
-      res.status(429).json({ error: "Steam API rate limited", retryAfterSeconds: parseInt(retryAfter, 10) });
+    if (!result.ok) {
+      if (result.rateLimited) {
+        const retryAfter = String(result.retryAfterSeconds ?? 60);
+        res.setHeader("Retry-After", retryAfter);
+        res.status(429).json({ error: "Steam API rate limited", retryAfterSeconds: parseInt(retryAfter, 10) });
+        return;
+      }
+      res.status(502).json({ error: result.reason });
       return;
     }
-
-    if (!steamResponse.ok) {
-      res.status(502).json({ error: "Steam API request failed" });
-      return;
-    }
-
-    const steamJson = (await steamResponse.json()) as {
-      response?: { games?: Array<{ appid: number; name: string; playtime_forever?: number; playtime_2weeks?: number }> };
-    };
-
-    if (!steamJson.response) {
-      res.status(502).json({ error: "Steam API response format was invalid" });
-      return;
-    }
-
-    const games = steamJson.response.games ?? [];
-    for (const game of games) {
-      await db.query(
-        `
-          INSERT INTO games (app_id, name)
-          VALUES ($1, $2)
-          ON CONFLICT (app_id) DO UPDATE SET name = EXCLUDED.name
-        `,
-        [game.appid, game.name]
-      );
-      await db.query(
-        `
-          INSERT INTO user_games (user_id, app_id, playtime_minutes, playtime_2weeks)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (user_id, app_id)
-          DO UPDATE SET
-            playtime_minutes = EXCLUDED.playtime_minutes,
-            playtime_2weeks  = EXCLUDED.playtime_2weeks,
-            last_played_at   = CASE WHEN EXCLUDED.playtime_2weeks > 0 THEN NOW() ELSE user_games.last_played_at END
-        `,
-        [link.rows[0].user_id, game.appid, game.playtime_forever ?? 0, game.playtime_2weeks ?? 0]
-      );
-    }
-
-    await db.query(`UPDATE steam_links SET last_synced_at = NOW() WHERE user_id = $1`, [link.rows[0].user_id]);
-
-    const topAppIds = games
-      .sort((a, b) => (b.playtime_forever ?? 0) - (a.playtime_forever ?? 0))
-      .slice(0, 8)
-      .map((g) => g.appid);
-    if (topAppIds.length > 0) {
-      void ingestNewsForApps(topAppIds, { maxApps: 8 }).catch(() => {});
-    }
-
-    const wishlistResult = await syncWishlistForUser(link.rows[0].user_id, link.rows[0].steam_id64).catch((error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("Wishlist sync threw during sync-owned-games:", msg, error);
-      return { ok: false, status: null, reason: msg } as SyncWishlistResult;
-    });
-
-    // Fire-and-forget profile-context backfill (groups + achievements). Runs
-    // own 24h cooldown internally, so safe to invoke on every owned-games sync.
-    void runProfileContextSync(link.rows[0].user_id, link.rows[0].steam_id64).catch((error: unknown) => {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error("Profile-context sync threw during sync-owned-games:", msg);
-    });
-
-    // Steam library sync runs automatically on a background interval — not
-    // a user action worth surfacing in the activity feed.
 
     res.json({
-      syncedGames: games.length,
-      wishlist: wishlistResult.ok
-        ? { ok: true, syncedItems: wishlistResult.syncedItems }
-        : { ok: false, status: wishlistResult.status, reason: wishlistResult.reason }
+      syncedGames: result.syncedGames,
+      privateLibrary: result.privateLibrary,
+      wishlist: result.wishlist?.ok
+        ? { ok: true, syncedItems: result.wishlist.syncedItems }
+        : { ok: false, status: result.wishlist?.status ?? null, reason: result.wishlist?.reason ?? "Wishlist sync failed" }
     });
   } catch (error) {
     console.error("Steam sync failed", error);
@@ -723,6 +888,16 @@ steamRouter.post("/sync-recent-games", async (_req, res) => {
     res.status(400).json({ error: "Missing STEAM_WEB_API_KEY in environment" });
     return;
   }
+
+  const lastRecentSync = recentGamesLastSyncByUser.get(discordUserId) ?? 0;
+  const msSinceRecentSync = Date.now() - lastRecentSync;
+  if (msSinceRecentSync < RECENT_GAMES_COOLDOWN_MS) {
+    const retryAfterSecs = Math.ceil((RECENT_GAMES_COOLDOWN_MS - msSinceRecentSync) / 1000);
+    res.setHeader("Retry-After", String(retryAfterSecs));
+    res.status(429).json({ error: "Sync cooldown active", retryAfterSeconds: retryAfterSecs });
+    return;
+  }
+  recentGamesLastSyncByUser.set(discordUserId, Date.now());
 
   try {
     const url =
@@ -825,8 +1000,18 @@ type CrewGameOwnerJson = {
 type CrewGameRow = {
   app_id: number;
   name: string;
-  max_players: number;
-  median_session_minutes: number;
+  is_single_player: boolean;
+  is_online_coop: boolean;
+  is_lan_coop: boolean;
+  is_shared_split_coop: boolean;
+  is_online_pvp: boolean;
+  is_mmo: boolean;
+  mp_max_players_approx: number | null;
+  price_final_cents: number | null;
+  price_discount_pct: number | null;
+  is_free: boolean;
+  release_coming_soon: boolean;
+  release_date_text: string | null;
   developers: string[];
   tags: string[];
   header_image_url: string | null;
@@ -849,8 +1034,18 @@ steamRouter.get("/crew-games", async (req, res) => {
         SELECT
           g.app_id,
           g.name,
-          g.max_players,
-          g.median_session_minutes,
+          g.is_single_player,
+          g.is_online_coop,
+          g.is_lan_coop,
+          g.is_shared_split_coop,
+          g.is_online_pvp,
+          g.is_mmo,
+          g.mp_max_players_approx,
+          g.price_final_cents,
+          g.price_discount_pct,
+          g.is_free,
+          g.release_coming_soon,
+          g.release_date_text,
           g.developers,
           g.tags,
           g.header_image_url,
@@ -866,7 +1061,7 @@ steamRouter.get("/crew-games", async (req, res) => {
             ),
             '[]'::json
           ) AS owners
-        FROM user_games ug
+        FROM shareable_user_games ug
         INNER JOIN games g ON g.app_id = ug.app_id
         INNER JOIN users u ON u.id = ug.user_id
         INNER JOIN guild_members gm
@@ -877,8 +1072,13 @@ steamRouter.get("/crew-games", async (req, res) => {
         GROUP BY
           g.app_id,
           g.name,
-          g.max_players,
-          g.median_session_minutes,
+          g.is_single_player,
+          g.is_online_coop,
+          g.is_lan_coop,
+          g.is_shared_split_coop,
+          g.is_online_pvp,
+          g.is_mmo,
+          g.mp_max_players_approx,
           g.developers,
           g.tags,
           g.header_image_url
@@ -891,8 +1091,37 @@ steamRouter.get("/crew-games", async (req, res) => {
     return result.rows;
   };
 
-  let rows = await baseQuery();
+  const rows = await baseQuery();
 
+  res.json({
+    games: rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      isSinglePlayer: row.is_single_player,
+      isOnlineCoop: row.is_online_coop,
+      isLanCoop: row.is_lan_coop,
+      isSharedSplitCoop: row.is_shared_split_coop,
+      isOnlinePvp: row.is_online_pvp,
+      isMmo: row.is_mmo,
+      mpMaxPlayersApprox: row.mp_max_players_approx,
+      maxPlayers: row.mp_max_players_approx,
+      medianSessionMinutes: null,
+      priceFinalCents: row.price_final_cents,
+      priceDiscountPct: row.price_discount_pct,
+      isFree: row.is_free,
+      releaseComingSoon: row.release_coming_soon,
+      releaseDateText: row.release_date_text,
+      developers: row.developers,
+      tags: row.tags,
+      headerImageUrl: row.header_image_url,
+      ownerCount: row.owner_count,
+      owners: row.owners
+    }))
+  });
+
+  // Fire-and-forget catalog enrichment for cold rows. Up to 50 cold games means
+  // serial external fetches, so we never await it — the next request picks up
+  // the enriched data once it lands.
   const missingMetadataIds = rows
     .filter((row) => row.developers.length === 0 && row.tags.length === 0)
     .slice(0, 50)
@@ -902,35 +1131,28 @@ steamRouter.get("/crew-games", async (req, res) => {
     .slice(0, 50)
     .map((row) => row.app_id);
 
-  await Promise.all([
+  void Promise.all([
+    resolveGameNamesFromAppList(rows.map((row) => row.app_id)),
     enrichGameMetadataFromSteam(missingMetadataIds),
     enrichMissingGameImages(missingImageIds)
-  ]);
-
-  if (missingMetadataIds.length || missingImageIds.length) {
-    rows = await baseQuery();
-  }
-
-  res.json({
-    games: rows.map((row) => ({
-      appId: row.app_id,
-      name: row.name,
-      maxPlayers: row.max_players,
-      medianSessionMinutes: row.median_session_minutes,
-      developers: row.developers,
-      tags: row.tags,
-      headerImageUrl: row.header_image_url,
-      ownerCount: row.owner_count,
-      owners: row.owners
-    }))
+  ]).catch((error: unknown) => {
+    console.error("crew-games enrichment failed", error);
   });
 });
 
 type CrewWishlistRow = {
   app_id: number;
   name: string;
-  max_players: number;
-  median_session_minutes: number;
+  is_single_player: boolean;
+  is_online_coop: boolean;
+  is_lan_coop: boolean;
+  is_shared_split_coop: boolean;
+  is_online_pvp: boolean;
+  is_mmo: boolean;
+  mp_max_players_approx: number | null;
+  price_final_cents: number | null;
+  price_discount_pct: number | null;
+  is_free: boolean;
   developers: string[];
   tags: string[];
   header_image_url: string | null;
@@ -954,8 +1176,16 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
         SELECT
           g.app_id,
           g.name,
-          g.max_players,
-          g.median_session_minutes,
+          g.is_single_player,
+          g.is_online_coop,
+          g.is_lan_coop,
+          g.is_shared_split_coop,
+          g.is_online_pvp,
+          g.is_mmo,
+          g.mp_max_players_approx,
+          g.price_final_cents,
+          g.price_discount_pct,
+          g.is_free,
           g.developers,
           g.tags,
           g.header_image_url,
@@ -972,7 +1202,7 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
             ),
             '[]'::json
           ) AS wishlisted_by
-        FROM user_wishlists uw
+        FROM shareable_user_wishlists uw
         INNER JOIN games g ON g.app_id = uw.app_id
         INNER JOIN users u ON u.id = uw.user_id
         INNER JOIN guild_members gm
@@ -983,8 +1213,16 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
         GROUP BY
           g.app_id,
           g.name,
-          g.max_players,
-          g.median_session_minutes,
+          g.is_single_player,
+          g.is_online_coop,
+          g.is_lan_coop,
+          g.is_shared_split_coop,
+          g.is_online_pvp,
+          g.is_mmo,
+          g.mp_max_players_approx,
+          g.price_final_cents,
+          g.price_discount_pct,
+          g.is_free,
           g.developers,
           g.tags,
           g.header_image_url
@@ -997,8 +1235,36 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
     return result.rows;
   };
 
-  let rows = await baseQuery();
+  const rows = await baseQuery();
 
+  res.json({
+    games: rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      isSinglePlayer: row.is_single_player,
+      isOnlineCoop: row.is_online_coop,
+      isLanCoop: row.is_lan_coop,
+      isSharedSplitCoop: row.is_shared_split_coop,
+      isOnlinePvp: row.is_online_pvp,
+      isMmo: row.is_mmo,
+      mpMaxPlayersApprox: row.mp_max_players_approx,
+      maxPlayers: row.mp_max_players_approx,
+      medianSessionMinutes: null,
+      priceFinalCents: row.price_final_cents,
+      priceDiscountPct: row.price_discount_pct,
+      isFree: row.is_free,
+      developers: row.developers,
+      tags: row.tags,
+      headerImageUrl: row.header_image_url,
+      hypeCount: row.hype_count,
+      earliestAddedAt: row.earliest_added_at,
+      wishlistedBy: row.wishlisted_by
+    }))
+  });
+
+  // Fire-and-forget catalog enrichment for cold rows. Up to 50 cold games means
+  // serial external fetches, so we never await it — the next request picks up
+  // the enriched data once it lands.
   const missingMetadataIds = rows
     .filter((row) => row.developers.length === 0 && row.tags.length === 0)
     .slice(0, 50)
@@ -1008,27 +1274,414 @@ steamRouter.get("/crew-wishlist", async (req, res) => {
     .slice(0, 50)
     .map((row) => row.app_id);
 
-  await Promise.all([
+  void Promise.all([
+    resolveGameNamesFromAppList(rows.map((row) => row.app_id)),
     enrichGameMetadataFromSteam(missingMetadataIds),
     enrichMissingGameImages(missingImageIds)
-  ]);
+  ]).catch((error: unknown) => {
+    console.error("crew-wishlist enrichment failed", error);
+  });
+});
 
-  if (missingMetadataIds.length || missingImageIds.length) {
-    rows = await baseQuery();
+type CrewAchievementMemberJson = {
+  discordUserId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  unlocked: number;
+  total: number;
+  completionPct: number;
+};
+
+type CrewAchievementRow = {
+  app_id: number;
+  name: string;
+  header_image_url: string | null;
+  member_count: number;
+  crew_unlocked: number;
+  crew_total: number;
+  members: CrewAchievementMemberJson[];
+};
+
+steamRouter.get("/crew-achievements", async (_req, res) => {
+  if (!getGuildId()) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+
+  const result = await db.query<CrewAchievementRow>(
+    `
+      SELECT
+        g.app_id,
+        g.name,
+        g.header_image_url,
+        COUNT(DISTINCT u.id)::int AS member_count,
+        COALESCE(SUM(p.achievements_unlocked), 0)::int AS crew_unlocked,
+        MAX(p.achievements_total)::int AS crew_total,
+        COALESCE(
+          JSON_AGG(
+            JSONB_BUILD_OBJECT(
+              'discordUserId', u.discord_user_id,
+              'displayName', COALESCE(gm.display_name, gm.username, dp.username),
+              'avatarUrl', COALESCE(gm.avatar_url, dp.avatar_url),
+              'unlocked', p.achievements_unlocked,
+              'total', p.achievements_total,
+              'completionPct', p.completion_pct
+            )
+            ORDER BY p.completion_pct DESC, COALESCE(gm.display_name, gm.username, dp.username) ASC
+          ),
+          '[]'::json
+        ) AS members
+      FROM shareable_user_game_progress p
+      INNER JOIN games g ON g.app_id = p.app_id
+      INNER JOIN users u ON u.id = p.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $1
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE p.achievements_total > 0
+      GROUP BY g.app_id, g.name, g.header_image_url
+      HAVING COUNT(DISTINCT u.id) >= 1
+      ORDER BY member_count DESC, crew_unlocked DESC, g.name ASC
+      LIMIT 60
+    `,
+    [getGuildId()]
+  );
+
+  res.json({
+    games: result.rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      headerImageUrl: row.header_image_url,
+      crewUnlocked: row.crew_unlocked,
+      crewTotal: row.crew_total,
+      members: row.members
+    }))
+  });
+});
+
+type CrewTrendingRow = {
+  app_id: number;
+  name: string;
+  header_image_url: string | null;
+  total_minutes_2weeks: number;
+  players: number;
+  top_player_name: string | null;
+  top_player_minutes: number | null;
+  prev_minutes_2weeks: number | null;
+};
+
+steamRouter.get("/crew-trending", async (_req, res) => {
+  if (!getGuildId()) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+
+  const result = await db.query<CrewTrendingRow>(
+    `
+      SELECT
+        g.app_id,
+        g.name,
+        g.header_image_url,
+        COALESCE(SUM(ug.playtime_2weeks), 0)::int AS total_minutes_2weeks,
+        COUNT(DISTINCT u.id) FILTER (WHERE ug.playtime_2weeks > 0)::int AS players,
+        (
+          SELECT COALESCE(gm2.display_name, gm2.username, dp2.username)
+          FROM shareable_user_games ug2
+          INNER JOIN users u2 ON u2.id = ug2.user_id
+          INNER JOIN guild_members gm2
+            ON gm2.discord_user_id = u2.discord_user_id
+           AND gm2.guild_id = $1
+           AND gm2.in_guild = TRUE
+          LEFT JOIN discord_profiles dp2 ON dp2.user_id = u2.id
+          WHERE ug2.app_id = g.app_id
+            AND ug2.playtime_2weeks > 0
+          ORDER BY ug2.playtime_2weeks DESC
+          LIMIT 1
+        ) AS top_player_name,
+        (
+          SELECT ug2.playtime_2weeks
+          FROM shareable_user_games ug2
+          INNER JOIN users u2 ON u2.id = ug2.user_id
+          INNER JOIN guild_members gm2
+            ON gm2.discord_user_id = u2.discord_user_id
+           AND gm2.guild_id = $1
+           AND gm2.in_guild = TRUE
+          WHERE ug2.app_id = g.app_id
+            AND ug2.playtime_2weeks > 0
+          ORDER BY ug2.playtime_2weeks DESC
+          LIMIT 1
+        ) AS top_player_minutes,
+        (
+          -- The rolling window from ~a fortnight ago: closest daily snapshot
+          -- in the 12–16 day band. NULL until snapshots have accrued.
+          SELECT s.total_minutes_2weeks
+          FROM crew_trending_snapshots s
+          WHERE s.app_id = g.app_id
+            AND s.captured_on BETWEEN CURRENT_DATE - 16 AND CURRENT_DATE - 12
+          ORDER BY ABS(s.captured_on - (CURRENT_DATE - 14))
+          LIMIT 1
+        ) AS prev_minutes_2weeks
+      FROM shareable_user_games ug
+      INNER JOIN games g ON g.app_id = ug.app_id
+      INNER JOIN users u ON u.id = ug.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $1
+       AND gm.in_guild = TRUE
+      GROUP BY g.app_id, g.name, g.header_image_url
+      HAVING COALESCE(SUM(ug.playtime_2weeks), 0) > 0
+      ORDER BY total_minutes_2weeks DESC, g.name ASC
+      LIMIT 6
+    `,
+    [getGuildId()]
+  );
+
+  res.json({
+    games: result.rows.map((row) => ({
+      appId: row.app_id,
+      name: row.name,
+      headerImageUrl: row.header_image_url,
+      totalMinutes2Weeks: row.total_minutes_2weeks,
+      prevMinutes2Weeks: row.prev_minutes_2weeks,
+      players: row.players,
+      topPlayer:
+        row.top_player_name != null
+          ? { displayName: row.top_player_name, minutes: row.top_player_minutes ?? 0 }
+          : null
+    }))
+  });
+});
+
+type GameDetailRow = {
+  app_id: number;
+  name: string;
+  header_image_url: string | null;
+  is_single_player: boolean;
+  is_online_coop: boolean;
+  is_lan_coop: boolean;
+  is_shared_split_coop: boolean;
+  is_online_pvp: boolean;
+  is_mmo: boolean;
+  mp_max_players_approx: number | null;
+  price_initial_cents: number | null;
+  price_final_cents: number | null;
+  price_discount_pct: number | null;
+  is_free: boolean;
+  release_coming_soon: boolean;
+  release_date_text: string | null;
+  short_description: string | null;
+  screenshots: Array<{ thumb: string; full: string }> | null;
+  metacritic_score: number | null;
+  metacritic_url: string | null;
+  platform_windows: boolean | null;
+  platform_mac: boolean | null;
+  platform_linux: boolean | null;
+  controller_support: string | null;
+  historical_low_cents: number | null;
+};
+
+type GameDetailOwnerRow = {
+  discord_user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  playtime_forever: number;
+  playtime_2weeks: number;
+};
+
+type GameDetailAchievementRow = {
+  display_name: string;
+  unlocked: number;
+  total: number;
+  completion_pct: number;
+};
+
+type GameDetailNewsRow = {
+  title: string;
+  url: string;
+  published_at: string;
+};
+
+steamRouter.get("/game/:appId", async (req, res) => {
+  if (!getGuildId()) {
+    res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
+    return;
+  }
+
+  const appId = Number(req.params.appId);
+  if (!Number.isInteger(appId) || appId <= 0) {
+    res.status(400).json({ error: "appId must be a positive integer" });
+    return;
+  }
+
+  const gameResult = await db.query<GameDetailRow>(
+    `
+      SELECT
+        g.app_id,
+        g.name,
+        g.header_image_url,
+        g.is_single_player,
+        g.is_online_coop,
+        g.is_lan_coop,
+        g.is_shared_split_coop,
+        g.is_online_pvp,
+        g.is_mmo,
+        g.mp_max_players_approx,
+        g.price_initial_cents,
+        g.price_final_cents,
+        g.price_discount_pct,
+        g.is_free,
+        g.release_coming_soon,
+        g.release_date_text,
+        g.short_description,
+        g.screenshots,
+        g.metacritic_score,
+        g.metacritic_url,
+        g.platform_windows,
+        g.platform_mac,
+        g.platform_linux,
+        g.controller_support,
+        g.historical_low_cents
+      FROM games g
+      WHERE g.app_id = $1
+    `,
+    [appId]
+  );
+  const game = gameResult.rows[0];
+  if (!game) {
+    res.status(404).json({ error: "Game not found" });
+    return;
+  }
+
+  const guildId = getGuildId();
+
+  const ownersResult = await db.query<GameDetailOwnerRow>(
+    `
+      SELECT
+        u.discord_user_id,
+        COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
+        COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
+        ug.playtime_minutes AS playtime_forever,
+        ug.playtime_2weeks
+      FROM shareable_user_games ug
+      INNER JOIN users u ON u.id = ug.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $2
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE ug.app_id = $1
+      ORDER BY ug.playtime_minutes DESC, display_name ASC
+    `,
+    [appId, guildId]
+  );
+
+  const achievementsResult = await db.query<GameDetailAchievementRow>(
+    `
+      SELECT
+        COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
+        p.achievements_unlocked AS unlocked,
+        p.achievements_total AS total,
+        p.completion_pct
+      FROM shareable_user_game_progress p
+      INNER JOIN users u ON u.id = p.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $2
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE p.app_id = $1
+        AND p.achievements_total > 0
+      ORDER BY p.completion_pct DESC, display_name ASC
+    `,
+    [appId, guildId]
+  );
+
+  const newsResult = await db.query<GameDetailNewsRow>(
+    `
+      SELECT title, url, published_at
+      FROM game_news
+      WHERE app_id = $1
+      ORDER BY published_at DESC
+      LIMIT 5
+    `,
+    [appId]
+  );
+
+  // Rarest achievements (with icons) from the cached schema. Fire-and-forget a
+  // schema sync when we have nothing cached so the next view is populated.
+  const achievementCatalogueResult = await db.query<{
+    display_name: string | null;
+    description: string | null;
+    icon_url: string | null;
+    global_unlock_pct: number | null;
+  }>(
+    `
+      SELECT display_name, description, icon_url, global_unlock_pct
+      FROM game_achievements
+      WHERE app_id = $1 AND hidden = FALSE AND icon_url IS NOT NULL
+      ORDER BY global_unlock_pct ASC NULLS LAST
+      LIMIT 8
+    `,
+    [appId]
+  );
+  if (achievementCatalogueResult.rows.length === 0) {
+    void syncAchievementSchema(appId).catch((error: unknown) => {
+      console.error("achievement schema sync failed", error);
+    });
   }
 
   res.json({
-    games: rows.map((row) => ({
-      appId: row.app_id,
-      name: row.name,
-      maxPlayers: row.max_players,
-      medianSessionMinutes: row.median_session_minutes,
-      developers: row.developers,
-      tags: row.tags,
-      headerImageUrl: row.header_image_url,
-      hypeCount: row.hype_count,
-      earliestAddedAt: row.earliest_added_at,
-      wishlistedBy: row.wishlisted_by
+    appId: game.app_id,
+    name: game.name,
+    headerImageUrl: game.header_image_url,
+    store: {
+      isSinglePlayer: game.is_single_player,
+      isOnlineCoop: game.is_online_coop,
+      isLanCoop: game.is_lan_coop,
+      isSharedSplitCoop: game.is_shared_split_coop,
+      isOnlinePvp: game.is_online_pvp,
+      isMmo: game.is_mmo,
+      mpMaxPlayersApprox: game.mp_max_players_approx,
+      priceInitialCents: game.price_initial_cents,
+      priceFinalCents: game.price_final_cents,
+      priceDiscountPct: game.price_discount_pct,
+      isFree: game.is_free,
+      releaseComingSoon: game.release_coming_soon,
+      releaseDateText: game.release_date_text,
+      shortDescription: game.short_description,
+      screenshots: Array.isArray(game.screenshots) ? game.screenshots : [],
+      metacriticScore: game.metacritic_score,
+      metacriticUrl: game.metacritic_url,
+      platformWindows: game.platform_windows,
+      platformMac: game.platform_mac,
+      platformLinux: game.platform_linux,
+      controllerSupport: game.controller_support,
+      historicalLowCents: game.historical_low_cents
+    },
+    achievementCatalogue: achievementCatalogueResult.rows.map((row) => ({
+      displayName: row.display_name,
+      description: row.description,
+      iconUrl: row.icon_url,
+      globalUnlockPct: row.global_unlock_pct
+    })),
+    owners: ownersResult.rows.map((row) => ({
+      discordUserId: row.discord_user_id,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+      playtimeForever: row.playtime_forever,
+      playtime2Weeks: row.playtime_2weeks
+    })),
+    achievements: achievementsResult.rows.map((row) => ({
+      displayName: row.display_name,
+      unlocked: row.unlocked,
+      total: row.total,
+      completionPct: row.completion_pct
+    })),
+    news: newsResult.rows.map((row) => ({
+      title: row.title,
+      url: row.url,
+      publishedAt: row.published_at
     }))
   });
 });

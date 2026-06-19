@@ -6,12 +6,15 @@ export type PageId =
   | "community"
   | "community-forums"
   | "community-leaderboard"
+  | "crew-achievements"
   | "nuggies"
   | "nuggies-casino"
   | "nuggies-history"
   | "nuggies-milestones"
   | "profile"
   | "settings"
+  | "tide-check"
+  | "islander-profile"
   | "admin";
 
 export type Recommendation = {
@@ -24,18 +27,37 @@ export type Recommendation = {
   blurb?: string;
 };
 
+export type GameModeFlags = {
+  isSinglePlayer: boolean;
+  isOnlineCoop: boolean;
+  isLanCoop: boolean;
+  isSharedSplitCoop: boolean;
+  isOnlinePvp: boolean;
+  isMmo: boolean;
+};
+
+export type GameNightAttendeeAvatar = {
+  displayName: string;
+  avatarUrl: string | null;
+  ownsSelected: boolean;
+};
+
 export type GameNight = {
   id: number;
   title: string;
   scheduledFor: string;
   createdByUserId: number;
-  topGameName: string | null;
-  topGameVote: number | null;
+  canManageGame: boolean;
   selectedGameName: string | null;
   selectedAppId: number | null;
+  selectedGameImage: string | null;
+  selectedGameModes: GameModeFlags | null;
   selectedAt: string | null;
+  selectedMaxPlayers: number | null;
+  selectedTags: string[];
   attendeeCount: number;
   currentUserAttending: boolean;
+  attendees: GameNightAttendeeAvatar[];
 };
 
 export type GameNightAttendee = {
@@ -52,8 +74,23 @@ export type GuildMember = {
   avatarUrl: string | null;
   roleNames: string[];
   inVoice: boolean;
+  voiceChannelId?: string | null;
   richPresenceText: string | null;
+  activityName?: string | null;
+  activityType?: number | null;
   presenceStatus: PresenceStatus | null;
+  bannerUrl?: string | null;
+  accentColor?: number | null;
+};
+
+export type SteamSummary = {
+  personaName: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  personaState: number | null;
+  inGame: string | null;
+  level: number | null;
+  accountCreated: string | null;
 };
 
 export type MeProfile = {
@@ -62,15 +99,24 @@ export type MeProfile = {
   featureOptIn: boolean;
   username: string;
   displayName: string;
+  globalName: string | null;
   avatarUrl: string | null;
+  bannerUrl: string | null;
+  accentColor: number | null;
+  premiumType: number | null;
+  profileBlurb: string | null;
+  joinedAtGuild: string | null;
+  premiumSince: string | null;
   steamId64: string | null;
   steamLastSyncedAt: string | null;
+  steam: SteamSummary | null;
   roleNames: string[];
   inVoice: boolean;
   richPresenceText: string;
   nuggieBalance: number;
   nuggiesOptedOut: boolean;
   equippedItems: EquippedItem[];
+  guildId: string | null;
 };
 
 export type OwnedGameLite = {
@@ -87,8 +133,20 @@ export type CrewOwner = {
 export type CrewOwnedGame = {
   appId: number;
   name: string;
-  maxPlayers: number;
-  medianSessionMinutes: number;
+  isSinglePlayer: boolean;
+  isOnlineCoop: boolean;
+  isLanCoop: boolean;
+  isSharedSplitCoop: boolean;
+  isOnlinePvp: boolean;
+  isMmo: boolean;
+  mpMaxPlayersApprox: number | null;
+  maxPlayers: number | null;
+  medianSessionMinutes: number | null;
+  priceFinalCents: number | null;
+  priceDiscountPct: number | null;
+  isFree: boolean;
+  releaseComingSoon: boolean;
+  releaseDateText: string | null;
   developers: string[];
   tags: string[];
   headerImageUrl: string | null;
@@ -99,8 +157,18 @@ export type CrewOwnedGame = {
 export type CrewWishlistGame = {
   appId: number;
   name: string;
-  maxPlayers: number;
-  medianSessionMinutes: number;
+  isSinglePlayer: boolean;
+  isOnlineCoop: boolean;
+  isLanCoop: boolean;
+  isSharedSplitCoop: boolean;
+  isOnlinePvp: boolean;
+  isMmo: boolean;
+  mpMaxPlayersApprox: number | null;
+  maxPlayers: number | null;
+  medianSessionMinutes: number | null;
+  priceFinalCents: number | null;
+  priceDiscountPct: number | null;
+  isFree: boolean;
   developers: string[];
   tags: string[];
   headerImageUrl: string | null;
@@ -215,7 +283,14 @@ export type GeneralNewsItem = {
   downvotes: number;
 };
 
-export type ActivityCategory = "all" | "friends" | "achievements" | "milestones" | "patches";
+export type ActivityCategory =
+  | "all"
+  | "friends"
+  | "achievements"
+  | "milestones"
+  | "patches"
+  | "forums"
+  | "nuggies";
 
 export type ActivityActor = {
   discordUserId: string | null;
@@ -347,6 +422,32 @@ export type ForumThreadListItem = {
   lastReplyUser: { displayName: string; avatarUrl: string | null } | null;
 };
 
+export type ForumThreadGame = {
+  appId: number;
+  name: string;
+  headerImageUrl: string | null;
+};
+
+export type ForumThreadType = "discussion" | "memory" | "recommendation" | "resource";
+
+export type ForumPollOption = { id: number; label: string; votes: number };
+export type ForumPoll = {
+  id: number;
+  question: string;
+  multi: boolean;
+  closesAt: string | null;
+  totalVoters: number;
+  options: ForumPollOption[];
+  myVotes: number[];
+};
+
+export type ForumLinkPreview = {
+  title: string | null;
+  description: string | null;
+  imageUrl: string | null;
+  siteName: string | null;
+};
+
 export type ForumThreadDetail = {
   id: number;
   categoryId: number;
@@ -356,6 +457,12 @@ export type ForumThreadDetail = {
   categoryAccent: string;
   title: string;
   slug: string;
+  threadType: ForumThreadType;
+  linkUrl: string | null;
+  linkPreview?: ForumLinkPreview | null;
+  poll?: ForumPoll | null;
+  subscribed: boolean;
+  firstUnreadPostId: number | null;
   isPinned: boolean;
   isLocked: boolean;
   viewCount: number;
@@ -363,7 +470,28 @@ export type ForumThreadDetail = {
   createdAt: string;
   updatedAt: string;
   author: ForumAuthor;
+  game?: ForumThreadGame | null;
 };
+
+export type ForumNotification = {
+  id: number;
+  type: "mention" | "reply";
+  threadId: number | null;
+  postId: number | null;
+  read: boolean;
+  createdAt: string;
+  actorName: string | null;
+  actorAvatarUrl: string | null;
+  threadTitle: string | null;
+};
+
+export type ForumMember = { username: string; displayName: string; avatarUrl: string | null };
+
+export type ForumReactionKey = "nug" | "heart" | "laugh" | "fire" | "salute";
+
+export type ForumAttachment = { url: string; thumbUrl: string; width: number; height: number };
+
+export type ForumUpload = { id: number; url: string; thumbUrl: string; width: number; height: number };
 
 export type ForumPost = {
   id: number;
@@ -374,8 +502,9 @@ export type ForumPost = {
   editedAt: string | null;
   createdAt: string;
   author: ForumAuthor;
-  reactionCount: number;
-  userReacted: boolean;
+  reactions: Partial<Record<ForumReactionKey, number>>;
+  myReactions: ForumReactionKey[];
+  attachments: ForumAttachment[];
 };
 
 export type ForumFeedSort = "latest" | "top" | "unanswered" | "mine";
@@ -384,6 +513,10 @@ export type ForumFeedThread = {
   id: number;
   title: string;
   slug: string;
+  threadType: ForumThreadType;
+  linkUrl: string | null;
+  linkPreview?: ForumLinkPreview | null;
+  coverImage?: { url: string; thumbUrl: string } | null;
   isPinned: boolean;
   isLocked: boolean;
   viewCount: number;
@@ -396,6 +529,8 @@ export type ForumFeedThread = {
   categoryAccent: string;
   author: ForumAuthor;
   lastReplyUser: { displayName: string; avatarUrl: string | null } | null;
+  game?: ForumThreadGame | null;
+  unread?: boolean;
 };
 
 export type ForumStats = {
@@ -404,7 +539,8 @@ export type ForumStats = {
   categoriesTotal: number;
   postsToday: number;
   topAuthors: { displayName: string; avatarUrl: string | null; postCount: number }[];
-  mine: { threadCount: number; postCount: number };
+  mine: { threadCount: number; postCount: number; reactionsGiven: number };
+  typeCounts: Partial<Record<ForumThreadType, number>>;
 };
 
 export type ForumRecentThread = {
@@ -421,6 +557,52 @@ export type ForumRecentThread = {
   categoryIcon: string;
   categoryAccent: string;
   author: { displayName: string; avatarUrl: string | null };
+};
+
+export type ForumSearchResult = {
+  id: number;
+  title: string;
+  slug: string;
+  threadType: ForumThreadType;
+  replyCount: number;
+  createdAt: string;
+  lastReplyAt: string | null;
+  categorySlug: string;
+  categoryName: string;
+  categoryIcon: string;
+  categoryAccent: string;
+  snippet: string | null;
+};
+
+export type ForumResourceItem = {
+  id: number;
+  title: string;
+  slug: string;
+  threadType: ForumThreadType;
+  linkUrl: string | null;
+  linkPreview?: ForumLinkPreview | null;
+  replyCount: number;
+  createdAt: string;
+  lastReplyAt: string | null;
+  categorySlug: string;
+  categoryName: string;
+  categoryIcon: string;
+  categoryAccent: string;
+  author: { displayName: string; avatarUrl: string | null };
+};
+
+export type ForumRelatedThread = {
+  id: number;
+  title: string;
+  slug: string;
+  threadType: ForumThreadType;
+  replyCount: number;
+  createdAt: string;
+  lastReplyAt: string | null;
+  categorySlug: string;
+  categoryName: string;
+  categoryIcon: string;
+  categoryAccent: string;
 };
 
 export type ForumReport = {

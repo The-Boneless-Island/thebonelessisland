@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Placeholder nugget mascot: wave. Replace with commissioned art (same filename). -->
+  <defs>
+    <radialGradient id="nug" cx="42%" cy="36%" r="75%">
+      <stop offset="0%" stop-color="#f8c87a"/>
+      <stop offset="62%" stop-color="#e8a94f"/>
+      <stop offset="100%" stop-color="#c97f2e"/>
+    </radialGradient>
+  </defs>
+  <!-- shadow -->
+  <ellipse cx="60" cy="106" rx="30" ry="6" fill="#000" opacity="0.18"/>
+  <!-- waving arm (behind body) -->
+  <path d="M88 52 Q104 38 100 24" fill="none" stroke="#c97f2e" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="100" cy="23" r="7" fill="#e8a94f"/>
+  <!-- body: lumpy nugget -->
+  <path d="M60 16 C78 14 94 26 96 44 C104 50 102 64 94 70 C94 88 80 100 60 100 C40 100 26 88 26 70 C18 64 16 50 24 44 C26 26 42 14 60 16 Z" fill="url(#nug)"/>
+  <!-- crumb texture -->
+  <circle cx="40" cy="34" r="2.4" fill="#b06f24" opacity="0.5"/>
+  <circle cx="78" cy="78" r="2.8" fill="#b06f24" opacity="0.5"/>
+  <circle cx="34" cy="72" r="2" fill="#b06f24" opacity="0.5"/>
+  <circle cx="72" cy="28" r="1.8" fill="#b06f24" opacity="0.5"/>
+  <!-- face -->
+  <circle cx="48" cy="54" r="4.4" fill="#2b1c0e"/>
+  <circle cx="70" cy="54" r="4.4" fill="#2b1c0e"/>
+  <circle cx="49.5" cy="52.5" r="1.4" fill="#fff"/>
+  <circle cx="71.5" cy="52.5" r="1.4" fill="#fff"/>
+  <path d="M50 68 Q59 76 68 68" fill="none" stroke="#2b1c0e" stroke-width="3.4" stroke-linecap="round"/>
+  <!-- blush -->
+  <ellipse cx="38" cy="62" rx="5" ry="3" fill="#ef8354" opacity="0.45"/>
+  <ellipse cx="80" cy="62" rx="5" ry="3" fill="#ef8354" opacity="0.45"/>
+</svg>

@@ -1,24 +1,44 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ScrollRestoration, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
-import { GAME_NIGHTS_TILE_BG_URL, getGameNightBanner } from "./assets.js";
-import { AdminPage } from "./pages/Admin.js";
-import { CommunityPage } from "./pages/Community.js";
-import { GamesPage } from "./pages/Games.js";
-import { GamingNewsPage } from "./pages/GamingNews.js";
-import { HomePage } from "./pages/Home.js";
-import { LibraryPage } from "./pages/Library.js";
 import { LoginScreen } from "./pages/LoginScreen.js";
-import { AchievementsPage } from "./pages/Achievements.js";
-import { MilestonesPage } from "./pages/Milestones.js";
-import { CasinoPage } from "./pages/games/CasinoPage.js";
-import { ForumsPage } from "./pages/Forums.js";
-import { ProfilePage } from "./pages/Profile.js";
-import { SettingsPage } from "./pages/Settings.js";
+import { NotFoundPage } from "./pages/NotFound.js";
+import {
+  islanderIdFromPath,
+  pageFromPath,
+  pathForForumThread,
+  pathForIslander,
+  pathForPage
+} from "./lib/routes.js";
+
+// Route-level code splitting: each routed page is lazy-loaded so its bundle is
+// only fetched when the page is first rendered. Named-export pages are mapped to
+// a default export; the new leaderboard/history pages are already default exports.
+const AdminPage = lazy(() => import("./pages/Admin.js").then((m) => ({ default: m.AdminPage })));
+const CommunityPage = lazy(() => import("./pages/Community.js").then((m) => ({ default: m.CommunityPage })));
+const GamesPage = lazy(() => import("./pages/Games.js").then((m) => ({ default: m.GamesPage })));
+const GamingNewsPage = lazy(() => import("./pages/GamingNews.js").then((m) => ({ default: m.GamingNewsPage })));
+const HomePage = lazy(() => import("./pages/Home.js").then((m) => ({ default: m.HomePage })));
+const LibraryPage = lazy(() => import("./pages/Library.js").then((m) => ({ default: m.LibraryPage })));
+const AchievementsPage = lazy(() => import("./pages/Achievements.js").then((m) => ({ default: m.AchievementsPage })));
+const MilestonesPage = lazy(() => import("./pages/Milestones.js").then((m) => ({ default: m.MilestonesPage })));
+const CasinoPage = lazy(() => import("./pages/games/CasinoPage.js").then((m) => ({ default: m.CasinoPage })));
+const ForumsPage = lazy(() => import("./pages/Forums.js").then((m) => ({ default: m.ForumsPage })));
+const ProfilePage = lazy(() => import("./pages/Profile.js").then((m) => ({ default: m.ProfilePage })));
+const SettingsPage = lazy(() => import("./pages/Settings.js").then((m) => ({ default: m.SettingsPage })));
+const CommunityLeaderboardPage = lazy(() => import("./pages/CommunityLeaderboard.js"));
+const CrewAchievementsPage = lazy(() => import("./pages/CrewAchievements.js"));
+const NuggiesHistoryPage = lazy(() => import("./pages/NuggiesHistory.js"));
+const TideCheckPage = lazy(() => import("./pages/TideCheck.js"));
+const IslanderProfilePage = lazy(() => import("./pages/IslanderProfile.js"));
 import { ToastHost, ToastQueueProvider, useToastQueue, useToastsFromStatus } from "./system/toast.js";
 import { ActivityRefetchProvider } from "./system/activityContext.js";
+import { NuggiesSignalProvider } from "./system/nuggiesSignal.js";
 import { AchievementCelebration, useCelebrationQueue } from "./system/celebration.js";
 import { islandCopy, islandTheme } from "./theme.js";
 import { Topbar } from "./components/Topbar.js";
+import { MobileTabBar } from "./components/MobileTabBar.js";
+import { QuickSwitcher } from "./components/QuickSwitcher.js";
 import {
   isSteamOnboardingSkipped,
   setSteamOnboardingSkipped,
@@ -43,11 +63,19 @@ import type {
   ServerSetting
 } from "./types.js";
 
-function ComingSoonPage({ title, description }: { title: string; description: string }) {
+function PageLoadingFallback() {
   return (
-    <div style={{ paddingTop: 10 }}>
-      <h1 style={{ fontFamily: "inherit", fontSize: 28, fontWeight: 800, margin: "0 0 8px" }}>{title}</h1>
-      <p style={{ margin: 0, fontSize: 15, opacity: 0.7 }}>{description}</p>
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: "40vh",
+        fontSize: 15,
+        opacity: 0.6,
+      }}
+    >
+      Loading…
     </div>
   );
 }
@@ -57,7 +85,20 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginExiting, setLoginExiting] = useState(false);
   const prevAuth = useRef<boolean | null>(null);
-  const [page, setPage] = useState<PageId>("home");
+  // Last-applied snapshots for polled loaders — used to skip redundant setStates
+  // (which would otherwise re-render the whole tree every poll tick).
+  const lastGuildMembersRef = useRef<string | null>(null);
+  const lastGameNightsRef = useRef<string | null>(null);
+  const lastSelectedNightRef = useRef<string | null>(null);
+  // Routing: the URL is the source of truth. `page` is derived from the path so
+  // refresh / back-forward / shared links all land on the right page; navigation
+  // goes through the router via navigateToPage. `null` page → unknown path → 404.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const page = pageFromPath(location.pathname);
+  const navigateToPage = useCallback((next: PageId) => navigate(pathForPage(next)), [navigate]);
+  const selectedProfileId = islanderIdFromPath(location.pathname);
+  const [composerScrollNonce, setComposerScrollNonce] = useState(0);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [results, setResults] = useState<Recommendation[]>([]);
   const [status, setStatus] = useState("Idle");
@@ -71,8 +112,6 @@ export function App() {
   const [currentUserAttendingSelectedNight, setCurrentUserAttendingSelectedNight] = useState(false);
   const [guildMembers, setGuildMembers] = useState<GuildMember[]>([]);
   const [memberSearch, setMemberSearch] = useState("");
-  const [newsKeywords, setNewsKeywords] = useState("co-op, survival, strategy");
-  const [newsSources, setNewsSources] = useState("Steam News, PC Gamer, IGN");
   const [profileSteamVisibility, setProfileSteamVisibility] = useState<"private" | "members" | "public">("members");
   const [profileFeatureOptIn, setProfileFeatureOptIn] = useState(true);
   const [ownedGames, setOwnedGames] = useState<OwnedGameLite[]>([]);
@@ -82,16 +121,27 @@ export function App() {
   const [crewWishlist, setCrewWishlist] = useState<CrewWishlistGame[]>([]);
   const [featuredRecommendation, setFeaturedRecommendation] = useState<FeaturedRecommendation | null>(null);
   const [composerRecommendations, setComposerRecommendations] = useState<Recommendation[]>([]);
+  const [draftAppId, setDraftAppId] = useState<number | null>(null);
+  const [lockNonce, setLockNonce] = useState(0);
   const [gameNews, setGameNews] = useState<GameNewsItem[]>([]);
   const [generalNews, setGeneralNews] = useState<GeneralNewsItem[]>([]);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
   const [newsCards, setNewsCards] = useState<NewsCard[]>([]);
   const [serverSettings, setServerSettings] = useState<ServerSetting[] | null>(null);
   const [steamOnboardingOpen, setSteamOnboardingOpen] = useState(false);
+  const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const [tagline, setTagline] = useState<string>("");
   const toastQueue = useToastQueue();
   useToastsFromStatus(status, toastQueue.pushToast);
   const celebrationQueue = useCelebrationQueue();
+
+  // Bumped whenever the SSE bus reports this member's Nuggies balance changed,
+  // so the Balance/Milestones surfaces refetch immediately (see NuggiesSignal).
+  const [nuggiesSignal, setNuggiesSignal] = useState(0);
+  const myDiscordIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    myDiscordIdRef.current = profileData?.discordUserId ?? null;
+  }, [profileData?.discordUserId]);
 
   // ── Achievement / milestone unlock celebration ──────────────────────────────
   // Subscribes to the activity_events feed for the current user's
@@ -139,20 +189,23 @@ export function App() {
           kind: "achievement",
           emoji,
           title: name,
-          description: `New ${itemType} unlocked — equip it from the Milestones page.`,
+          itemType,
+          description: `A new ${itemType} just washed ashore — find it in your Milestones stash.`,
         });
       } else {
         const label = typeof p.label === "string" ? p.label : "New rank";
         const threshold = typeof p.threshold === "number" ? p.threshold : 0;
         const bonus = typeof p.bonus === "number" ? p.bonus : 0;
+        const emblem = typeof p.emblem === "string" ? p.emblem : emoji;
         celebrationQueue.enqueue({
           id: e.id,
           kind: "milestone",
           emoji,
+          emblem,
           title: label,
           description: threshold > 0
-            ? `Lifetime earned crossed ₦${threshold.toLocaleString()}.`
-            : "You climbed the ladder.",
+            ? `Your lifetime haul crossed ₦${threshold.toLocaleString()}.`
+            : "You climbed a rung on the island ladder.",
           bonus,
         });
       }
@@ -193,16 +246,6 @@ export function App() {
       if (savedMemberSearch !== null) {
         setMemberSearch(savedMemberSearch);
       }
-      const savedExcludedIds = window.localStorage.getItem("island.excludedGameAppIds");
-      if (savedExcludedIds !== null) {
-        const parsed = JSON.parse(savedExcludedIds) as unknown;
-        if (Array.isArray(parsed)) {
-          const normalized = parsed
-            .map((value) => Number(value))
-            .filter((value) => Number.isInteger(value) && value > 0);
-          setExcludedOwnedGameAppIds(normalized);
-        }
-      }
     } catch {
       // Ignore local storage parse issues.
     }
@@ -215,10 +258,6 @@ export function App() {
   useEffect(() => {
     window.localStorage.setItem("island.memberSearch", memberSearch);
   }, [memberSearch]);
-
-  useEffect(() => {
-    window.localStorage.setItem("island.excludedGameAppIds", JSON.stringify(excludedOwnedGameAppIds));
-  }, [excludedOwnedGameAppIds]);
 
   useEffect(() => {
     void (async () => {
@@ -251,8 +290,7 @@ export function App() {
     setAuthError(authErrorMessage);
     params.delete("authError");
     const nextQuery = params.toString();
-    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
-    window.history.replaceState({}, "", nextUrl);
+    navigate(`${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`, { replace: true });
   }, []);
 
   useEffect(() => {
@@ -282,8 +320,7 @@ export function App() {
     params.delete("steam");
     params.delete("steamReason");
     const nextQuery = params.toString();
-    const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash}`;
-    window.history.replaceState({}, "", nextUrl);
+    navigate(`${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`, { replace: true });
   }, []);
 
   useEffect(() => {
@@ -329,6 +366,69 @@ export function App() {
     };
   }, []);
 
+  // Auth-aware deep links. When a logged-out visitor hits a protected path, stash
+  // the intended destination so we can return them to it after the Discord OAuth
+  // round-trip (which is a full-page redirect, so sessionStorage carries it).
+  useEffect(() => {
+    if (isAuthenticated === false && location.pathname !== "/") {
+      sessionStorage.setItem("returnTo", location.pathname + location.search);
+    }
+  }, [isAuthenticated, location.pathname, location.search]);
+
+  // After login lands the SPA back at "/", resume the stashed deep link. Reject
+  // anything that isn't a same-origin path (no protocol-relative "//evil.com").
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    const returnTo = sessionStorage.getItem("returnTo");
+    if (!returnTo) return;
+    sessionStorage.removeItem("returnTo");
+    const current = location.pathname + location.search;
+    if (returnTo.startsWith("/") && !returnTo.startsWith("//") && returnTo !== current) {
+      navigate(returnTo, { replace: true });
+    }
+    // Only fire when auth flips true; intentionally not depending on location.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
+  // Server-sent events give near-instant freshness for member presence and
+  // game-night changes. This is additive on top of the polling fallbacks below —
+  // if SSE never flows (e.g. blocked by an edge proxy), polling still keeps the
+  // UI correct. EventSource auto-reconnects on error, so no manual retry logic.
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+
+    const es = new EventSource(`${API_BASE_URL}/events`, { withCredentials: true });
+    es.addEventListener("members-changed", () => {
+      void loadGuildMembers(true);
+    });
+    es.addEventListener("nights-changed", () => {
+      void loadGameNights(true);
+    });
+    es.addEventListener("activity-changed", () => {
+      // Refetch the activity feed the instant any event is recorded server-side,
+      // so the Home feed and the achievement/milestone celebration overlay fire
+      // immediately (in step with the Discord announcement) instead of trailing
+      // the slow poll.
+      void loadActivity(true);
+    });
+    es.addEventListener("nuggies-changed", (ev) => {
+      // Only nudge a refetch when it's THIS member's balance that changed, so
+      // the Balance/Milestones pages update live after a grant/claim/etc.
+      try {
+        const data = JSON.parse((ev as MessageEvent).data) as { discordUserId?: string };
+        if (data?.discordUserId && data.discordUserId === myDiscordIdRef.current) {
+          setNuggiesSignal((s) => s + 1);
+        }
+      } catch {
+        // Malformed frame — ignore.
+      }
+    });
+
+    return () => {
+      es.close();
+    };
+  }, [isAuthenticated]);
+
   useEffect(() => {
     if (isAuthenticated !== true) return;
 
@@ -358,14 +458,39 @@ export function App() {
   }, [isAuthenticated, page, selectedMemberIds]);
 
   useEffect(() => {
-    if (!isAdmin && page === "admin") {
-      setPage("home");
+    // Wait for the profile before bouncing — otherwise an admin deep link
+    // gets redirected home during the auth bootstrap.
+    if (profileData && !isAdmin && location.pathname.startsWith("/admin")) {
+      navigate("/", { replace: true });
     }
-  }, [isAdmin, page]);
+  }, [profileData, isAdmin, location.pathname, navigate]);
 
+  // Per-page scene tint: subtly recolor the backdrop vignette so sections
+  // feel distinct (news cool, arcade/economy warm) without new scene layers.
   useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "instant" });
+    const tint =
+      page === "games-news"
+        ? "rgba(34, 211, 238, 0.06)"
+        : page === "nuggies-casino"
+          ? "rgba(20, 83, 45, 0.16)" // casino felt green
+          : page === "nuggies" || page === "nuggies-milestones" || page === "nuggies-history"
+            ? "rgba(251, 191, 119, 0.05)"
+            : "transparent";
+    document.documentElement.style.setProperty("--bi-scene-tint", tint);
   }, [page]);
+
+  // Ctrl/Cmd+K opens the quick switcher from anywhere.
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setQuickSwitchOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!selectedNightId) return;
@@ -376,35 +501,29 @@ export function App() {
     setCurrentUserAttendingSelectedNight(false);
   }, [gameNights, selectedNightId]);
 
+  // The server now drives the actual Discord member sync on its own interval.
+  // The client refreshes the member list for the UI as a lighter polling
+  // fallback (every 180s); SSE ("members-changed") handles immediacy.
   useEffect(() => {
     if (isAuthenticated !== true) return;
 
-    let syncing = false;
-    const runBackgroundSync = async () => {
-      if (syncing || document.hidden) return;
-      syncing = true;
+    let refreshing = false;
+    const runMembersRefresh = async () => {
+      if (refreshing || document.hidden) return;
+      refreshing = true;
       try {
-        await syncGuildMembers(true);
+        await loadGuildMembers(true);
       } finally {
-        syncing = false;
+        refreshing = false;
       }
     };
 
-    void runBackgroundSync();
     const intervalId = window.setInterval(() => {
-      void runBackgroundSync();
-    }, 60000);
+      void runMembersRefresh();
+    }, 180000);
 
-    const onVisibilityChange = () => {
-      if (!document.hidden) {
-        void runBackgroundSync();
-      }
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
     return () => {
       window.clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [isAuthenticated]);
 
@@ -425,7 +544,7 @@ export function App() {
     void runNightListSync();
     const intervalId = window.setInterval(() => {
       void runNightListSync();
-    }, 20000);
+    }, 90000);
 
     return () => window.clearInterval(intervalId);
   }, [isAuthenticated, page]);
@@ -561,8 +680,10 @@ export function App() {
         setProfileFeatureOptIn(profile.featureOptIn);
         if (profile.steamId64) {
           await loadOwnedGames(true);
+          await loadSteamExclusions();
         } else {
           setOwnedGames([]);
+          setExcludedOwnedGameAppIds([]);
         }
       }
       setProfileJson(JSON.stringify(data, null, 2));
@@ -645,6 +766,7 @@ export function App() {
       const data = (await response.json().catch(() => null)) as
         | {
             syncedGames?: number;
+            privateLibrary?: boolean;
             error?: string;
             wishlist?: { ok?: boolean; syncedItems?: number; reason?: string };
           }
@@ -661,14 +783,20 @@ export function App() {
         loadActivity(true),
       ]);
       if (!silent) {
-        const wishlistInfo = data?.wishlist;
-        const wishlistDetails =
-          wishlistInfo?.ok === false
-            ? ` Wishlist sync skipped: ${wishlistInfo.reason ?? "unavailable"}.`
-            : wishlistInfo?.ok
-              ? ` Wishlist: ${wishlistInfo.syncedItems ?? 0}.`
-              : "";
-        setStatus(`Steam sync complete (${data?.syncedGames ?? 0} game(s)).${wishlistDetails}`);
+        if ((data?.syncedGames ?? 0) === 0 && data?.privateLibrary) {
+          setStatus(
+            "Your Steam library is private. In Steam: Profile -> Edit Profile -> Privacy -> set Game details to Public, then sync again."
+          );
+        } else {
+          const wishlistInfo = data?.wishlist;
+          const wishlistDetails =
+            wishlistInfo?.ok === false
+              ? ` Wishlist sync skipped: ${wishlistInfo.reason ?? "unavailable"}.`
+              : wishlistInfo?.ok
+                ? ` Wishlist: ${wishlistInfo.syncedItems ?? 0}.`
+                : "";
+          setStatus(`Steam sync complete (${data?.syncedGames ?? 0} game(s)).${wishlistDetails}`);
+        }
       }
     } catch (error) {
       if (!silent) {
@@ -1151,9 +1279,16 @@ export function App() {
       if (!response.ok) {
         throw new Error(data?.error ?? `Member load failed (${response.status})`);
       }
-      setGuildMembers(data?.members ?? []);
+      const nextMembers = data?.members ?? [];
+      // Equality guard: avoid a tree-wide re-render when the 60s poll returns
+      // identical member data.
+      const signature = JSON.stringify(nextMembers);
+      if (signature !== lastGuildMembersRef.current) {
+        lastGuildMembersRef.current = signature;
+        setGuildMembers(nextMembers);
+      }
       if (!silent) {
-        setStatus(`Loaded ${data?.members?.length ?? 0} guild member(s)`);
+        setStatus(`Loaded ${nextMembers.length} guild member(s)`);
       }
     } catch (error) {
       if (!silent) {
@@ -1182,11 +1317,6 @@ export function App() {
       if (!response.ok) {
         throw new Error(data?.details ?? data?.error ?? `Member sync failed (${response.status})`);
       }
-      await Promise.all([
-        loadGuildMembers(true),
-        loadProfile(true),
-        loadFeaturedRecommendation(true),
-      ]);
       if (!silent) {
         const voiceInfo = data?.voice;
         const voiceDetails =
@@ -1227,13 +1357,59 @@ export function App() {
     setSelectedMemberIds(nightAttendees.map((attendee) => attendee.discordUserId));
   }
 
+  // Library "Plan" seed: resolve the owners of the chosen game from the crew
+  // library, seed them as the selected members (which auto-refires the composer
+  // recommendation), bump the scroll nonce so Games scrolls to its composer, and
+  // hop over to Games.
+  function onPlan(appId: number) {
+    const game = crewGames.find((row) => row.appId === appId);
+    const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
+    setSelectedMemberIds(ownerIds);
+    setComposerScrollNonce((nonce) => nonce + 1);
+    navigateToPage("games");
+    toastQueue.pushToast(`Planning around ${game?.name ?? "this game"}`, "info");
+  }
+
+  function openProfile(discordUserId: string) {
+    navigate(pathForIslander(discordUserId));
+  }
+
+  async function loadSteamExclusions() {
+    try {
+      const res = await apiFetch("/profile/steam-exclusions", { credentials: "include" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { appIds?: number[] };
+      const ids = Array.isArray(data.appIds)
+        ? data.appIds.filter((v) => Number.isInteger(v) && v > 0)
+        : [];
+      setExcludedOwnedGameAppIds(ids);
+    } catch {
+      // leave current state
+    }
+  }
+
+  // Server-persisted + enforced: toggling hides/shows the game across every crew
+  // surface (recommender, round-ups, achievements, activity). Optimistic update,
+  // revert on failure.
   function toggleExcludedOwnedGame(appId: number) {
-    setExcludedOwnedGameAppIds((current) => {
-      if (current.includes(appId)) {
-        return current.filter((value) => value !== appId);
+    const isExcluded = excludedOwnedGameAppIds.includes(appId);
+    setExcludedOwnedGameAppIds((current) =>
+      isExcluded ? current.filter((v) => v !== appId) : [...current, appId]
+    );
+    void (async () => {
+      try {
+        const res = await apiFetch(`/profile/steam-exclusions/${appId}`, {
+          method: isExcluded ? "DELETE" : "PUT",
+          credentials: "include"
+        });
+        if (!res.ok) throw new Error("toggle failed");
+      } catch {
+        // revert
+        setExcludedOwnedGameAppIds((current) =>
+          isExcluded ? [...current, appId] : current.filter((v) => v !== appId)
+        );
       }
-      return [...current, appId];
-    });
+    })();
   }
 
   async function loadGameNights(silent = false) {
@@ -1246,9 +1422,16 @@ export function App() {
       if (!response.ok) {
         throw new Error(data?.error ?? `Game nights request failed (${response.status})`);
       }
-      setGameNights(data?.gameNights ?? []);
+      const nextNights = data?.gameNights ?? [];
+      // Equality guard: avoid a tree-wide re-render when the poll returns
+      // identical game-night data.
+      const signature = JSON.stringify(nextNights);
+      if (signature !== lastGameNightsRef.current) {
+        lastGameNightsRef.current = signature;
+        setGameNights(nextNights);
+      }
       if (!silent) {
-        setStatus(`Loaded ${data?.gameNights?.length ?? 0} game night(s)`);
+        setStatus(`Loaded ${nextNights.length} game night(s)`);
       }
     } catch (error) {
       if (!silent) {
@@ -1257,7 +1440,7 @@ export function App() {
     }
   }
 
-  async function createGameNight() {
+  async function createGameNight(joinAsHost = true) {
     setStatus("Creating game night...");
     try {
       const iso = newNightScheduledFor ? new Date(newNightScheduledFor).toISOString() : "";
@@ -1268,6 +1451,8 @@ export function App() {
         body: JSON.stringify({
           title: newNightTitle,
           scheduledFor: iso,
+          selectedAppId: draftAppId,
+          joinAsHost,
           attendeeIds: selectedMemberIds.length ? selectedMemberIds : undefined
         })
       });
@@ -1279,9 +1464,29 @@ export function App() {
       if (data?.id) {
         await selectNight(data.id);
       }
+      setLockNonce((n) => n + 1);
       setStatus("Created game night");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Create game night failed");
+    }
+  }
+
+  async function setNightGame(nightId: number, appId: number | null) {
+    setStatus(appId === null ? "Clearing game..." : "Setting game...");
+    try {
+      const response = await apiFetch(`/game-nights/${nightId}/game`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ appId })
+      });
+      const data = (await response.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!response.ok) throw new Error(data?.error ?? `Set game failed (${response.status})`);
+      await loadGameNights();
+      if (selectedNightId === nightId) await loadAttendees(nightId);
+      setStatus(appId === null ? "Cleared game" : "Set game for night");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Set game failed");
     }
   }
 
@@ -1312,8 +1517,15 @@ export function App() {
     if (!response.ok) {
       throw new Error(data?.error ?? `Attendee load failed (${response.status})`);
     }
-    setNightAttendees(data?.attendees ?? []);
-    setCurrentUserAttendingSelectedNight(Boolean(data?.currentUserIsAttending));
+    const nextAttendees = data?.attendees ?? [];
+    const nextAttending = Boolean(data?.currentUserIsAttending);
+    // Equality guard: skip setState when the polled payload is unchanged so we
+    // don't re-render the whole tree on every selected-night poll tick.
+    const signature = JSON.stringify({ gameNightId, nextAttendees, nextAttending });
+    if (signature === lastSelectedNightRef.current) return;
+    lastSelectedNightRef.current = signature;
+    setNightAttendees(nextAttendees);
+    setCurrentUserAttendingSelectedNight(nextAttending);
   }
 
   async function joinSelectedNight() {
@@ -1403,10 +1615,6 @@ export function App() {
       (member.presenceStatus !== null && member.presenceStatus !== "offline")
   );
 
-  function saveNewsControlsPlaceholder() {
-    setStatus("Saved placeholder news curation settings (UI only for now)");
-  }
-
   // On real login (false → true), run 780ms palm-exit animation.
   // Skip on refresh (null → true) so already-authed sessions don't flash splash.
   useEffect(() => {
@@ -1448,17 +1656,32 @@ export function App() {
   };
 
   return (
+    <NuggiesSignalProvider signal={nuggiesSignal}>
     <ActivityRefetchProvider refetch={() => loadActivity(true)}>
     <ToastQueueProvider queue={toastQueue}>
+      <ScrollRestoration getKey={(loc) => loc.pathname} />
       <Topbar
-        page={page}
-        onNavigate={setPage}
+        page={page ?? "home"}
+        onNavigate={navigateToPage}
         profile={profileData}
         isAdmin={isAdmin}
         tagline={tagline}
         onLogout={() => void logout()}
+        onOpenSearch={() => setQuickSwitchOpen(true)}
+        onOpenForumThread={(threadId, postId) => {
+          navigate(pathForForumThread(threadId, postId));
+        }}
       />
       <div className="bi-topbar-spacer" aria-hidden="true" />
+      <QuickSwitcher
+        open={quickSwitchOpen}
+        onClose={() => setQuickSwitchOpen(false)}
+        isAdmin={isAdmin}
+        guildMembers={guildMembers}
+        crewGames={crewGames}
+        onNavigate={navigateToPage}
+        onOpenProfile={openProfile}
+      />
       <SteamOnboardingModal
         open={steamOnboardingOpen}
         onClose={() => setSteamOnboardingOpen(false)}
@@ -1479,6 +1702,13 @@ export function App() {
         }}
       >
 
+      <Suspense fallback={<PageLoadingFallback />}>
+      {/* Keyed on page id: remounts per top-level route so the enter animation
+          replays — a 150ms fade/rise instead of a hard cut between pages. Keyed
+          on page (not full pathname) so within-section navigation (forum
+          threads, library filters) doesn't remount and refetch. */}
+      <div key={page ?? "not-found"} className="bi-page-enter">
+
       {page === "home" ? (
         <HomePage
           profile={profileData}
@@ -1488,7 +1718,7 @@ export function App() {
           activityEvents={activityEvents}
           newsCards={newsCards}
           tagline={tagline}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
         />
       ) : null}
 
@@ -1508,16 +1738,23 @@ export function App() {
           crewGames={crewGames}
           crewWishlist={crewWishlist}
           gameNews={gameNews}
+          composerScrollNonce={composerScrollNonce}
+          draftAppId={draftAppId}
+          lockNonce={lockNonce}
+          currentDiscordUserId={profileData?.discordUserId ?? null}
+          isAdmin={isAdmin}
           onSelectNight={(id, title) => void selectNight(id, title)}
           onNewNightTitleChange={setNewNightTitle}
           onNewNightScheduledForChange={setNewNightScheduledFor}
           onToggleSelectedMember={toggleSelectedMember}
+          onDraftAppIdChange={setDraftAppId}
+          onSetNightGame={(nightId, appId) => void setNightGame(nightId, appId)}
           onCreateGameNight={createGameNight}
           onJoinSelectedNight={joinSelectedNight}
           onLeaveSelectedNight={leaveSelectedNight}
           onAddSelectedMembersToNight={addSelectedMembersToNight}
           onRemoveSelectedMembersFromNight={removeSelectedMembersFromNight}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
           onSendChatMessage={sendChatMessage}
         />
       ) : null}
@@ -1525,8 +1762,10 @@ export function App() {
       {page === "library" ? (
         <LibraryPage
           crewGames={crewGames}
+          guildMembers={guildMembers}
           currentDiscordUserId={profileData?.discordUserId ?? null}
-          onNavigate={setPage}
+          onNavigate={navigateToPage}
+          onPlan={onPlan}
         />
       ) : null}
 
@@ -1534,8 +1773,19 @@ export function App() {
         <CommunityPage
           isAdmin={isAdmin}
           activityEvents={activityEvents}
-          onNavigate={setPage}
+          guildMembers={guildMembers}
+          gameNights={gameNights}
+          onNavigate={navigateToPage}
+          openProfile={openProfile}
         />
+      ) : null}
+
+      {page === "tide-check" ? (
+        <TideCheckPage onNavigate={navigateToPage} />
+      ) : null}
+
+      {page === "islander-profile" ? (
+        <IslanderProfilePage targetDiscordUserId={selectedProfileId} onNavigate={navigateToPage} />
       ) : null}
 
       {page === "games-news" ? (
@@ -1543,11 +1793,15 @@ export function App() {
       ) : null}
 
       {page === "community-forums" ? (
-        <ForumsPage profile={profileData} isAdmin={isAdmin} />
+        <ForumsPage profile={profileData} isAdmin={isAdmin} crewGames={crewGames} />
       ) : null}
 
       {page === "community-leaderboard" ? (
-        <ComingSoonPage title="Leaderboard" description="Top Nuggies holders across the crew. Coming soon." />
+        <CommunityLeaderboardPage onNavigate={navigateToPage} />
+      ) : null}
+
+      {page === "crew-achievements" ? (
+        <CrewAchievementsPage onNavigate={navigateToPage} />
       ) : null}
 
       {page === "nuggies" ? <AchievementsPage onProfileChanged={() => void loadProfile(true)} /> : null}
@@ -1555,7 +1809,7 @@ export function App() {
       {page === "nuggies-casino" ? <CasinoPage /> : null}
 
       {page === "nuggies-history" ? (
-        <ComingSoonPage title="Nuggies History" description="Your full transaction log. Coming soon." />
+        <NuggiesHistoryPage onNavigate={navigateToPage} />
       ) : null}
 
       {page === "nuggies-milestones" ? <MilestonesPage /> : null}
@@ -1599,11 +1853,6 @@ export function App() {
           selectedMemberCount={selectedMemberIds.length}
           recommendations={results}
           onRunRecommendation={runRecommendation}
-          newsKeywords={newsKeywords}
-          onNewsKeywordsChange={setNewsKeywords}
-          newsSources={newsSources}
-          onNewsSourcesChange={setNewsSources}
-          onSaveNewsControls={saveNewsControlsPlaceholder}
           profileJson={profileJson}
           newsCards={newsCards}
           onCreateNewsCard={createNewsCard}
@@ -1623,7 +1872,22 @@ export function App() {
         />
       ) : null}
 
+      {page === null ? <NotFoundPage /> : null}
+
+      </div>
+      </Suspense>
+
       <style>{`
+        .bi-page-enter {
+          animation: biPageEnter 150ms ease-out;
+        }
+        @keyframes biPageEnter {
+          from { opacity: 0; transform: translateY(6px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .bi-page-enter { animation: none; }
+        }
         @keyframes islandBladePulse {
           0% {
             transform: translateY(0) scale(1);
@@ -1655,9 +1919,11 @@ export function App() {
       `}</style>
 
       </main>
+      <MobileTabBar page={page ?? "home"} onNavigate={navigateToPage} />
       <ToastHost toasts={toastQueue.toasts} onDismiss={toastQueue.dismiss} />
-      <AchievementCelebration current={celebrationQueue.current} onDismiss={celebrationQueue.dismiss} />
+      <AchievementCelebration current={celebrationQueue.current} onDismiss={celebrationQueue.dismiss} remaining={celebrationQueue.remaining} />
     </ToastQueueProvider>
     </ActivityRefetchProvider>
+    </NuggiesSignalProvider>
   );
 }

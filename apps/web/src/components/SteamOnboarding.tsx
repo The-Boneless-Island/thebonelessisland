@@ -116,7 +116,7 @@ export function SteamOnboardingModal({ open, onClose, onSkip }: SteamOnboardingM
             <div
               className="island-mono"
               style={{
-                fontSize: 11,
+                fontSize: 12,
                 letterSpacing: "0.18em",
                 textTransform: "uppercase",
                 color: steamColors.blue,
@@ -175,7 +175,7 @@ export function SteamOnboardingModal({ open, onClose, onSkip }: SteamOnboardingM
               background: "transparent",
               border: "none",
               color: "#94a3b8",
-              fontSize: 11,
+              fontSize: 12,
               cursor: "pointer",
               textDecoration: "underline",
               padding: "4px 8px",
@@ -190,7 +190,7 @@ export function SteamOnboardingModal({ open, onClose, onSkip }: SteamOnboardingM
           className="island-mono"
           style={{
             padding: "10px 28px 18px",
-            fontSize: 10,
+            fontSize: 12,
             color: "#64748b",
             lineHeight: 1.5,
             textAlign: "center",

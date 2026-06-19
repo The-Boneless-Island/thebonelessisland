@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
 import type { MeProfile, PageId } from "../types.js";
 import { UserMenu } from "./UserMenu.js";
 import { MegaMenu } from "./MegaMenu.js";
+import { NotificationBell } from "./NotificationBell.js";
 
 type TopbarProps = {
   page: PageId;
@@ -11,10 +13,11 @@ type TopbarProps = {
   isAdmin: boolean;
   tagline?: string;
   onLogout: () => void;
+  onOpenSearch?: () => void;
+  onOpenForumThread?: (threadId: number, postId: number | null) => void;
 };
 
-export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }: TopbarProps) {
-  const [search, setSearch] = useState("");
+export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, onOpenSearch, onOpenForumThread }: TopbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -66,10 +69,37 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }
           minWidth: 0
         }}
       >
-        <Brand onNavigate={onNavigate} tagline={tagline} />
+        <Brand tagline={tagline} />
         <MegaMenu page={page} onNavigate={onNavigate} isAdmin={isAdmin} />
         <div style={{ flex: 1, minWidth: 12 }} />
-        <SearchInput value={search} onChange={setSearch} />
+        {onOpenSearch ? (
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            aria-label="Open quick switcher (Ctrl+K)"
+            title="Quick switcher (Ctrl+K)"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 12px",
+              borderRadius: 999,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              background: islandTheme.color.panelMutedBg,
+              color: islandTheme.color.textMuted,
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 13,
+              flexShrink: 0
+            }}
+          >
+            <SearchIcon />
+            <span className="island-mono" style={{ fontSize: 12, letterSpacing: "0.04em" }}>Ctrl K</span>
+          </button>
+        ) : null}
+        {profile && onOpenForumThread ? (
+          <NotificationBell onOpenThread={onOpenForumThread} />
+        ) : null}
         <div style={{ position: "relative", display: "flex", flexShrink: 0 }}>
           <UserTrigger
             buttonRef={triggerRef}
@@ -94,11 +124,11 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout }
   );
 }
 
-function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; tagline?: string }) {
+function Brand({ tagline }: { tagline?: string }) {
   return (
-    <button
-      type="button"
-      onClick={() => onNavigate("home")}
+    <Link
+      to="/"
+      aria-label="The Boneless Island — home"
       style={{
         display: "flex",
         alignItems: "center",
@@ -110,6 +140,8 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
         cursor: "pointer",
         font: "inherit",
         textAlign: "left",
+        textDecoration: "none",
+        color: "inherit",
         flexShrink: 0,
         minWidth: 0,
         maxWidth: 320
@@ -150,7 +182,7 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
         <div
           className="island-mono"
           style={{
-            fontSize: 11,
+            fontSize: 12,
             color: islandTheme.color.textMuted,
             marginTop: -2,
             whiteSpace: "nowrap",
@@ -161,42 +193,7 @@ function Brand({ onNavigate, tagline }: { onNavigate: (page: PageId) => void; ta
           {tagline || "crew at the shoreline"}
         </div>
       </div>
-    </button>
-  );
-}
-
-type SearchInputProps = {
-  value: string;
-  onChange: (value: string) => void;
-};
-
-function SearchInput({ value, onChange }: SearchInputProps) {
-  const searchIcon =
-    "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><path d='m21 21-4.3-4.3'/></svg>";
-  return (
-    <input
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder="Search the island…"
-      style={{
-        border: `1px solid ${islandTheme.color.cardBorder}`,
-        background: islandTheme.color.panelMutedBg,
-        color: islandTheme.color.textPrimary,
-        padding: "8px 12px 8px 34px",
-        borderRadius: 999,
-        fontSize: 13,
-        // Was a hard 220px — at narrow widths that pushed the user trigger
-        // off the row. Now it shrinks down to 96px before yielding to other
-        // chrome and never wraps.
-        flex: "0 1 220px",
-        minWidth: 96,
-        width: "100%",
-        backgroundImage: `url("${searchIcon}")`,
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: "11px center",
-        outline: "none"
-      }}
-    />
+    </Link>
   );
 }
 
@@ -232,7 +229,7 @@ function UserTrigger({ buttonRef, profile, open, onToggle }: UserTriggerProps) {
     >
       <UserAvatar profile={profile} initials={initials} size={30} />
       <span style={{ fontSize: 13, fontWeight: 600 }}>{handle}</span>
-      <span style={{ color: islandTheme.color.textMuted, fontSize: 10 }}>{open ? "▲" : "▼"}</span>
+      <span style={{ color: islandTheme.color.textMuted, fontSize: 12 }}>{open ? "▲" : "▼"}</span>
     </button>
   );
 }
@@ -269,7 +266,7 @@ export function UserAvatar({ profile, initials, size }: UserAvatarProps) {
         width: size,
         height: size,
         borderRadius: 999,
-        background: "linear-gradient(135deg, #fbbf77, #ef8354)",
+        background: islandTheme.gradient.nuggieCoin,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -299,6 +296,15 @@ function PresenceDot({ inVoice, size }: { inVoice: boolean; size: number }) {
         border: `2px solid ${islandTheme.color.panelBg}`
       }}
     />
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <circle cx="7" cy="7" r="4.5" />
+      <line x1="10.5" y1="10.5" x2="14" y2="14" />
+    </svg>
   );
 }
 

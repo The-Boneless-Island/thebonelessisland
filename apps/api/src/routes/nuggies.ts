@@ -15,8 +15,10 @@ import {
   getEquippedItems,
   getRecentTransactions,
   getEquippedItemsByUserId,
+  hasClaimedDailyToday,
 } from "../lib/nuggiesLedger.js";
 import { checkBankRun, checkGameNightAttendance, checkNerfed } from "../lib/nuggiesAchievements.js";
+import { recordEvent } from "../lib/activityEvents.js";
 
 export const nuggiesRouter = Router();
 
@@ -48,7 +50,12 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const [balRow, optRow, txRows, invRows, loanRows, lifetimeRow] = await Promise.all([
+  await ensureSettingsLoaded();
+  // Same source the POST /nuggies/daily handler grants (claimDaily reads
+  // "nuggies_daily_amount") so the claim button label matches the payout.
+  const dailyAmount = getSetting("nuggies_daily_amount", 75);
+
+  const [balRow, optRow, txRows, invRows, loanRows, lifetimeRow, claimedToday] = await Promise.all([
     db.query<{ balance: string }>(
       "SELECT balance FROM nuggies_balances WHERE user_id = $1",
       [userId]
@@ -85,11 +92,14 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
        WHERE user_id = $1 AND amount > 0`,
       [userId]
     ),
+    hasClaimedDailyToday(userId),
   ]);
 
   res.json({
     balance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
     lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
+    dailyAmount,
+    claimedToday,
     optedOut: optRow.rows[0]?.nuggies_opted_out ?? false,
     transactions: txRows.rows.map((r) => ({
       id: parseInt(r.id, 10),
@@ -119,6 +129,52 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
       dueAt: r.due_at,
       isLender: String(r.lender_user_id) === String(userId),
     })),
+  });
+});
+
+// ── GET /nuggies/me/transactions ──────────────────────────────────────────────
+// Paginated transaction history for the web Nuggies History page. Same row
+// shape as /nuggies/me's transactions, plus a total count respecting the type
+// filter so the page can render pagination controls.
+
+nuggiesRouter.get("/me/transactions", requireBotOrSession, async (req, res) => {
+  if (!isEnabled()) { res.json({ enabled: false }); return; }
+
+  const discordUserId = String(res.locals.userId);
+  const userId = await resolveInternalId(discordUserId);
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1), 200);
+  const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+  const type = req.query.type ? String(req.query.type) : null;
+
+  const [txRows, countRow] = await Promise.all([
+    db.query<{ id: string; amount: string; type: string; reason: string; reference_id: string | null; created_at: string }>(
+      `SELECT id, amount, type, reason, reference_id, created_at
+       FROM nuggies_transactions
+       WHERE user_id = $1 AND ($2::text IS NULL OR type = $2)
+       ORDER BY created_at DESC
+       LIMIT $3 OFFSET $4`,
+      [userId, type, limit, offset]
+    ),
+    db.query<{ total: string }>(
+      `SELECT COUNT(*)::text AS total
+       FROM nuggies_transactions
+       WHERE user_id = $1 AND ($2::text IS NULL OR type = $2)`,
+      [userId, type]
+    ),
+  ]);
+
+  res.json({
+    transactions: txRows.rows.map((r) => ({
+      id: parseInt(r.id, 10),
+      amount: parseInt(r.amount, 10),
+      type: r.type,
+      reason: r.reason,
+      referenceId: r.reference_id,
+      createdAt: r.created_at,
+    })),
+    total: parseInt(countRow.rows[0]?.total ?? "0", 10),
   });
 });
 
@@ -256,8 +312,14 @@ nuggiesRouter.post("/daily", requireBotOrSession, async (_req, res) => {
   if (!isEnabled()) { res.status(503).json({ error: "Nuggies disabled" }); return; }
 
   try {
-    const result = await claimDaily(String(res.locals.userId));
+    const discordUserId = String(res.locals.userId);
+    const result = await claimDaily(discordUserId);
     res.json(result);
+    void recordEvent({
+      eventType: "nuggies.daily_claimed",
+      actorDiscordUserId: discordUserId,
+      payload: { amount: result.amount }
+    });
   } catch (err) {
     if (err instanceof AlreadyClaimedError) { res.status(409).json({ error: err.message }); return; }
     if (err instanceof OptedOutError) { res.status(403).json({ error: err.message }); return; }
@@ -656,6 +718,12 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
 
     await client.query("COMMIT");
     res.json({ ok: true, principal, dueAt: loan.rows[0].due_at });
+    void recordEvent({
+      eventType: "nuggies.loan_accepted",
+      actorDiscordUserId: discordUserId,
+      targetDiscordUserId: lenderDId ?? null,
+      payload: { loanId, principal }
+    });
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -687,6 +755,12 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
   const collateral = parseInt(loan.rows[0].collateral, 10);
   const lenderId = loan.rows[0].lender_user_id;
   const dueAtIso = loan.rows[0].due_at;
+  const lenderDiscord = (
+    await db.query<{ discord_user_id: string }>(
+      "SELECT discord_user_id FROM users WHERE id = $1",
+      [lenderId]
+    )
+  ).rows[0]?.discord_user_id ?? null;
 
   const client = await db.connect();
   try {
@@ -750,6 +824,12 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
     void checkBankRun(discordUserId, dueAtIso);
 
     res.json({ ok: true, amountPaid: amountDue, collateralReturned: collateral });
+    void recordEvent({
+      eventType: "nuggies.loan_repaid",
+      actorDiscordUserId: discordUserId,
+      targetDiscordUserId: lenderDiscord,
+      payload: { loanId, amount: amountDue }
+    });
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

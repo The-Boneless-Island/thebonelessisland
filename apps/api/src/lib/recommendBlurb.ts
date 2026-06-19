@@ -4,8 +4,15 @@ import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index
 
 type GameMeta = {
   tags: string[];
-  max_players: number;
-  median_session_minutes: number;
+  // Real capability signal (migration 045). max_players / median_session_minutes
+  // were always fabricated, so the blurb context now uses honest fields instead.
+  is_single_player: boolean;
+  is_online_coop: boolean;
+  is_lan_coop: boolean;
+  is_shared_split_coop: boolean;
+  is_online_pvp: boolean;
+  is_mmo: boolean;
+  mp_max_players_approx: number | null;
 };
 
 type RecentPlayer = {
@@ -50,12 +57,14 @@ export async function generateRecommendationBlurb(
 
   const [metaResult, recentResult] = await Promise.all([
     db.query<GameMeta>(
-      `SELECT tags, max_players, median_session_minutes FROM games WHERE app_id = $1`,
+      `SELECT tags, is_single_player, is_online_coop, is_lan_coop,
+              is_shared_split_coop, is_online_pvp, is_mmo, mp_max_players_approx
+       FROM games WHERE app_id = $1`,
       [top.appId]
     ),
     db.query<RecentPlayer>(
       `SELECT COALESCE(gm.display_name, gm.username, 'someone') AS display_name, ug.playtime_2weeks
-       FROM user_games ug
+       FROM shareable_user_games ug
        INNER JOIN users u ON u.id = ug.user_id
        LEFT JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id AND gm.in_guild = TRUE
        WHERE ug.app_id = $1 AND ug.playtime_2weeks > 0
@@ -64,14 +73,29 @@ export async function generateRecommendationBlurb(
     )
   ]);
 
-  const { tags = [], max_players, median_session_minutes } = metaResult.rows[0] ?? {};
+  const meta = metaResult.rows[0];
+  const tags = meta?.tags ?? [];
 
-  const sessionLabel =
-    median_session_minutes >= 90
-      ? "long session"
-      : median_session_minutes >= 30
-        ? "medium session"
-        : "quick-play";
+  // Describe real multiplayer capability instead of the old fake session/player
+  // stats. Order roughly from most-social to least.
+  const capabilityLabel = meta?.is_mmo
+    ? "MMO"
+    : meta?.is_online_pvp
+      ? "online PvP"
+      : meta?.is_online_coop
+        ? "online co-op"
+        : meta?.is_lan_coop
+          ? "LAN co-op"
+          : meta?.is_shared_split_coop
+            ? "couch/split-screen co-op"
+            : tags.some((tag) => /multi-?player|co-?op/i.test(tag))
+              ? "multiplayer"
+              : meta?.is_single_player
+                ? "single-player"
+                : "co-op friendly";
+
+  const playerCapNote =
+    meta?.mp_max_players_approx != null ? `up to ${meta.mp_max_players_approx} players` : null;
 
   const ownershipNote =
     top.nearMatchMissingMembers === 0
@@ -87,7 +111,7 @@ export async function generateRecommendationBlurb(
 
   // Compact context — tokens are precious for a one-sentence output
   const context = [
-    `${top.name} · ${ownershipNote} · up to ${max_players ?? "?"} players · ${sessionLabel}(~${median_session_minutes ?? "?"}min)`,
+    `${top.name} · ${ownershipNote} · ${capabilityLabel}${playerCapNote ? ` · ${playerCapNote}` : ""}`,
     tags.length ? `Tags: ${tags.slice(0, 6).join(", ")}` : null,
     recentNote ? `Crew played recently: ${recentNote}` : null
   ]

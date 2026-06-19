@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "../api/client.js";
 import { useRefetchActivity } from "../system/activityContext.js";
-import { IslandButton, IslandCard } from "../islandUi.js";
+import { useNuggiesSignal } from "../system/nuggiesSignal.js";
+import { usePushToast } from "../system/toast.js";
+import { ConfettiBurst } from "../system/celebration.js";
+import { IslandButton, IslandCard, IslandEmptyState, IslandSkeletonCard, useCountUp } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
@@ -23,6 +26,7 @@ type MeData = {
   transactions: NuggieTransaction[];
   inventory: NuggiesInventoryItem[];
   loans: NuggiesLoan[];
+  dailyAmount?: number;
 };
 
 function fmt(n: number) {
@@ -63,7 +67,7 @@ type AchievementsPageProps = {
   onProfileChanged?: () => void;
 };
 
-export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {}) {
+function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {}) {
   const [me, setMe] = useState<MeData | null>(null);
   const [shop, setShop] = useState<NuggiesShopItem[]>([]);
   const [leaderboard, setLeaderboard] = useState<NuggiesLeaderboardEntry[]>([]);
@@ -80,7 +84,13 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
   const [equipPending, setEquipPending] = useState<number | null>(null);
   const [loanPending, setLoanPending] = useState<number | null>(null);
 
+  const [claimConfetti, setClaimConfetti] = useState(0);
+  const [shopConfetti, setShopConfetti] = useState(0);
+
   const refetchActivity = useRefetchActivity();
+  const pushToast = usePushToast();
+  // Count-up instead of snapping when the balance changes (claim, buy, SSE).
+  const animatedBalance = useCountUp(me?.balance ?? 0);
 
   const load = useCallback(async () => {
     const [meRes, shopRes, lbRes] = await Promise.all([
@@ -89,9 +99,13 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
       apiFetch("/nuggies/leaderboard"),
     ]);
     if (meRes.ok) {
-      const d = await meRes.json() as MeData;
+      const d = await meRes.json() as MeData & { claimedToday?: boolean };
       setMe(d);
-      setClaimedToday(hasDailyToday(d.transactions));
+      // Server flag is authoritative; the 20-row transactions page can scroll
+      // the daily claim out of view and falsely re-arm the button.
+      setClaimedToday(
+        typeof d.claimedToday === "boolean" ? d.claimedToday : hasDailyToday(d.transactions)
+      );
     }
     if (shopRes.ok) {
       const d = await shopRes.json() as { items: NuggiesShopItem[] };
@@ -105,6 +119,13 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+
+  // Live balance: refetch the instant the SSE bus reports this member's Nuggies
+  // changed (admin grant, daily claim, trade, loan…) — no manual refresh needed.
+  const nuggiesSignal = useNuggiesSignal();
+  useEffect(() => {
+    if (nuggiesSignal > 0) void load();
+  }, [nuggiesSignal, load]);
 
   async function claimDaily() {
     setClaiming(true);
@@ -123,6 +144,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
       );
       setClaimedToday(true);
       setClaimMsg(`+${fmt(body.amount ?? 0)} Nuggies claimed!`);
+      setClaimConfetti((n) => n + 1);
       void refetchActivity();
     } else {
       setClaimMsg(body.error ?? "Could not claim daily");
@@ -135,9 +157,10 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
     const res = await apiFetch(`/nuggies/shop/${itemId}/buy`, { method: "POST" });
     if (res.ok) {
       await load();
+      setShopConfetti((n) => n + 1);
     } else {
       const b = await res.json() as { error?: string };
-      alert(b.error ?? "Purchase failed");
+      pushToast(b.error ?? "Purchase failed", "error");
     }
     setBuying(null);
   }
@@ -175,9 +198,15 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
   }
 
   if (loading) {
+    // Render the page silhouette immediately instead of blocking on a spinner.
     return (
-      <div style={{ padding: 32, textAlign: "center", color: islandTheme.color.textMuted }}>
-        Loading Nuggies…
+      <div style={{ display: "grid", gap: 12 }} aria-busy="true" aria-label="Loading Nuggies">
+        <div className="bi-nuggies-top">
+          <IslandSkeletonCard lines={4} />
+          <IslandSkeletonCard lines={4} />
+        </div>
+        <IslandSkeletonCard lines={6} />
+        <IslandSkeletonCard lines={5} />
       </div>
     );
   }
@@ -185,7 +214,11 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
   if (!me) {
     return (
       <IslandCard>
-        <p style={{ margin: 0 }}>Could not load Nuggies data. Are you logged in?</p>
+        <IslandEmptyState
+          pose="shrug"
+          title="Couldn't load your Nuggies"
+          body="The tide didn't bring your balance back. Refresh the page, or check that you're still logged in."
+        />
       </IslandCard>
     );
   }
@@ -227,7 +260,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
                 <div style={{ fontWeight: 600, color: islandTheme.color.textSecondary }}>
                   {role} ₦{fmt(loan.principal)} · due ₦{fmt(loan.amountDue)}
                 </div>
-                <div style={{ fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+                <div style={{ fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
                   #{loan.id} · {loan.status} · {overdue ? "OVERDUE · " : ""}due {dueLabel}
                   {loan.collateral > 0 ? ` · collateral ₦${fmt(loan.collateral)}` : ""}
                 </div>
@@ -268,7 +301,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
           );
         })}
       </div>
-      <div style={{ fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+      <div style={{ fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
         Use /loan in Discord to make new offers.
       </div>
     </IslandCard>
@@ -303,7 +336,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
               <span style={{ fontWeight: 700, flexShrink: 0, color: tx.amount >= 0 ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>
                 {tx.amount >= 0 ? "+" : ""}{fmt(tx.amount)}
               </span>
-              <span style={{ fontSize: 11, color: islandTheme.color.textMuted, flexShrink: 0 }}>
+              <span style={{ fontSize: 12, color: islandTheme.color.textMuted, flexShrink: 0 }}>
                 {relTime(tx.createdAt)}
               </span>
             </div>
@@ -318,14 +351,15 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
       <div className="bi-nuggies-top">
         <div style={{ display: "grid", gap: 12 }}>
       {/* Balance Hero */}
-      <IslandCard style={{ display: "grid", gap: 12 }}>
+      <IslandCard style={{ display: "grid", gap: 12, position: "relative" }}>
+        <ConfettiBurst trigger={claimConfetti} />
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <div>
-            <div style={{ fontSize: 11, fontFamily: islandTheme.font.mono, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted, marginBottom: 4, display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <div style={{ fontSize: 12, fontFamily: islandTheme.font.mono, textTransform: "uppercase", letterSpacing: "0.1em", color: islandTheme.color.textMuted, marginBottom: 4, display: "inline-flex", alignItems: "center", gap: 6 }}>
               <NuggieCoin size={16} /> Nuggies Balance
             </div>
             <div style={{ fontSize: "clamp(2rem, 5vw, 3rem)", fontWeight: 800, lineHeight: 1, color: islandTheme.color.textPrimary }}>
-              ₦{fmt(me.balance)}
+              ₦{fmt(animatedBalance)}
               <span style={{ fontSize: "0.45em", fontWeight: 400, color: islandTheme.color.textMuted, marginLeft: "0.4em" }}>Nuggies</span>
             </div>
             {myRank && !me.optedOut && (
@@ -339,11 +373,11 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
             {claimedToday ? (
               <div style={{ fontSize: 13, color: islandTheme.color.textMuted, textAlign: "right" }}>
                 Daily claimed ✓<br />
-                <span style={{ fontSize: 11 }}>Resets at 11pm ET</span>
+                <span style={{ fontSize: 12 }}>Resets at 11pm ET</span>
               </div>
             ) : (
               <IslandButton variant="primary" onClick={() => void claimDaily()} disabled={claiming}>
-                {claiming ? "Claiming…" : "Claim 75 Nuggies Today"}
+                {claiming ? "Claiming…" : me.dailyAmount != null ? `Claim ${fmt(me.dailyAmount)} Nuggies Today` : "Claim Daily Nuggies"}
               </IslandButton>
             )}
             {claimMsg && (
@@ -406,7 +440,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
                     alignItems: "center",
                     justifyContent: "center",
                     fontSize: reached ? 22 : 16,
-                    color: reached ? "#0f172a" : islandTheme.color.textMuted,
+                    color: reached ? islandTheme.color.textDark : islandTheme.color.textMuted,
                     boxShadow: reached
                       ? `0 0 18px ${tier.reachedGlow}, inset 0 0 0 1px rgba(255,255,255,0.18)`
                       : isNext
@@ -419,7 +453,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
                 </div>
                 <div
                   style={{
-                    fontSize: 9,
+                    fontSize: 12,
                     color: reached ? tier.reachedTextColor : islandTheme.color.textMuted,
                     fontFamily: islandTheme.font.mono,
                     letterSpacing: "0.08em",
@@ -498,17 +532,17 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
                     <span style={{ fontSize: 22 }}>{item.itemData.emoji}</span>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
-                      <div style={{ fontSize: 11, color: islandTheme.color.textMuted, textTransform: "capitalize", display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "capitalize", display: "flex", alignItems: "center", gap: 6 }}>
                         <span>{item.itemType}</span>
                         {earned && (
                           <span
                             className="island-mono"
                             style={{
-                              fontSize: 9,
+                              fontSize: 12,
                               padding: "1px 6px",
                               borderRadius: 999,
                               background: "rgba(163, 230, 53, 0.18)",
-                              color: "#a3e635",
+                              color: islandTheme.color.limeEarned,
                               border: "1px solid rgba(163, 230, 53, 0.45)",
                               letterSpacing: "0.08em",
                               textTransform: "uppercase",
@@ -541,7 +575,8 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
       </div>
 
       {/* Shop */}
-      <IslandCard as="section" style={{ display: "grid", gap: 12 }}>
+      <IslandCard as="section" style={{ display: "grid", gap: 12, position: "relative" }}>
+        <ConfettiBurst trigger={shopConfetti} />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Shop</div>
           <TabBar value={shopTab} onChange={setShopTab} />
@@ -555,7 +590,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
                   <span style={{ fontSize: 22, lineHeight: 1 }}>{item.itemData.emoji}</span>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
-                    <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.3 }}>{item.description}</div>
+                    <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.3 }}>{item.description}</div>
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, gap: 8 }}>
@@ -641,7 +676,7 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
             : "Hide my balance from the ladder"}
         </button>
         {me.optedOut && (
-          <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 4 }}>
             Unranked. You won't appear on the ladder and can't earn or spend Nuggies.
           </div>
         )}
@@ -649,6 +684,8 @@ export function AchievementsPage({ onProfileChanged }: AchievementsPageProps = {
     </div>
   );
 }
+
+export const AchievementsPage = React.memo(AchievementsPageInner);
 
 function TabBar({ value, onChange }: { value: ItemTab; onChange: (t: ItemTab) => void }) {
   const tabs: { key: ItemTab; label: string }[] = [
@@ -711,7 +748,7 @@ function ItemCard({ children, tooltip }: { children: React.ReactNode; tooltip?: 
             border: `1px solid ${islandTheme.color.cardBorder}`,
             borderRadius: 8,
             boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
-            fontSize: 11,
+            fontSize: 12,
             lineHeight: 1.45,
             color: islandTheme.color.textPrimary,
             pointerEvents: "none",

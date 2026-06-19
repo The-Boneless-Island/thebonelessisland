@@ -1,0 +1,22 @@
+-- Make the steam_visibility privacy control real.
+--
+-- Background: users.steam_visibility (private | members | public) defaulted to
+-- 'private', but NO code path ever set it on Steam-link, and every crew-facing
+-- aggregate (crew-owned / crew-trending / crew-wishlist / crew-achievements and
+-- the per-game owners list) ignored it entirely — so private users' per-user
+-- playtime + achievement attribution leaked, while the default 'private' would
+-- have darkened those features the moment enforcement was added.
+--
+-- This release adds enforcement (private users are excluded from crew-facing
+-- per-user surfaces; they still see their own data). To keep the flagship
+-- "what can we play together" experience working by default, the sensible
+-- default for this tight-knit community hub is 'members' (visible to logged-in
+-- guild members), not 'private'. Linking Steam now shares with the crew by
+-- default; a user can still choose 'private' to disappear from aggregates.
+--
+-- Pre-launch backfill: main has not been advanced / no production users exist
+-- (deploy is gated), so every existing row still holds the untouched 'private'
+-- default. Flip them to 'members' so the feature works for existing test
+-- accounts. After launch, only deliberate user choices set 'private'.
+ALTER TABLE users ALTER COLUMN steam_visibility SET DEFAULT 'members';
+UPDATE users SET steam_visibility = 'members' WHERE steam_visibility = 'private';

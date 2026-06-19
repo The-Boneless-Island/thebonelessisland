@@ -4,7 +4,7 @@ Discord-first community web platform with optional Steam linking. Tropical islan
 
 ## What is included
 
-- `apps/web`: React + Vite + TypeScript. Fixed topbar (Home / Games / Community / Achievements / Admin), Discord-style user menu, full-bleed scene shell (sky + sun/moon + ocean + beach + parallax palms), day/night theme switch.
+- `apps/web`: React + Vite + TypeScript. Fixed topbar with a MegaMenu (Games / Community / Nuggies groups) + an Admin link; Home is the root route via the brand logo. Discord-style user menu, full-bleed scene shell (sky + sun/moon + ocean + beach + parallax palms), day/night theme switch.
 - `apps/api`: Express API with Discord OAuth, profile routes, Steam link/sync, rule-based + AI recommendations, game-night CRUD + RSVP, AI chat, AI news curation (Steam game news + external RSS/GNews pipeline).
 - `apps/bot`: Thin Discord bot exposing `/whatcanweplay` and delegating recommendation logic to the API.
 - `packages/shared`: shared cross-app TypeScript types.
@@ -53,8 +53,8 @@ Top nav (fixed topbar with backdrop blur — `position: fixed` so it stays ancho
 - **Home** — hero with online count + display headline + CTAs, Gaming News feed (external RSS/GNews, AI-curated, tab-filtered by label, article detail modal), Friends Online widget (live Discord presence), Discord-style Activity Feed (5-tab filter, capped at 5 events with "View full feed" link to Community), Drift Log news cards, Bot CTA + Crew Ritual cards
 - **Games** — AI session composer (combined AI pick + crew roster + invite), Patches & Updates rolodex (sticky right column), scheduled game nights with RSVP, group wishlist with hype bars, library snapshot, live streams drawer (right-edge tab)
 - **Community** — crew carousel (admin button gated to Parent), recent clips, activity timeline, forums table, clubs, upcoming events, weekly leaderboards
-- **Achievements** — placeholder
-- **Admin** — hub of 11 tinted tiles + subpages (Server Configuration, AI Settings, News Sources, News Curation, Recommendation Tester, Data Sync, Members & Roles, Game Night Moderation, Forum Moderation, Tournaments, Game Library, Audit Log). Gated to Parent role.
+- **Crew Achievements** (under Community) — placeholder
+- **Admin** — sidebar over 18 deep-linkable pages (Dashboard, Members & Roles, Forum Moderation, Game Library, Game Nights, Recommendation Engine, Gaming News, Patch Sources, Drift Log, Economy Operations, Shop Items, Economy Rules, AI Provider, Nuggie Persona, Guild Identity, Discord Bridge, Data Sync, Audit Log). Gated to Parent role.
 
 User menu (avatar dropdown): Discord profile + custom status + rich presence + status picker + theme toggle (Day / Night) + Profile + Sign out.
 
@@ -107,8 +107,10 @@ Vote-related API endpoints (`/game-nights/:id/votes`, `/finalize`) remain alive 
 All AI features are provider-agnostic. The active provider, model, and API key are configured at runtime via **Admin → AI Settings** — no code changes or redeploys needed to switch providers.
 
 ### Supported providers
-- **Anthropic** — Claude Haiku 4.5 (default), Sonnet 4.5, Opus 4
+- **Anthropic** — `claude-haiku-4-5` (default), `claude-sonnet-4-6`, `claude-opus-4-7`, `claude-opus-4-6`
 - **OpenAI** — GPT-4o Mini (default), GPT-4o
+- **Google Gemini** — `gemini-2.5-flash-lite` (default)
+- **AWS Bedrock** — Claude via cross-region inference profile (authenticates through the AWS credential chain; no API key)
 
 ### Features
 
@@ -153,7 +155,7 @@ All AI features are provider-agnostic. The active provider, model, and API key a
 ### Admin → AI Settings
 Configure AI without redeploying:
 - Enable / disable AI features globally
-- Switch provider (Anthropic / OpenAI)
+- Switch provider (Anthropic / OpenAI / Google Gemini / AWS Bedrock)
 - Select or enter a custom model
 - Store API key (masked in UI, never overwritten by placeholder values)
 - Test the connection live
@@ -225,7 +227,7 @@ The full Boneless Island design (handoff bundle from Claude Design) has been por
 4. **Games rebuild** — AI session composer, patches rolodex, scheduled nights, group wishlist, library snapshot, live streams drawer. Voting UI removed.
 5. **Library** — full Steam library page with filters, sort, co-ownership stacks.
 6. **Community** — crew carousel, clips, activity, forums, clubs, events, leaderboards.
-7. **Admin** — hub + 11 sub-pages (including new News Sources).
+7. **Admin** — admin hub (since rebuilt into a sidebar over 18 deep-linkable `/admin/*` pages — see the admin description above).
 8. **Polish + parity** — voting state cleanup; App.tsx down 62%.
 9. **External news pipeline** — RSS + GNews ingestion, GeneralNewsItem type, article detail modal, developer diversity cap.
 

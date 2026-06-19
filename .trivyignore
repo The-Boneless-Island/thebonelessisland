@@ -1,0 +1,19 @@
+# Accepted-risk waivers for the Trivy CI gate (apps/*/Dockerfile image scans).
+#
+# Rules for this file:
+#   - Every entry MUST have a reason AND a revisit condition.
+#   - Only waive what is genuinely not fixable today. Prefer fixing.
+#   - Keep it short. Re-check on each dependency-update sweep.
+
+# CVE-2026-42504 — Go stdlib MIME-header DoS, compiled into the Caddy binary
+# that ships in caddy:2-alpine (built with Go 1.26.3; the fix is Go 1.26.4).
+#
+# Why waived: we do not compile Caddy ourselves, and as of 2026-06-15 the
+# newest published image (caddy:2.11.4 / the floating 2-alpine tag) is still
+# built on Go 1.26.3 — there is no patched Caddy image to upgrade to. The
+# finding is a denial-of-service (not RCE), and the edge sits behind Cloudflare.
+#
+# Revisit: the Dockerfile uses the floating `caddy:2-alpine` tag, so CI will
+# pull the rebuilt image automatically once Caddy republishes on Go 1.26.4+.
+# REMOVE this line then (the CVE will simply stop appearing).
+CVE-2026-42504

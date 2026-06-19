@@ -10,26 +10,34 @@
     "db:migrate": "tsx src/db/runMigrations.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0",
-    "@aws-sdk/client-ssm": "^3.1048.0",
-    "@google/genai": "^2.0.1",
+    "@anthropic-ai/sdk": "^0.104.1",
+    "@aws-sdk/client-bedrock": "^3.1068.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1068.0",
+    "@aws-sdk/client-ssm": "^3.1068.0",
+    "@google/genai": "^2.8.0",
     "@island/shared": "0.1.0",
-    "cookie-session": "^2.1.1",
+    "connect-pg-simple": "^10.0.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^8.5.2",
-    "openai": "^6.35.0",
-    "pg": "^8.16.3",
+    "express-session": "^1.19.0",
+    "helmet": "^8.2.0",
+    "multer": "^2.2.0",
+    "openai": "^6.42.0",
+    "pg": "^8.21.0",
     "rss-parser": "^3.13.0",
-    "zod": "^4.1.12"
+    "sharp": "^0.35.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/cookie-session": "^2.0.49",
+    "@types/connect-pg-simple": "^7.0.3",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
-    "@types/node": "^24.9.1",
+    "@types/express-session": "^1.19.0",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
-    "tsx": "^4.20.6"
+    "tsx": "^4.22.4"
   }
 }

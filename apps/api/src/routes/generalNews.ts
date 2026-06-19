@@ -178,7 +178,7 @@ generalNewsRouter.get("/general", async (_req, res) => {
  * POST /news/general/ingest
  * Admin endpoint — manually trigger ingestion + curation.
  */
-generalNewsRouter.post("/general/ingest", async (_req, res) => {
+generalNewsRouter.post("/general/ingest", requireSession, requireParentRole, async (_req, res) => {
   try {
     const result = await ingestAndCurateGeneralNews(true); // force bypasses 1-hour cooldown
     res.json({ ok: true, ...result });
@@ -192,7 +192,7 @@ generalNewsRouter.post("/general/ingest", async (_req, res) => {
  * POST /news/general/curate
  * Admin endpoint — curate any un-curated rows without re-fetching.
  */
-generalNewsRouter.post("/general/curate", async (_req, res) => {
+generalNewsRouter.post("/general/curate", requireSession, requireParentRole, async (_req, res) => {
   try {
     const curated = await curateUncuratedGeneralNews();
     res.json({ ok: true, curated });
@@ -208,7 +208,7 @@ generalNewsRouter.post("/general/curate", async (_req, res) => {
  * `limit` rows (default 200) per call so the request stays bounded; the admin
  * UI can poll repeatedly until count returns 0.
  */
-generalNewsRouter.post("/general/embed-backfill", async (req, res) => {
+generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentRole, async (req, res) => {
   try {
     if (!(await isEmbeddingColumnAvailable())) {
       res.status(400).json({
@@ -227,20 +227,6 @@ generalNewsRouter.post("/general/embed-backfill", async (req, res) => {
   } catch (err) {
     console.error("[generalNews] embed-backfill error:", err);
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
-  }
-});
-
-/**
- * GET /news/general/debug-tags
- * Temp debug endpoint — returns raw AI output for one article to diagnose tag issues.
- */
-generalNewsRouter.get("/general/debug-tags", async (_req, res) => {
-  try {
-    const { debugCurateOne } = await import("../lib/generalNewsIngestion.js");
-    const result = await debugCurateOne();
-    res.json(result);
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
   }
 });
 
@@ -390,7 +376,7 @@ async function runRecurateJob(): Promise<void> {
  * Admin endpoint — kicks off background re-curation. Returns 202 immediately.
  * Poll /news/general/recurate/status for progress.
  */
-generalNewsRouter.post("/general/recurate", (_req, res) => {
+generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, (_req, res) => {
   if (recurateJob.state === "running") {
     res.status(409).json({ ok: false, error: "Recurate already running", job: recurateJob });
     return;
@@ -421,7 +407,7 @@ generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParent
  * GET /news/general/recurate/status
  * Returns current/last recurate job snapshot for client polling.
  */
-generalNewsRouter.get("/general/recurate/status", (_req, res) => {
+generalNewsRouter.get("/general/recurate/status", requireSession, requireParentRole, (_req, res) => {
   res.json({ ok: true, job: recurateJob });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
 import { islandTheme } from "./theme.js";
 
 export type IslandButtonVariant = "primary" | "secondary" | "danger";
@@ -64,61 +64,6 @@ type IslandCardProps = HTMLAttributes<HTMLElement> & {
 export function IslandCard({ as = "section", style, ...props }: IslandCardProps) {
   const Tag = as;
   return <Tag {...props} style={{ ...islandCardStyle, ...style }} />;
-}
-
-type IslandTileButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  title: string;
-  description: string;
-  imageUrl: string;
-  accent: "primary" | "tool";
-  hovered?: boolean;
-};
-
-export function IslandTileButton({
-  title,
-  description,
-  imageUrl,
-  accent,
-  hovered = false,
-  style,
-  ...props
-}: IslandTileButtonProps) {
-  const accentBorder = accent === "primary" ? islandTheme.color.primaryStrong : islandTheme.color.toolAccent;
-  const hoverShadow = accent === "primary" ? islandTheme.shadow.tileGameNightHover : islandTheme.shadow.tileToolsHover;
-  const gradient = accent === "primary" ? islandTheme.gradient.gameNightTile : islandTheme.gradient.toolsTile;
-  return (
-    <button
-      {...props}
-      style={{
-        ...islandButtonStyle("secondary"),
-        width: "100%",
-        minHeight: "clamp(160px, 24vw, 250px)",
-        borderRadius: islandTheme.radius.surface,
-        textAlign: "left",
-        color: islandTheme.color.textInverted,
-        padding: "1rem",
-        border: `1px solid ${accentBorder}`,
-        backgroundImage: `${gradient}, url("${imageUrl}")`,
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        boxShadow: hovered ? hoverShadow : islandTheme.shadow.tileIdle,
-        transition: "box-shadow 160ms ease, transform 160ms ease",
-        transform: hovered ? "translateY(-2px)" : "translateY(0)",
-        display: "flex",
-        flexDirection: "column",
-        justifyContent: "flex-end",
-        overflow: "hidden",
-        ...style
-      }}
-    >
-      <div>
-        <div style={{ fontSize: "clamp(1.75rem, 3.4vw, 2.25rem)", fontWeight: 800, lineHeight: 1.05, marginBottom: 10 }}>
-          {title}
-        </div>
-        <div style={{ fontSize: 16, lineHeight: 1.3, opacity: 0.97, maxWidth: 280 }}>{description}</div>
-      </div>
-    </button>
-  );
 }
 
 type IslandMemberChipProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -221,7 +166,7 @@ export function IslandGameCard({
             height: 90,
             borderRadius: 6,
             border: `1px solid ${islandTheme.color.border}`,
-            background: "linear-gradient(140deg, #0b1220, #132640)",
+            background: islandTheme.gradient.gameArtFallback,
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -310,7 +255,7 @@ export function IslandGameBlade({
         border: selected ? `1px solid ${islandTheme.color.primaryGlow}` : `1px solid ${islandTheme.color.border}`,
         minHeight: 98,
         background: islandTheme.color.panelBg,
-        boxShadow: hovered ? "0 0 0 1px rgba(96,165,250,0.6), 0 10px 24px rgba(10,20,45,0.5)" : "0 6px 16px rgba(2,6,23,0.28)",
+        boxShadow: hovered ? islandTheme.shadow.bladeHover : islandTheme.shadow.cardIdle,
         transform: hovered ? "translateY(-2px) scale(1.01)" : "translateY(0) scale(1)",
         transition: "transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease",
         animation: justVoted ? "islandBladePulse 700ms ease-out" : undefined,
@@ -326,14 +271,14 @@ export function IslandGameBlade({
             zIndex: 3,
             borderRadius: 999,
             padding: "0.2rem 0.46rem",
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             border:
               voteFlashTone === "up"
-                ? "1px solid #38bdf8"
+                ? `1px solid ${islandTheme.color.voteUp}`
                 : voteFlashTone === "down"
-                  ? "1px solid #f87171"
-                  : "1px solid #facc15",
+                  ? `1px solid ${islandTheme.color.voteDown}`
+                  : `1px solid ${islandTheme.color.voteMaybe}`,
             background:
               voteFlashTone === "up" ? "rgba(8,47,73,0.9)" : voteFlashTone === "down" ? "rgba(69,10,10,0.9)" : "rgba(66,32,6,0.9)",
             color: voteFlashTone === "up" ? "#bae6fd" : voteFlashTone === "down" ? "#fee2e2" : "#fef9c3",
@@ -378,7 +323,7 @@ export function IslandGameBlade({
           style={{
             position: "absolute",
             inset: 0,
-            background: "linear-gradient(140deg, #0b1220, #132640)"
+            background: islandTheme.gradient.gameArtFallback
           }}
         />
       )}
@@ -397,7 +342,7 @@ export function IslandGameBlade({
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</div>
           <div style={{ fontSize: 12, opacity: 0.95 }}>{subtitle}</div>
-          {meta ? <div style={{ fontSize: 11, opacity: 0.84 }}>{meta}</div> : null}
+          {meta ? <div style={{ fontSize: 12, opacity: 0.84 }}>{meta}</div> : null}
           <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
             {tags.slice(0, 2).map((tag) => (
               <span key={tag} className="island-mono" style={islandTagStyle({ color: getTagColor(tag) })}>
@@ -406,7 +351,7 @@ export function IslandGameBlade({
             ))}
             <span
               style={{
-                fontSize: 10,
+                fontSize: 12,
                 borderRadius: 999,
                 border: `1px solid ${selected ? islandTheme.color.primaryGlow : "rgba(203,213,225,0.42)"}`,
                 padding: "0.12rem 0.42rem",
@@ -418,7 +363,7 @@ export function IslandGameBlade({
             </span>
             <span
               style={{
-                fontSize: 10,
+                fontSize: 12,
                 borderRadius: 999,
                 border: "1px solid rgba(203,213,225,0.42)",
                 padding: "0.12rem 0.42rem",
@@ -439,7 +384,7 @@ export function IslandGameBlade({
               onVote?.(1);
             }}
             disabled={isVoting}
-            style={{ ...islandButtonStyle("primary"), padding: "0.26rem 0.58rem", marginRight: 0, fontSize: 11 }}
+            style={{ ...islandButtonStyle("primary"), padding: "0.26rem 0.58rem", marginRight: 0, fontSize: 12 }}
           >
             Hype +1
           </button>
@@ -451,7 +396,7 @@ export function IslandGameBlade({
               onVote?.(0);
             }}
             disabled={isVoting}
-            style={{ ...islandButtonStyle("secondary"), padding: "0.24rem 0.58rem", marginRight: 0, fontSize: 11 }}
+            style={{ ...islandButtonStyle("secondary"), padding: "0.24rem 0.58rem", marginRight: 0, fontSize: 12 }}
           >
             Maybe 0
           </button>
@@ -463,7 +408,7 @@ export function IslandGameBlade({
               onVote?.(-1);
             }}
             disabled={isVoting}
-            style={{ ...islandButtonStyle("danger"), padding: "0.24rem 0.58rem", marginRight: 0, fontSize: 11 }}
+            style={{ ...islandButtonStyle("danger"), padding: "0.24rem 0.58rem", marginRight: 0, fontSize: 12 }}
           >
             Skip -1
           </button>
@@ -615,6 +560,125 @@ export function IslandStatusPill({ tone, children, style, ...props }: IslandStat
   );
 }
 
+// ── Skeletons ─────────────────────────────────────────────────────────────────
+// Shimmering glass placeholders shown while data loads. The pulse animation is
+// defined globally (islandSkeletonPulse) and disabled under reduced motion.
+
+type IslandSkeletonProps = HTMLAttributes<HTMLDivElement> & {
+  width?: number | string;
+  height?: number | string;
+  radius?: number;
+};
+
+export function IslandSkeleton({ width = "100%", height = 14, radius = 6, style, ...props }: IslandSkeletonProps) {
+  return (
+    <div
+      {...props}
+      aria-hidden="true"
+      style={{
+        width,
+        height,
+        borderRadius: radius,
+        background: islandTheme.color.panelMutedBg,
+        animation: "islandSkeletonPulse 1.4s ease-in-out infinite",
+        ...style
+      }}
+    />
+  );
+}
+
+/** A text-shaped skeleton row: avatar circle + two lines. */
+export function IslandSkeletonRow({ style, ...props }: HTMLAttributes<HTMLDivElement>) {
+  return (
+    <div
+      {...props}
+      aria-hidden="true"
+      style={{ display: "grid", gridTemplateColumns: "36px 1fr", gap: 10, alignItems: "center", ...style }}
+    >
+      <IslandSkeleton width={36} height={36} radius={999} />
+      <div style={{ display: "grid", gap: 6 }}>
+        <IslandSkeleton width="55%" height={12} />
+        <IslandSkeleton width="80%" height={10} />
+      </div>
+    </div>
+  );
+}
+
+/** A card-shaped skeleton: title line + body block. */
+export function IslandSkeletonCard({ lines = 3, style, ...props }: HTMLAttributes<HTMLDivElement> & { lines?: number }) {
+  return (
+    <section {...props} aria-hidden="true" style={{ ...islandCardStyle, display: "grid", gap: 10, ...style }}>
+      <IslandSkeleton width="40%" height={14} />
+      {Array.from({ length: lines }, (_, i) => (
+        <IslandSkeleton key={i} width={`${90 - i * 12}%`} height={11} />
+      ))}
+    </section>
+  );
+}
+
+// ── Empty state ───────────────────────────────────────────────────────────────
+// One component for every "nothing here" moment: mascot art slot + island-
+// voiced copy + optional action. Art defaults to a silhouette placeholder until
+// the real nugget mascot set lands (see /public/mascot/).
+
+export type IslandMascotPose = "wave" | "snooze" | "shrug" | "diver" | "crown";
+
+const MASCOT_SRC: Record<IslandMascotPose, string> = {
+  wave: "/mascot/nugget-wave.svg",
+  snooze: "/mascot/nugget-snooze.svg",
+  shrug: "/mascot/nugget-shrug.svg",
+  diver: "/mascot/nugget-diver.svg",
+  crown: "/mascot/nugget-crown.svg"
+};
+
+type IslandEmptyStateProps = {
+  pose?: IslandMascotPose;
+  title: string;
+  body?: ReactNode;
+  action?: ReactNode;
+  compact?: boolean;
+  style?: CSSProperties;
+};
+
+export function IslandEmptyState({ pose = "wave", title, body, action, compact = false, style }: IslandEmptyStateProps) {
+  const size = compact ? 56 : 88;
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        textAlign: "center",
+        gap: 8,
+        padding: compact ? "18px 16px" : "30px 20px",
+        ...style
+      }}
+    >
+      <img
+        src={MASCOT_SRC[pose]}
+        alt=""
+        aria-hidden="true"
+        width={size}
+        height={size}
+        style={{ display: "block", opacity: 0.92 }}
+        onError={(e) => {
+          // Mascot art not shipped yet — hide the slot rather than show a broken image.
+          e.currentTarget.style.display = "none";
+        }}
+      />
+      <div style={{ fontSize: compact ? 13 : 15, fontWeight: 700, color: islandTheme.color.textPrimary }}>
+        {title}
+      </div>
+      {body ? (
+        <div style={{ fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5, maxWidth: "46ch" }}>
+          {body}
+        </div>
+      ) : null}
+      {action ? <div style={{ marginTop: 6 }}>{action}</div> : null}
+    </div>
+  );
+}
+
 // ── IslandTag ─────────────────────────────────────────────────────────────────
 
 type IslandTagTone = "default" | "primary" | "success" | "warning" | "danger" | "info";
@@ -674,14 +738,14 @@ export function getTagColor(tag: string): string {
 export function islandTagStyle(opts: { color: string; active?: boolean }): CSSProperties {
   const { color, active = false } = opts;
   return {
-    fontSize: 9,
+    fontSize: 12,
     fontWeight: 700,
     textTransform: "uppercase",
     letterSpacing: "0.06em",
     background: active ? `${color}55` : `${color}22`,
     border: `1px solid ${active ? color : `${color}44`}`,
     color,
-    borderRadius: 6,
+    borderRadius: islandTheme.radius.chip,
     padding: "1px 7px",
     whiteSpace: "nowrap",
     lineHeight: 1.5,
@@ -717,4 +781,53 @@ export function IslandTag({ children, tone = "default", color, active, onClick, 
     );
   }
   return <span className="island-mono" style={base}>{children}</span>;
+}
+
+/**
+ * Stable per-member identity color, hashed from a seed (discord id /
+ * display name) into the theme's categorical avatar palette. Single source —
+ * pages must not hand-roll their own palettes or the same member shifts color
+ * between surfaces.
+ */
+export function memberColor(seed: string): string {
+  const palette = islandTheme.categorical.avatars;
+  let hash = 0;
+  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  return palette[Math.abs(hash) % palette.length];
+}
+
+/** Discord accent_color int (0xRRGGBB) → CSS hex, null-safe. */
+export function accentHex(accentColor: number | null | undefined): string | null {
+  if (accentColor == null || !Number.isFinite(accentColor)) return null;
+  return `#${(accentColor & 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
+/**
+ * Animate a number toward its new value (ease-out, ~600ms). Use for balances
+ * and counters that change live (SSE nuggies-changed) so updates read as
+ * motion instead of a snap. Skips animation under prefers-reduced-motion.
+ */
+export function useCountUp(target: number, durationMs = 600): number {
+  const [display, setDisplay] = useState(target);
+  const prevRef = useRef(target);
+  useEffect(() => {
+    const from = prevRef.current;
+    prevRef.current = target;
+    if (from === target) return;
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      setDisplay(target);
+      return;
+    }
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(Math.round(from + (target - from) * eased));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target, durationMs]);
+  return display;
 }

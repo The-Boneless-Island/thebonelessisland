@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Placeholder nugget mascot: crown (celebration). Replace with commissioned art (same filename). -->
+  <defs>
+    <radialGradient id="nug" cx="42%" cy="36%" r="75%">
+      <stop offset="0%" stop-color="#f8c87a"/>
+      <stop offset="62%" stop-color="#e8a94f"/>
+      <stop offset="100%" stop-color="#c97f2e"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="60" cy="108" rx="30" ry="6" fill="#000" opacity="0.18"/>
+  <!-- sparkles -->
+  <g fill="#fde68a">
+    <path d="M18 34 l2.2 5 5 2.2 -5 2.2 -2.2 5 -2.2 -5 -5 -2.2 5 -2.2 Z"/>
+    <path d="M100 56 l1.8 4 4 1.8 -4 1.8 -1.8 4 -1.8 -4 -4 -1.8 4 -1.8 Z"/>
+  </g>
+  <!-- body -->
+  <path d="M60 22 C78 20 94 32 96 50 C104 56 102 70 94 76 C94 92 80 104 60 104 C40 104 26 92 26 76 C18 70 16 56 24 50 C26 32 42 20 60 22 Z" fill="url(#nug)"/>
+  <circle cx="40" cy="40" r="2.4" fill="#b06f24" opacity="0.5"/>
+  <circle cx="78" cy="84" r="2.8" fill="#b06f24" opacity="0.5"/>
+  <!-- crown -->
+  <path d="M42 22 L48 8 L58 18 L68 6 L78 18 L86 10 L88 26 Q74 20 60 20 Q50 20 42 22 Z" fill="#fbbf24" stroke="#d97706" stroke-width="2" stroke-linejoin="round"/>
+  <circle cx="48" cy="10" r="2.4" fill="#ef4444"/>
+  <circle cx="68" cy="8" r="2.4" fill="#22d3ee"/>
+  <circle cx="86" cy="12" r="2.4" fill="#a855f7"/>
+  <!-- face: delighted -->
+  <path d="M44 58 Q48 53 52 58" fill="none" stroke="#2b1c0e" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M66 58 Q70 53 74 58" fill="none" stroke="#2b1c0e" stroke-width="3.4" stroke-linecap="round"/>
+  <path d="M48 72 Q60 84 72 72" fill="none" stroke="#2b1c0e" stroke-width="3.6" stroke-linecap="round"/>
+  <ellipse cx="38" cy="66" rx="5" ry="3" fill="#ef8354" opacity="0.45"/>
+  <ellipse cx="82" cy="66" rx="5" ry="3" fill="#ef8354" opacity="0.45"/>
+</svg>

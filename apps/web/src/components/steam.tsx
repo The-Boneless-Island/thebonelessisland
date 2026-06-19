@@ -78,7 +78,7 @@ export function SteamSignInButton({
         {!sm ? (
           <span
             style={{
-              fontSize: 9,
+              fontSize: 12,
               letterSpacing: "0.18em",
               textTransform: "uppercase",
               color: STEAM_BLUE,

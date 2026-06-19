@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
+import { pathForPage } from "../lib/routes.js";
 import type { PageId } from "../types.js";
 
 type NavChild = {
@@ -29,8 +31,10 @@ const NAV_GROUPS: NavGroup[] = [
     defaultId: "community",
     children: [
       { id: "community", label: "Members", description: "Who's on the island right now" },
+      { id: "tide-check", label: "Sunday Tide Check", description: "This week's crew digest — what we played and queued" },
       { id: "community-forums", label: "Forums", description: "Island discussions and crew talk" },
-      { id: "community-leaderboard", label: "Leaderboard", description: "Top Nuggies holders", badge: "soon" }
+      { id: "community-leaderboard", label: "Leaderboard", description: "Top Nuggies holders" },
+      { id: "crew-achievements", label: "Crew Achievements", description: "Achievement progress across the crew" }
     ]
   },
   {
@@ -39,14 +43,14 @@ const NAV_GROUPS: NavGroup[] = [
     children: [
       { id: "nuggies", label: "Balance & Shop", description: "Your balance and the item shop" },
       { id: "nuggies-casino", label: "The Arcade", description: "Coinflip, blackjack, hi-lo" },
-      { id: "nuggies-history", label: "History", description: "Your transaction log", badge: "soon" },
+      { id: "nuggies-history", label: "History", description: "Your transaction log" },
       { id: "nuggies-milestones", label: "Milestones", description: "Rank ladder + achievements" }
     ]
   }
 ];
 
 const GAMES_GROUP_IDS: PageId[] = ["games", "library", "games-news"];
-const COMMUNITY_GROUP_IDS: PageId[] = ["community", "community-forums", "community-leaderboard"];
+const COMMUNITY_GROUP_IDS: PageId[] = ["community", "tide-check", "community-forums", "community-leaderboard", "crew-achievements"];
 const NUGGIES_GROUP_IDS: PageId[] = ["nuggies", "nuggies-casino", "nuggies-history", "nuggies-milestones"];
 
 function groupIsActive(group: NavGroup, page: PageId): boolean {
@@ -122,15 +126,14 @@ export function MegaMenu({ page, onNavigate, isAdmin }: MegaMenuProps) {
         />
       ))}
       {isAdmin && (
-        <button
-          type="button"
-          onClick={() => onNavigate("admin")}
-          style={navButtonStyle(page === "admin")}
+        <Link
+          to="/admin"
+          style={{ ...navButtonStyle(page === "admin"), textDecoration: "none" }}
           onMouseEnter={(e) => { if (page !== "admin") e.currentTarget.style.background = islandTheme.color.secondary; }}
           onMouseLeave={(e) => { if (page !== "admin") e.currentTarget.style.background = "transparent"; }}
         >
           Admin
-        </button>
+        </Link>
       )}
     </nav>
   );
@@ -172,16 +175,15 @@ function DesktopGroupItem({
 
   return (
     <div style={{ position: "relative" }} onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
-      <button
-        type="button"
-        onClick={() => onNavigate(group.defaultId)}
-        style={navButtonStyle(active)}
+      <Link
+        to={pathForPage(group.defaultId)}
+        style={{ ...navButtonStyle(active), textDecoration: "none" }}
         onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = islandTheme.color.secondary; }}
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = active ? "rgba(37, 99, 235, 0.22)" : "transparent"; }}
       >
         {group.label}
         <ChevronSmall open={open} />
-      </button>
+      </Link>
 
       {open && (
         <div
@@ -204,14 +206,16 @@ function DesktopGroupItem({
           {group.children.map((child) => {
             const childActive = currentPage === child.id;
             return (
-              <button
+              <Link
                 key={child.id}
-                type="button"
-                onClick={() => { onNavigate(child.id); setOpen(false); }}
+                to={pathForPage(child.id)}
+                onClick={(e) => { if (child.badge) { e.preventDefault(); return; } setOpen(false); }}
                 style={{
                   display: "block",
                   width: "100%",
                   textAlign: "left",
+                  textDecoration: "none",
+                  color: "inherit",
                   background: childActive ? "rgba(37, 99, 235, 0.18)" : "transparent",
                   border: "none",
                   borderRadius: 10,
@@ -237,7 +241,7 @@ function DesktopGroupItem({
                     <span
                       className="island-mono"
                       style={{
-                        fontSize: 9,
+                        fontSize: 12,
                         fontWeight: 700,
                         textTransform: "uppercase",
                         letterSpacing: "0.06em",
@@ -253,10 +257,10 @@ function DesktopGroupItem({
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.4 }}>
+                <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.4 }}>
                   {child.description}
                 </div>
-              </button>
+              </Link>
             );
           })}
         </div>
@@ -434,7 +438,7 @@ function MobileOverlay({
                             >
                               {child.label}
                             </div>
-                            <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 1 }}>
+                            <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 1 }}>
                               {child.description}
                             </div>
                           </div>
@@ -442,7 +446,7 @@ function MobileOverlay({
                             <span
                               className="island-mono"
                               style={{
-                                fontSize: 9,
+                                fontSize: 12,
                                 fontWeight: 700,
                                 textTransform: "uppercase",
                                 letterSpacing: "0.06em",

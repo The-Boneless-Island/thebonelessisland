@@ -16,6 +16,7 @@
 
 import type { PoolClient } from "pg";
 import { db } from "../db/client.js";
+import { broadcast } from "./eventBus.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
 import {
   GameCooldownError,
@@ -436,6 +437,8 @@ export async function startGame(opts: {
     const result = await handler.start(ctx, validatedInput, opts.bet, sessionId);
 
     await client.query("COMMIT");
+    // Bet debit committed — nudge the player's web tabs to refresh their balance.
+    broadcast("nuggies-changed", { discordUserId: opts.discordUserId });
     return result;
   } catch (err) {
     await client.query("ROLLBACK");
@@ -473,6 +476,8 @@ export async function stepGame(opts: {
         await handler.autoResolve(ctx, session);
       }
       await client.query("COMMIT");
+      // Auto-resolve of an expired session may have settled the balance.
+      broadcast("nuggies-changed", { discordUserId: opts.discordUserId });
       throw new GameExpiredError();
     }
 
@@ -483,6 +488,8 @@ export async function stepGame(opts: {
     const result = await handler.step(ctx, session, opts.action);
 
     await client.query("COMMIT");
+    // Step committed (a stand/bust settles the payout) — refresh the player's balance.
+    broadcast("nuggies-changed", { discordUserId: opts.discordUserId });
     return result;
   } catch (err) {
     await client.query("ROLLBACK");

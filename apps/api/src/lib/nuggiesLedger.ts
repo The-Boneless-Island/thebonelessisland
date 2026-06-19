@@ -1,4 +1,5 @@
 import { db } from "../db/client.js";
+import { broadcast } from "./eventBus.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
 import {
   checkBankRun,
@@ -71,6 +72,25 @@ const CAP_EXEMPT_TYPES = new Set<string>([
 
 function getResetDateString(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: RESET_TZ });
+}
+
+/**
+ * Whether the user already claimed their daily in the current reset window.
+ * Queries the latest 'daily' transaction directly instead of scanning a
+ * recent-transactions page — a busy casino day pushes the claim past any
+ * LIMIT and the claim button would wrongly reappear.
+ */
+export async function hasClaimedDailyToday(userId: bigint): Promise<boolean> {
+  const lastClaim = await db.query<{ created_at: string }>(
+    `SELECT created_at FROM nuggies_transactions
+     WHERE user_id = $1 AND type = 'daily'
+     ORDER BY created_at DESC LIMIT 1`,
+    [userId]
+  );
+  if (!lastClaim.rows[0]) return false;
+  const lastKey = new Date(lastClaim.rows[0].created_at)
+    .toLocaleDateString("en-CA", { timeZone: RESET_TZ });
+  return lastKey === getResetDateString();
 }
 
 function getSetting(key: string, fallback: number): number {
@@ -170,6 +190,11 @@ export async function applyTransaction(opts: {
 
     await client.query("COMMIT");
 
+    // Nudge the affected member's open tabs to refetch their Nuggies balance
+    // immediately (admin grant, daily claim, trade, loan, etc.) instead of
+    // waiting for a manual refresh. Fire-and-forget over the SSE bus.
+    broadcast("nuggies-changed", { discordUserId: opts.discordUserId, newBalance });
+
     // Best-effort achievement + milestone checks after the transaction
     // commits. Run outside the tx so failures here can't roll back the
     // ledger write. Both check functions are idempotent.
@@ -193,7 +218,6 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
   await ensureSettingsLoaded();
 
   const userId = await resolveUserId(discordUserId);
-  const todayKey = getResetDateString();
 
   // Check opted out
   const userRow = await db.query<{ nuggies_opted_out: boolean }>(
@@ -203,17 +227,7 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
   if (userRow.rows[0]?.nuggies_opted_out) throw new OptedOutError();
 
   // Check if already claimed in current reset window
-  const lastClaim = await db.query<{ created_at: string }>(
-    `SELECT created_at FROM nuggies_transactions
-     WHERE user_id = $1 AND type = 'daily'
-     ORDER BY created_at DESC LIMIT 1`,
-    [userId]
-  );
-  if (lastClaim.rows.length > 0) {
-    const lastKey = new Date(lastClaim.rows[0].created_at)
-      .toLocaleDateString("en-CA", { timeZone: RESET_TZ });
-    if (lastKey === todayKey) throw new AlreadyClaimedError();
-  }
+  if (await hasClaimedDailyToday(userId)) throw new AlreadyClaimedError();
 
   const amount = getSetting("nuggies_daily_amount", 75);
   const { newBalance } = await applyTransaction({

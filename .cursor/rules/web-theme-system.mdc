@@ -46,7 +46,7 @@ Prefer these before writing inline one-off styled elements:
 | `IslandTileButton` | Large image CTA tiles (game-night, tools) |
 | `IslandMemberChip` | Pill toggle for member selection |
 | `IslandGameCard` | Compact game row with image fallback |
-| `IslandGameBlade` | Rich game row — **not used in voting context; voting is removed** |
+| `IslandGameBlade` | Rich game row — **dead/unused; voting UI lingers in the def but nothing imports it, slated for removal** |
 | `IslandComingSoonTile` | Dashed placeholder tile |
 | `IslandActiveMemberRow` | Avatar + name + presence row |
 | `IslandStatusPill` | Success / danger pill badge |

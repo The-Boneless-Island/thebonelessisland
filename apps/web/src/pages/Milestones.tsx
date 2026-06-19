@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../api/client.js";
-import { IslandCard } from "../islandUi.js";
+import { useNuggiesSignal } from "../system/nuggiesSignal.js";
+import { IslandCard, IslandEmptyState, IslandSkeleton, IslandSkeletonCard } from "../islandUi.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import {
   MILESTONES,
@@ -72,6 +73,12 @@ export function MilestonesPage() {
     void load();
   }, [load]);
 
+  // Live balance: refetch when the SSE bus reports this member's Nuggies changed.
+  const nuggiesSignal = useNuggiesSignal();
+  useEffect(() => {
+    if (nuggiesSignal > 0) void load();
+  }, [nuggiesSignal, load]);
+
   const handleEquipToggle = useCallback(async (itemId: number) => {
     setEquipPending(itemId);
     try {
@@ -85,9 +92,13 @@ export function MilestonesPage() {
   }, [load]);
 
   if (loading) {
+    // Render the page silhouette immediately instead of blocking on a spinner.
     return (
-      <div style={{ padding: 32, textAlign: "center", color: islandTheme.color.textMuted }}>
-        Loading milestones…
+      <div style={{ display: "grid", gap: 12 }} aria-busy="true" aria-label="Loading milestones">
+        <IslandSkeletonCard lines={2} />
+        <IslandSkeleton height={10} radius={999} />
+        <IslandSkeletonCard lines={5} />
+        <IslandSkeletonCard lines={5} />
       </div>
     );
   }
@@ -95,7 +106,11 @@ export function MilestonesPage() {
   if (!me) {
     return (
       <IslandCard>
-        <p style={{ margin: 0 }}>Could not load milestones. Are you logged in?</p>
+        <IslandEmptyState
+          pose="shrug"
+          title="Couldn't load milestones"
+          body="The ladder didn't come back from the server. Refresh the page, or check that you're still logged in."
+        />
       </IslandCard>
     );
   }
@@ -115,7 +130,7 @@ export function MilestonesPage() {
         <span
           className="island-mono"
           style={{
-            fontSize: 11,
+            fontSize: 12,
             textTransform: "uppercase",
             letterSpacing: "0.1em",
             color: islandTheme.color.textMuted,
@@ -160,7 +175,7 @@ export function MilestonesPage() {
       <IslandCard as="section" style={{ display: "grid", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Rank Ladder</div>
-          <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, letterSpacing: "0.06em" }}>
+          <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, letterSpacing: "0.06em" }}>
             {reachedCount} / {RANK_TIERS.length} reached
           </div>
         </div>
@@ -191,7 +206,7 @@ export function MilestonesPage() {
       <IslandCard as="section" style={{ display: "grid", gap: 14 }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Achievements</div>
-          <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted, letterSpacing: "0.06em" }}>
+          <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, letterSpacing: "0.06em" }}>
             {earnedCount} / {totalCount} unlocked
           </div>
         </div>
@@ -292,7 +307,7 @@ function CurrentRankHero({
           <div
             className="island-mono"
             style={{
-              fontSize: 11,
+              fontSize: 12,
               letterSpacing: "0.16em",
               textTransform: "uppercase",
               opacity: 0.8,
@@ -345,7 +360,7 @@ function CurrentRankHero({
       </div>
       {nextTier && (
         <div style={{ padding: "12px 18px 16px", display: "grid", gap: 6 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono, letterSpacing: "0.05em" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono, letterSpacing: "0.05em" }}>
             <span>₦{fmt(lower)}</span>
             <span style={{ color: heroText }}>{nextTier.label} · ₦{fmt(upper)}</span>
           </div>
@@ -444,7 +459,7 @@ function RankTierCard({
           >
             {tier.label}
           </div>
-          <div style={{ fontSize: 11, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
             ₦{fmt(tier.threshold)} · <span style={{ color: islandTheme.color.successAccent }}>+₦{fmt(tier.bonus)} bonus</span>
           </div>
         </div>
@@ -464,7 +479,7 @@ function RankTierCard({
         <span
           className="island-mono"
           style={{
-            fontSize: 9,
+            fontSize: 12,
             letterSpacing: "0.1em",
             color: statusColor,
             fontWeight: 700,
@@ -542,7 +557,7 @@ function AchievementCard({
           >
             {name}
           </div>
-          <div style={{ fontSize: 11, color: islandTheme.color.textMuted, textTransform: "capitalize" }}>
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "capitalize" }}>
             {itemType}
           </div>
         </div>
@@ -556,7 +571,7 @@ function AchievementCard({
             <span
               className="island-mono"
               style={{
-                fontSize: 9,
+                fontSize: 12,
                 padding: "2px 8px",
                 borderRadius: 999,
                 background: "rgba(163, 230, 53, 0.18)",
@@ -575,7 +590,7 @@ function AchievementCard({
                 disabled={equipPending}
                 className="island-mono"
                 style={{
-                  fontSize: 9,
+                  fontSize: 12,
                   padding: "2px 8px",
                   borderRadius: 999,
                   background: equipped ? "rgba(56, 189, 248, 0.18)" : "transparent",
@@ -598,7 +613,7 @@ function AchievementCard({
           <span
             className="island-mono"
             style={{
-              fontSize: 9,
+              fontSize: 12,
               padding: "2px 8px",
               borderRadius: 999,
               background: islandTheme.color.panelBg,

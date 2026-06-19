@@ -3,6 +3,7 @@ import { IslandCard, IslandTag, islandTagStyle } from "../../islandUi.js";
 import { NuggieCoin } from "../../components/NuggieCoin.js";
 import { islandTheme } from "../../theme.js";
 import { apiFetch } from "../../api/client.js";
+import { useNuggiesSignal } from "../../system/nuggiesSignal.js";
 import { getActiveGameSession, type GameStateResponse } from "../../api/games.js";
 import { CoinflipGame } from "./CoinflipGame.js";
 import { GuessNumberGame } from "./GuessNumberGame.js";
@@ -85,6 +86,23 @@ export function CasinoPage() {
     };
   }, []);
 
+  // Live balance: refetch when the SSE bus reports this member's Nuggies changed
+  // (e.g. a blackjack hand played on the Discord bot while the arcade is open).
+  const nuggiesSignal = useNuggiesSignal();
+  useEffect(() => {
+    if (nuggiesSignal === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const meRes = await apiFetch("/nuggies/me");
+      if (cancelled || !meRes.ok) return;
+      const me = (await meRes.json()) as { balance?: number };
+      setBalance(me.balance ?? 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [nuggiesSignal]);
+
   // Pull max-bet config from server-settings via the public catalog (best
   // effort — fall back to default).
   useEffect(() => {
@@ -159,7 +177,7 @@ export function CasinoPage() {
         <span
           className="island-mono"
           style={{
-            fontSize: 11,
+            fontSize: 12,
             textTransform: "uppercase",
             letterSpacing: "0.1em",
             color: islandTheme.color.textMuted,
@@ -230,10 +248,10 @@ function BalanceStrip({ balance, maxBet, cooldownSecs }: { balance: number | nul
       }}
     >
       <div>
-        <div className="island-mono" style={{ fontSize: 10, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+        <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
           Balance
         </div>
-        <div className="island-display" style={{ fontSize: 22, fontWeight: 800, color: "#fbbf77" }}>
+        <div className="island-display" style={{ fontSize: 22, fontWeight: 800, color: islandTheme.color.nuggieGold }}>
           ₦{balance == null ? "—" : balance.toLocaleString()}
         </div>
       </div>
@@ -263,7 +281,7 @@ function ResumeBanner({ active, onResume }: { active: GameStateResponse; onResum
         <div style={{ fontSize: 13, fontWeight: 700, color: islandTheme.color.textPrimary }}>
           You have a {active.gameType} game in progress
         </div>
-        <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
           Bet ₦{active.bet} · auto-resolves at {new Date(active.expiresAt).toLocaleTimeString()}
         </div>
       </div>
@@ -274,7 +292,7 @@ function ResumeBanner({ active, onResume }: { active: GameStateResponse; onResum
         style={{
           ...islandTagStyle({ color: "#38bdf8", active: true }),
           padding: "6px 14px",
-          fontSize: 11,
+          fontSize: 12,
           cursor: "pointer"
         }}
       >
@@ -295,7 +313,9 @@ function GameTile({ card, onClick, disabled }: { card: typeof GAME_CARDS[number]
         padding: 16,
         borderRadius: 14,
         border: `1px solid ${islandTheme.color.cardBorder}`,
-        background: `linear-gradient(135deg, ${card.accent}22 0%, ${islandTheme.color.panelBg} 80%)`,
+        // Felt-table base under each game's accent — reads "casino", not
+        // another glass panel. Pairs with the felt-green scene tint.
+        background: `radial-gradient(ellipse at 30% 20%, ${card.accent}26 0%, transparent 55%), linear-gradient(150deg, rgba(20,83,45,0.34) 0%, rgba(13,53,30,0.22) 55%, ${islandTheme.color.panelBg} 100%)`,
         color: islandTheme.color.textPrimary,
         cursor: disabled ? "not-allowed" : "pointer",
         font: "inherit",
@@ -334,7 +354,7 @@ function GameTile({ card, onClick, disabled }: { card: typeof GAME_CARDS[number]
       <div style={{ fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.45 }}>
         {card.blurb}
       </div>
-      <div className="island-mono" style={{ fontSize: 10, color: card.accent, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+      <div className="island-mono" style={{ fontSize: 12, color: card.accent, textTransform: "uppercase", letterSpacing: "0.08em" }}>
         {card.payoutBlurb} →
       </div>
     </button>

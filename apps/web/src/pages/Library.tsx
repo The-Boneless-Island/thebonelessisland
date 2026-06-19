@@ -1,103 +1,100 @@
-import { useMemo, useState, type ReactNode } from "react";
-import { IslandCard, IslandTag, islandInputStyle } from "../islandUi.js";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
+import { IslandButton, IslandCard, IslandEmptyState, IslandTag, islandInputStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
-import type { CrewOwnedGame, CrewOwner, PageId } from "../types.js";
+import type { CrewOwnedGame, GuildMember, PageId } from "../types.js";
+import GameDetailDrawer from "../components/GameDetailDrawer.js";
+import {
+  PosterCard,
+  PosterWall,
+  categoryFor,
+  hasGenericMultiplayerTag,
+  type LibCategory
+} from "../components/PosterCard.js";
+import { formatCents } from "../gameModes.js";
 
 type LibraryPageProps = {
   crewGames: CrewOwnedGame[];
+  guildMembers: GuildMember[];
   currentDiscordUserId: string | null;
   onNavigate: (page: PageId) => void;
+  onPlan: (appId: number) => void;
 };
 
-type LibCategory = "co-op" | "horror" | "puzzle" | "party" | "solo";
 type LibFilter = "all" | "mine" | LibCategory;
-type SortMode = "owned" | "title" | "session";
+type SortMode = "owned" | "title" | "tonight";
 
-const CATEGORY_TAG_HINTS: Array<{ category: LibCategory; tokens: string[] }> = [
-  { category: "co-op", tokens: ["co-op", "coop", "co op", "online co-op", "multiplayer"] },
-  { category: "horror", tokens: ["horror"] },
-  { category: "puzzle", tokens: ["puzzle"] },
-  { category: "party", tokens: ["party"] }
-];
+const LIB_FILTERS: LibFilter[] = ["all", "mine", "co-op", "horror", "puzzle", "party", "solo"];
 
-function categoryFor(game: CrewOwnedGame): LibCategory {
-  const haystack = [...game.tags, ...game.developers].map((value) => value.toLowerCase());
-  for (const hint of CATEGORY_TAG_HINTS) {
-    if (haystack.some((tag) => hint.tokens.some((token) => tag.includes(token)))) {
-      return hint.category;
-    }
-  }
-  return "solo";
-}
+function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavigate, onPlan }: LibraryPageProps) {
+  // Filter/sort/search live in the URL query string so refreshes and shared
+  // links land on the same view (/library?f=co-op&s=title&q=…).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const [filter, setFilter] = useState<LibFilter>(() => {
+    const f = searchParams.get("f") as LibFilter | null;
+    return f && LIB_FILTERS.includes(f) ? f : "all";
+  });
+  const [sort, setSort] = useState<SortMode>(() => {
+    const s = searchParams.get("s");
+    return s === "title" || s === "tonight" ? s : "owned";
+  });
+  // The game-detail drawer is URL-driven (/library?game=<appId>) so activity-feed
+  // rows and shared links can deep-link straight into a game.
+  const openAppId = useMemo(() => {
+    const g = Number(searchParams.get("game"));
+    return Number.isInteger(g) && g > 0 ? g : null;
+  }, [searchParams]);
+  const setOpenAppId = useCallback(
+    (id: number | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (id) next.set("game", String(id));
+          else next.delete("game");
+          return next;
+        },
+        { replace: true, preventScrollReset: true }
+      );
+    },
+    [setSearchParams]
+  );
 
-function pickArtFor(category: LibCategory): string {
-  switch (category) {
-    case "co-op":
-      return "🎯";
-    case "horror":
-      return "👻";
-    case "puzzle":
-      return "🧩";
-    case "party":
-      return "🎉";
-    default:
-      return "🎮";
-  }
-}
+  useEffect(() => {
+    // Functional update preserves the `game` param so filtering doesn't close
+    // an open drawer.
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev);
+        if (filter !== "all") params.set("f", filter);
+        else params.delete("f");
+        if (sort !== "owned") params.set("s", sort);
+        else params.delete("s");
+        if (search.trim()) params.set("q", search.trim());
+        else params.delete("q");
+        return params;
+      },
+      // replace + preventScrollReset: filtering shouldn't spam history or jump scroll.
+      { replace: true, preventScrollReset: true }
+    );
+  }, [filter, sort, search, setSearchParams]);
 
-function pickCoverFor(category: LibCategory): string {
-  switch (category) {
-    case "co-op":
-      return "linear-gradient(135deg,#1e3a8a,#0c4a6e)";
-    case "horror":
-      return "linear-gradient(135deg,#0f172a,#020617)";
-    case "puzzle":
-      return "linear-gradient(135deg,#365314,#1a2e05)";
-    case "party":
-      return "linear-gradient(135deg,#7c2d12,#1c1917)";
-    default:
-      return "linear-gradient(135deg,#312e81,#1e1b4b)";
-  }
-}
-
-function ownerColor(seed: string): string {
-  const palette = ["#fbbf77", "#22d3ee", "#a855f7", "#4ade80", "#ef8354", "#86efac", "#facc15", "#f472b6"];
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
-  return palette[Math.abs(hash) % palette.length];
-}
-
-function ownerInitials(name: string): string {
-  return (name || "??").trim().slice(0, 2).toUpperCase();
-}
-
-function playerCountLabel(maxPlayers: number): string {
-  if (maxPlayers <= 1) return "1p";
-  if (maxPlayers >= 8) return "8p+";
-  return `1-${maxPlayers}p`;
-}
-
-function tagLabel(game: CrewOwnedGame, category: LibCategory): string {
-  const firstTag = game.tags.find((tag) => tag.trim().length > 0);
-  if (firstTag) return firstTag.toLowerCase();
-  switch (category) {
-    case "co-op":
-      return "co-op";
-    case "horror":
-      return "horror co-op";
-    case "puzzle":
-      return "puzzle";
-    case "party":
-      return "party";
-    default:
-      return "solo";
-  }
-}
-
-export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: LibraryPageProps) {
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<LibFilter>("all");
-  const [sort, setSort] = useState<SortMode>("owned");
+  // Crew members reachable right now — online-ish presence or in voice.
+  const onlineIds = useMemo(
+    () =>
+      new Set(
+        guildMembers
+          .filter(
+            (m) =>
+              m.inVoice ||
+              m.presenceStatus === "online" ||
+              m.presenceStatus === "idle" ||
+              m.presenceStatus === "dnd"
+          )
+          .map((m) => m.discordUserId)
+      ),
+    [guildMembers]
+  );
 
   const enriched = useMemo(
     () =>
@@ -106,9 +103,16 @@ export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: Lib
         const mine = currentDiscordUserId
           ? game.owners.some((owner) => owner.discordUserId === currentDiscordUserId)
           : false;
-        return { game, category, mine };
+        const onlineOwners = game.owners.filter((o) => onlineIds.has(o.discordUserId)).length;
+        const coopCapable =
+          game.isOnlineCoop || game.isLanCoop || game.isSharedSplitCoop || game.isMmo ||
+          hasGenericMultiplayerTag(game);
+        // "Tonight" rank: a session needs ≥2 reachable owners AND a way to
+        // play together; score by how many of the crew could actually join.
+        const tonightScore = coopCapable && onlineOwners >= 2 ? onlineOwners : 0;
+        return { game, category, mine, onlineOwners, tonightScore };
       }),
-    [crewGames, currentDiscordUserId]
+    [crewGames, currentDiscordUserId, onlineIds]
   );
 
   const mineCount = useMemo(() => enriched.filter((entry) => entry.mine).length, [enriched]);
@@ -139,10 +143,12 @@ export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: Lib
       out.sort((a, b) => b.game.ownerCount - a.game.ownerCount || a.game.name.localeCompare(b.game.name));
     } else if (sort === "title") {
       out.sort((a, b) => a.game.name.localeCompare(b.game.name));
-    } else if (sort === "session") {
+    } else if (sort === "tonight") {
       out.sort(
         (a, b) =>
-          (a.game.medianSessionMinutes || 0) - (b.game.medianSessionMinutes || 0) ||
+          b.tonightScore - a.tonightScore ||
+          b.onlineOwners - a.onlineOwners ||
+          b.game.ownerCount - a.game.ownerCount ||
           a.game.name.localeCompare(b.game.name)
       );
     }
@@ -158,7 +164,7 @@ export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: Lib
         <span
           className="island-mono"
           style={{
-            fontSize: 11,
+            fontSize: 12,
             textTransform: "uppercase",
             letterSpacing: "0.1em",
             color: islandTheme.color.textMuted
@@ -222,228 +228,132 @@ export function LibraryPage({ crewGames, currentDiscordUserId, onNavigate }: Lib
         <select
           value={sort}
           onChange={(e) => setSort(e.target.value as SortMode)}
+          aria-label="Sort library"
           style={{ ...islandInputStyle, fontSize: 12 }}
         >
           <option value="owned">Most owned</option>
           <option value="title">Alphabetical</option>
-          <option value="session">Shortest session</option>
+          <option value="tonight">Playable tonight</option>
         </select>
+        <span
+          className="island-mono"
+          style={{ fontSize: 12, color: islandTheme.color.textMuted, whiteSpace: "nowrap" }}
+        >
+          {visible.length} of {totalGames} game{totalGames === 1 ? "" : "s"}
+          {filter === "mine" ? ` · ${mineCount} yours` : ""}
+        </span>
       </IslandCard>
 
-      <IslandCard style={{ padding: 0, overflow: "hidden" }}>
-        <HeaderRow />
-        {empty ? (
-          <div style={{ padding: 22, fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-            Crew library is empty so far. Sync a Steam account from Profile, then this list lights up.
-          </div>
-        ) : visible.length ? (
-          visible.map((entry) => (
-            <LibRow
+      {empty ? (
+        <IslandCard>
+          <IslandEmptyState
+            pose="snooze"
+            title="The shelf is bare"
+            body="Crew library is empty so far. Sync a Steam account from Profile, then this shelf lights up."
+            action={
+              <IslandButton variant="primary" onClick={() => onNavigate("profile")}>
+                Link Steam →
+              </IslandButton>
+            }
+          />
+        </IslandCard>
+      ) : visible.length ? (
+        <PosterWall>
+          {visible.map((entry) => (
+            <LibraryPoster
               key={entry.game.appId}
               game={entry.game}
               category={entry.category}
               mine={entry.mine}
-              onPlan={() => onNavigate("games")}
+              onlineOwners={entry.onlineOwners}
+              onPlan={onPlan}
+              onDetails={setOpenAppId}
             />
-          ))
-        ) : (
-          <div style={{ padding: 22, fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-            No games match your filter.
-          </div>
-        )}
-      </IslandCard>
+          ))}
+        </PosterWall>
+      ) : (
+        <IslandCard>
+          <IslandEmptyState compact pose="shrug" title="No games match your filter" />
+        </IslandCard>
+      )}
+
+      <GameDetailDrawer appId={openAppId} onClose={() => setOpenAppId(null)} />
     </div>
   );
 }
 
-const COLUMNS = "60px 1.4fr 1fr 80px 80px auto";
+export const LibraryPage = memo(LibraryPageImpl);
 
-function HeaderRow() {
-  return (
-    <div
-      className="island-mono"
-      style={{
-        display: "grid",
-        gridTemplateColumns: COLUMNS,
-        gap: 14,
-        padding: "10px 16px",
-        fontSize: 10,
-        textTransform: "uppercase",
-        letterSpacing: "0.08em",
-        color: islandTheme.color.textMuted,
-        borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
-        background: islandTheme.color.panelMutedBg
-      }}
-    >
-      <Cell />
-      <Cell>Title</Cell>
-      <Cell>Owners</Cell>
-      <Cell>Count</Cell>
-      <Cell>Players</Cell>
-      <Cell />
-    </div>
-  );
-}
-
-function Cell({ children }: { children?: ReactNode }) {
-  return <div>{children}</div>;
-}
-
-function LibRow({
+function LibraryPoster({
   game,
   category,
   mine,
-  onPlan
+  onlineOwners,
+  onPlan,
+  onDetails
 }: {
   game: CrewOwnedGame;
   category: LibCategory;
   mine: boolean;
-  onPlan: () => void;
+  onlineOwners: number;
+  onPlan: (appId: number) => void;
+  onDetails: (appId: number) => void;
 }) {
-  const cover = game.headerImageUrl
-    ? { backgroundImage: `url("${game.headerImageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" }
-    : { background: pickCoverFor(category) };
-  const art = game.headerImageUrl ? "" : pickArtFor(category);
+  const onSale = typeof game.priceDiscountPct === "number" && game.priceDiscountPct > 0;
+  const priceLine = game.isFree
+    ? "Free"
+    : typeof game.priceFinalCents === "number"
+      ? formatCents(game.priceFinalCents)
+      : null;
 
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: COLUMNS,
-        gap: 14,
-        padding: "12px 16px",
-        alignItems: "center",
-        borderBottom: `1px solid ${islandTheme.color.cardBorder}`
-      }}
-    >
-      <div
-        style={{
-          width: 60,
-          height: 48,
-          borderRadius: 6,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 22,
-          color: islandTheme.color.textInverted,
-          ...cover
-        }}
-      >
-        {art}
-      </div>
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>
-          {game.name}
-          {mine ? <IslandTag tone="primary" style={{ marginLeft: 6 }}>★ MINE</IslandTag> : null}
-        </div>
-        <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 2 }}>
-          {tagLabel(game, category)}
-        </div>
-      </div>
-      <OwnerStack owners={game.owners} />
-      <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-        {game.ownerCount} own
-      </span>
-      <span className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
-        {playerCountLabel(game.maxPlayers)}
-      </span>
-      <div style={{ display: "flex", gap: 6 }}>
+    <PosterCard
+      appId={game.appId}
+      name={game.name}
+      category={category}
+      capabilities={game}
+      owners={game.owners}
+      onDetails={onDetails}
+      caption={
+        <>
+          {game.ownerCount} own
+          {onlineOwners >= 2 ? (
+            <span style={{ color: islandTheme.color.successAccent }}> · {onlineOwners} online</span>
+          ) : null}
+          {priceLine ? ` · ${priceLine}` : ""}
+        </>
+      }
+      badges={
+        <>
+          {mine ? <IslandTag tone="primary">★ MINE</IslandTag> : null}
+          {game.releaseComingSoon ? <IslandTag color="#a78bfa">SOON</IslandTag> : null}
+          {onSale ? <IslandTag tone="success">-{game.priceDiscountPct}%</IslandTag> : null}
+        </>
+      }
+      action={
         <button
           type="button"
-          onClick={onPlan}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPlan(game.appId);
+          }}
           className="island-btn island-mono"
           style={{
             background: islandTheme.color.primary,
             border: `1px solid ${islandTheme.color.primary}`,
             color: islandTheme.color.primaryText,
-            padding: "5px 10px",
+            padding: "5px 12px",
             borderRadius: 999,
-            fontSize: 10,
+            fontSize: islandTheme.text.sm,
             fontWeight: 800,
             cursor: "pointer",
-            font: "inherit"
+            font: "inherit",
+            flexShrink: 0
           }}
         >
           PLAN
         </button>
-        <button
-          type="button"
-          className="island-btn island-mono"
-          style={{
-            background: "transparent",
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            color: islandTheme.color.textSubtle,
-            padding: "5px 10px",
-            borderRadius: 999,
-            fontSize: 10,
-            fontWeight: 700,
-            cursor: "pointer",
-            font: "inherit"
-          }}
-        >
-          DETAILS
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function OwnerStack({ owners }: { owners: CrewOwner[] }) {
-  return (
-    <div style={{ display: "inline-flex", paddingLeft: 6 }}>
-      {owners.slice(0, 5).map((owner) => (
-        <OwnerBadge key={owner.discordUserId} owner={owner} />
-      ))}
-      {owners.length > 5 ? (
-        <span
-          className="island-mono"
-          style={{
-            marginLeft: 4,
-            fontSize: 10,
-            color: islandTheme.color.textMuted,
-            alignSelf: "center"
-          }}
-        >
-          +{owners.length - 5}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-function OwnerBadge({ owner }: { owner: CrewOwner }) {
-  const ringStyle: React.CSSProperties = {
-    width: 22,
-    height: 22,
-    borderRadius: 999,
-    border: `2px solid ${islandTheme.color.panelMutedBg}`,
-    marginLeft: -6
-  };
-  if (owner.avatarUrl) {
-    return (
-      <img
-        src={owner.avatarUrl}
-        alt={owner.displayName}
-        title={owner.displayName}
-        style={{ ...ringStyle, objectFit: "cover" }}
-      />
-    );
-  }
-  return (
-    <span
-      title={owner.displayName}
-      style={{
-        ...ringStyle,
-        background: ownerColor(owner.discordUserId || owner.displayName),
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontWeight: 800,
-        color: islandTheme.color.textDark,
-        fontSize: 9
-      }}
-    >
-      {ownerInitials(owner.displayName)}
-    </span>
+      }
+    />
   );
 }

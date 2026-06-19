@@ -10,22 +10,35 @@ alwaysApply: false
 `main.tsx` wraps `<App>` in `<IslandSceneShell>` (scene backdrop + palms + day/night vars) inside `React.StrictMode`. The scene is always visible — including behind the login screen.
 
 ## Auth & routing
-- `App.tsx` owns all state, all `apiFetch` calls, and all page routing.
+- `App.tsx` owns shared state, the cross-page `apiFetch` loaders, and the top-level page switch.
 - `isAuthenticated` starts `null` → `LoginScreen` until resolved.
-- `page: PageId` is a string union, toggled by `setPage` passed as `onNavigate`.
+- Routing is **React Router** (`react-router`): the URL is the source of truth. `App.tsx` derives `page: PageId` from the path via `pageFromPath(location.pathname)` (`lib/routes.ts`); navigation goes through `navigateToPage(next)` → `navigate(pathForPage(next))`. Each routed page is **lazy-loaded** (`lazy()` + `<Suspense>`); unknown path → `null` page → `NotFoundPage`.
+- Page<->path map + helpers (`pathForPage`, `pageFromPath`, `pathForIslander`, `pathForForumThread`, `pathForGame`, `activityHref`) live in `apps/web/src/lib/routes.ts`. Forums and Admin parse their own sub-paths internally.
 - `isAdmin = profileData?.roleNames.includes("Parent")`.
-- Pages never call `apiFetch` directly — they receive data + callbacks as props.
+- Pages **may** call `apiFetch` directly for their own data (e.g. `Achievements`, `Community`, `CommunityLeaderboard`, `CrewAchievements`, `Forums`, `IslanderProfile`). `App.tsx` still owns the shared/polled loaders and passes that data + callbacks down as props.
 
 ## Pages (apps/web/src/pages/)
-| Page | Real data | Still mock |
-|------|-----------|------------|
-| `Home` | Featured game, friends online, activity feed (capped at 5, "View full feed" → Community), drift log | Bot/ritual CTAs |
-| `Games` | Game nights + RSVP, session composer recs, Steam news, crew wishlist | Stream drawer (STREAMS_MOCK), mode chips (Tonight/Weekend/etc.) are local state only |
-| `Library` | Full crew library + owner avatars + MINE badge | DETAILS button is non-functional |
-| `Community` | Activity timeline | Crew carousel, clips, forums, clubs, events, leaderboards are hardcoded mock |
-| `Admin` | News cards CRUD, server settings, recommendation tester | Data Sync, Members, Game Nights mod, Forums, Tournaments, Library subpages are stub UIs |
-| `Profile` | MeProfile, owned games display + exclusion toggles | Excluded game IDs are client-only (not sent to API) |
-| `Achievements` | — | Entire page is placeholder |
+Page set is driven by `lib/routes.ts` (`PAGE_PATHS` / `pageFromPath`). All pages below are real/implemented (API-backed) unless a note says otherwise.
+
+| Page (id) | Path | Status |
+|-----------|------|--------|
+| `Home` (`home`) | `/` | Real — featured game, friends online, activity feed (capped, "View full feed" → Community), drift log. |
+| `Games` (`games`) | `/games` | Real — game nights + RSVP, session composer recs, Steam news, crew wishlist. Note: stream drawer (`STREAMS_MOCK`) + mode chips are local-state-only. |
+| `GamingNews` (`games-news`) | `/games/news` | Real — AI-curated "Gaming News" feed. |
+| `Library` (`library`) | `/library` | Real — full crew library + owner avatars + MINE badge; detail drawer via `?game=` query param. |
+| `Community` (`community`) | `/community` | Real — hero, crew carousel, activity timeline, forums row (`/forums/categories`), events (wired to `gameNights`), Nuggies leaderboard (`/nuggies/leaderboard`). Clubs/Clips were cut. |
+| `Forums` (`community-forums`) | `/forums`, `/forums/thread/:id` | Real — categories/threads/posts/search via `/forums/*`; parses its own sub-paths. |
+| `CommunityLeaderboard` (`community-leaderboard`) | `/community/leaderboard` | Real — `/nuggies/leaderboard`. |
+| `CrewAchievements` (`crew-achievements`) | `/achievements` | Real — `/steam/crew-achievements`. |
+| `Achievements` / Nuggies (`nuggies`) | `/nuggies` | Real — balance, daily claim, shop, inventory, loans, leaderboard (`/nuggies/me`, `/shop`, `/daily`, `/inventory`, `/loan`, `/leaderboard`). |
+| `CasinoPage` (`nuggies-casino`) | `/nuggies/casino` | Real — Nuggies casino games. |
+| `NuggiesHistory` (`nuggies-history`) | `/nuggies/history` | Real — transaction history. |
+| `Milestones` (`nuggies-milestones`) | `/nuggies/milestones` | Real — milestone/rank progress. |
+| `TideCheck` (`tide-check`) | `/tide-check` | Real — game-night tide check. |
+| `IslanderProfile` (`islander-profile`) | `/islanders/:userId` | Real — per-member public profile. |
+| `Profile` (`profile`) | `/profile` | Real — MeProfile, owned games + exclusion toggles (server-persisted via `/profile/steam-exclusions`). |
+| `Settings` (`settings`) | `/settings` | Real — Steam link/sync, visibility, feature opt-in. |
+| `Admin` (`admin`) | `/admin`, `/admin/*` | Real — sub-routed admin (dashboard, news, economy, people, ai, system, discord, games) under `pages/admin/*`; parses its own sub-paths. |
 
 ## Components (apps/web/src/components/)
 - `Topbar` — `position: fixed` glass header (62px spacer div in App.tsx); global search is local state only (not wired to API)

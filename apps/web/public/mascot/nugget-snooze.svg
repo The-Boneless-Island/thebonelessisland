@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Placeholder nugget mascot: snooze. Replace with commissioned art (same filename). -->
+  <defs>
+    <radialGradient id="nug" cx="42%" cy="36%" r="75%">
+      <stop offset="0%" stop-color="#f8c87a"/>
+      <stop offset="62%" stop-color="#e8a94f"/>
+      <stop offset="100%" stop-color="#c97f2e"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="60" cy="106" rx="34" ry="6" fill="#000" opacity="0.18"/>
+  <!-- body: resting, slightly squashed -->
+  <path d="M60 28 C80 26 96 38 98 54 C104 60 102 72 94 76 C92 92 78 102 60 102 C42 102 28 92 26 76 C18 72 16 60 22 54 C24 38 40 26 60 28 Z" fill="url(#nug)"/>
+  <circle cx="40" cy="44" r="2.4" fill="#b06f24" opacity="0.5"/>
+  <circle cx="78" cy="84" r="2.8" fill="#b06f24" opacity="0.5"/>
+  <circle cx="34" cy="78" r="2" fill="#b06f24" opacity="0.5"/>
+  <!-- closed eyes -->
+  <path d="M42 60 Q48 65 54 60" fill="none" stroke="#2b1c0e" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M66 60 Q72 65 78 60" fill="none" stroke="#2b1c0e" stroke-width="3.2" stroke-linecap="round"/>
+  <!-- sleepy mouth -->
+  <ellipse cx="60" cy="76" rx="4" ry="5" fill="#2b1c0e" opacity="0.85"/>
+  <!-- Zzz -->
+  <g fill="none" stroke="#9bb7d4" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M88 30 h10 l-10 10 h10"/>
+    <path d="M102 12 h7 l-7 7 h7" stroke-width="2.4"/>
+  </g>
+</svg>

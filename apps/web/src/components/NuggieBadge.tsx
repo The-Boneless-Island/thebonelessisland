@@ -19,7 +19,7 @@ export function NuggieBadge({ item, size = "md" }: Props) {
       style={{
         ...islandTagStyle({ color: itemData.color }),
         gap: "0.25rem",
-        ...(size === "md" ? { fontSize: 10, padding: "2px 8px" } : {})
+        ...(size === "md" ? { fontSize: 12, padding: "2px 8px" } : {})
       }}
     >
       <span>{itemData.emoji}</span>

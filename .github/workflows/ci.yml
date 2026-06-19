@@ -12,11 +12,11 @@ jobs:
   lint-build-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
 
       - name: Install dependencies
@@ -33,8 +33,9 @@ jobs:
             --build-arg VITE_API_BASE_URL=https://api.bonelessisland.com \
             -t boneless-web:ci .
 
-      # Report HIGH/CRITICAL CVEs but don't fail the build yet (exit-code 0).
-      # Flip exit-code to "1" later to make vulnerabilities block merges.
+      # Block the merge on HIGH/CRITICAL CVEs that have a fix available
+      # (exit-code 1). ignore-unfixed:true means unpatchable base-image noise
+      # won't block — only CVEs you can actually act on do.
       - name: Trivy scan — api
         uses: aquasecurity/trivy-action@master
         with:
@@ -42,7 +43,15 @@ jobs:
           image-ref: boneless-api:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
+          # npm ships bundled inside the node base image here and is never run
+          # at container runtime (CMD runs the app via tsx), so its bundled deps
+          # aren't part of the service's attack surface. Scope them out — the
+          # app's own node_modules and the OS layer are still scanned.
+          skip-dirs: usr/local/lib/node_modules/npm
+          # Accepted-risk waivers live in .trivyignore, each with a documented
+          # reason + revisit condition. Real, fixable CVEs still block merges.
+          trivyignores: .trivyignore
 
       - name: Trivy scan — bot
         uses: aquasecurity/trivy-action@master
@@ -51,7 +60,15 @@ jobs:
           image-ref: boneless-bot:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
+          # npm ships bundled inside the node base image here and is never run
+          # at container runtime (CMD runs the app via tsx), so its bundled deps
+          # aren't part of the service's attack surface. Scope them out — the
+          # app's own node_modules and the OS layer are still scanned.
+          skip-dirs: usr/local/lib/node_modules/npm
+          # Accepted-risk waivers live in .trivyignore, each with a documented
+          # reason + revisit condition. Real, fixable CVEs still block merges.
+          trivyignores: .trivyignore
 
       - name: Trivy scan — web
         uses: aquasecurity/trivy-action@master
@@ -60,4 +77,12 @@ jobs:
           image-ref: boneless-web:ci
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
+          # npm ships bundled inside the node base image here and is never run
+          # at container runtime (CMD runs the app via tsx), so its bundled deps
+          # aren't part of the service's attack surface. Scope them out — the
+          # app's own node_modules and the OS layer are still scanned.
+          skip-dirs: usr/local/lib/node_modules/npm
+          # Accepted-risk waivers live in .trivyignore, each with a documented
+          # reason + revisit condition. Real, fixable CVEs still block merges.
+          trivyignores: .trivyignore

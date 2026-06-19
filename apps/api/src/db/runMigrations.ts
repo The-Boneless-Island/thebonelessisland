@@ -1,6 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { db } from "./client.js";
+
+// Resolve relative to this module, not process.cwd() — the API can be
+// launched from the repo root, apps/api, or inside the container, and the
+// migrations must be found in all three.
+const migrationDir = resolve(dirname(fileURLToPath(import.meta.url)), "migrations");
 
 export async function runMigrations(): Promise<{ applied: number; skipped: number }> {
   await db.query(`
@@ -15,7 +21,6 @@ export async function runMigrations(): Promise<{ applied: number; skipped: numbe
   );
   const appliedSet = new Set(applied.map((r) => r.filename));
 
-  const migrationDir = resolve("src/db/migrations");
   const files = (await readdir(migrationDir))
     .filter((name) => name.endsWith(".sql"))
     .sort((a, b) => a.localeCompare(b));

@@ -43,21 +43,37 @@ bonelessisland.com {
 	tls /certs/origin-cert.pem /certs/origin-key.pem
 	import security_headers
 
+	# Content-Security-Policy shipped Report-Only first: violations POST to the
+	# API's /csp-reports endpoint instead of being blocked. Flip the header name
+	# to `Content-Security-Policy` (enforcing) once a week of prod reports comes
+	# back clean — see SITE_MODERNIZATION_PLAN.md §9. img-src enumerates the
+	# Discord + Steam art hosts; style-src 'unsafe-inline' is required for React
+	# inline styles (script-src stays strict — Vite emits no inline scripts).
+	header {
+		Content-Security-Policy-Report-Only "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.discordapp.com https://steamcdn-a.akamaihd.net https://*.steamstatic.com https://store.steampowered.com https://media.steampowered.com https://api.bonelessisland.com; connect-src 'self' https://api.bonelessisland.com; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; report-uri https://api.bonelessisland.com/csp-reports; report-to csp"
+		Reporting-Endpoints `csp="https://api.bonelessisland.com/csp-reports"`
+	}
+
 	root * /srv
 	encode zstd gzip
 
-	# Client-side app: serve real files when they exist, otherwise fall back
-	# to index.html so deep links / OAuth return URLs resolve. The app's nav
-	# is state-based today, but this keeps query-param returns (?authError=…)
-	# and any future routes working.
+	# Client-side app: serve real files when they exist, otherwise fall back to
+	# index.html so deep links (real React Router paths) and OAuth return URLs
+	# resolve. Serve precompressed .br/.gz sidecars (emitted by
+	# vite-plugin-compression2) directly — Caddy can't brotli on the fly.
 	try_files {path} /index.html
-	file_server
+	file_server {
+		precompressed br zstd gzip
+	}
 
-	# Long-cache the fingerprinted Vite assets; never cache the HTML shell.
+	# Fingerprinted assets are immutable → cache a year. no-transform stops
+	# Cloudflare from re-compressing (which would discard our brotli). Everything
+	# else is the HTML shell, served for every route via try_files, and must
+	# revalidate so a deploy takes effect immediately (no stale shell).
 	@assets path /assets/*
-	header @assets Cache-Control "public, max-age=31536000, immutable"
-	@html path / /index.html
-	header @html Cache-Control "no-cache"
+	header @assets Cache-Control "public, max-age=31536000, immutable, no-transform"
+	@notassets not path /assets/*
+	header @notassets Cache-Control "no-cache"
 }
 
 # ── www → apex redirect ─────────────────────────────────────────────────────
