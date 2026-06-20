@@ -137,6 +137,7 @@ Use `apps/web/src/islandUi.tsx` primitives before writing custom inline control 
 - The Games page intentionally does **not** ship voting UI.
 - Hosts pick the game directly; the AI session composer surfaces a recommendation.
 - Vote API endpoints remain alive for backwards compat. Do not re-introduce the voting UI.
+- This refers to the **Games page** only. The **Gaming News** feature has its own intentional **content vote** (upvote/downvote to surface/sink stories) — see "Gaming News — Vocabulary".
 
 ## Mascot Slots
 - Boneless nugget art is treated as identity. Real illustration not yet commissioned.
@@ -145,6 +146,34 @@ Use `apps/web/src/islandUi.tsx` primitives before writing custom inline control 
 
 ## Mock Data
 Many cards still render hardcoded mock content (Activity Feed, Drift Log news, AI pick, patches, group wishlist, streams, community modules, admin tables). Wire to real API endpoints as backend models are added.
+
+## Gaming News — Vocabulary
+Canonical names for the AI-summarized Gaming News feature (`general_news`, route `/games/news`). Use these in code, comments, copy, and discussion.
+
+| Term | Meaning | Code symbol |
+|---|---|---|
+| **Gaming News** | the feature/section (public name) | `GamingNewsPage`, `/games/news` |
+| **the Feed** | the landing list as a whole | `GamingNewsFeed` |
+| **Hero Card** | the single large featured card at the top | `NewsHeroCard` |
+| **News Card** | the smaller featured cards below the hero | `NewsCard` |
+| **News Row** | the dense rows below the featured cards | `NewsListRow` |
+| **the Reader** | the click-to-open expanded article view (modal) | `NewsArticleModal` |
+| **cover image** | the article's lead image | `imageUrl` / `image_url` |
+| **source favicon** | the small publisher icon | `SourceFavicon` |
+| **subtitle** | one-line subheadline shown on cards | `aiSubtitle` |
+| **excerpt** | half-sentence teaser derived from the summary (cards/hero) | derived from `aiSummary` |
+| **summary** | the full AI-written article shown in the Reader | `aiSummary` |
+| **label** | colored category chip (Top News / Community / For You) | `aiLabel` |
+| **tags** | genre/platform pills | `aiTags` |
+| **rationale** | the "Why This Matters to Boneless Island" blurb | `aiWhyRecommended` |
+| **spoiler guard** | the hidden-summary spoiler block | `SpoilerBlock`, `aiSpoilerWarning` |
+| **Source Attribution** | the Reader's pop-out listing every source once with links | `aiSources` + `<details>` |
+| **content vote** | per-member upvote/downvote that surfaces or sinks a story (NOT a rating of summary quality) | `VoteControls`, `general_news_feedback` |
+
+Notes:
+- The AI curator does cross-source synthesis: it merges all sources for a story, stays neutral, and surfaces conflicts ("X reports… but Y reports…").
+- **content vote** is distinct from the removed Games-page voting (see "Voting Mechanic — REMOVED") — it is an intentional Gaming News feature.
+- Undecided naming: whether to brand the AI curator voice as **Nuggie**, and whether to nickname the Feed **the Shore**. "Gaming News" stays the official name regardless.
 
 ## Next Improvements
 - Mobile responsive deep pass (2-col hero rows still get cramped under ~720px without manual breakpoints).
