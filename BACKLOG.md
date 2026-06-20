@@ -93,6 +93,14 @@ For the *why* behind shipped decisions see [`DESIGN_NOTES.md`].
   `SUCCESS_PREFIXES` (`toast.tsx:94`) — a remnant of removed voting.
 - **Seasonal / weather scene moments** *(partial)* — only a date-keyed shooting star
   exists; no month-based string-lights / jack-o'-lantern moon / overcast roll.
+- **Living island — backdrop reacts to live crew presence** *(unbuilt, blocked on art)* —
+  turn the scene into a presence visualization: tiki torches lit per member online, a beach
+  campfire scaled to voice-channel size, nugget silhouettes around it, a boat on the water
+  when someone's "in game"; quiet empty shore at zero. Reuses already-synced presence
+  (`in_voice` / `activity_*`, `GET /members`) — no new data. **Blocked on commissioning
+  high-quality layered island/nugget art** (per-element assets that can be shown/hidden +
+  positioned) before building. The standout "make the backdrop mean something" idea; extends
+  the date-keyed scene moments above.
 
 ## Steam (deferred, low value)
 

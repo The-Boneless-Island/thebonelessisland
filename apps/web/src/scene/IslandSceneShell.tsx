@@ -1108,18 +1108,14 @@ function SceneGlobalStyles() {
         .bi-home-top {
           display: grid;
           gap: 16px;
-          align-items: start;
-          grid-template-columns: minmax(240px, 320px) 1fr minmax(240px, 320px);
+          align-items: stretch;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
         }
         .bi-home-top > * { min-width: 0; }
 
-        @media (max-width: 860px) {
-          .bi-home-top {
-            grid-template-columns: 1fr 1fr;
-          }
-          .bi-home-top > :nth-child(2) { display: none; }
-        }
-        @media (max-width: 540px) {
+        /* Below desktop the three cards stack full-width. (Deep mobile pass
+           still deferred; single column avoids empty grid cells.) */
+        @media (max-width: 900px) {
           .bi-home-top { grid-template-columns: 1fr; }
         }
 

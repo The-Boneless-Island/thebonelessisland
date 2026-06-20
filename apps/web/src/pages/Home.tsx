@@ -69,7 +69,7 @@ function HomePageInner({
             display: "grid",
             gridTemplateRows: heroPhase === "collapsing" ? "0fr" : "1fr",
             opacity: heroPhase === "visible" ? 1 : 0,
-            marginBottom: heroPhase === "collapsing" ? 0 : 28,
+            marginBottom: heroPhase === "collapsing" ? 0 : 16,
             transition:
               heroPhase === "collapsing"
                 ? "grid-template-rows 500ms cubic-bezier(0.4,0,0.2,1), margin-bottom 500ms cubic-bezier(0.4,0,0.2,1)"
@@ -87,10 +87,15 @@ function HomePageInner({
           </div>
         </div>
       )}
-      <div style={{ display: "grid", gap: 20 }}>
+      <div style={{ display: "grid", gap: 16 }}>
         <section className="bi-home-top">
           <NuggiesSnapshot profile={profile} onNavigate={onNavigate} />
-          <HomeLogoMark />
+          <IslandPulse
+            profile={profile}
+            onlineCount={activeMembers.length}
+            totalCount={totalMemberCount}
+            onNavigate={onNavigate}
+          />
           <FriendsOnline
             activeMembers={activeMembers}
             totalMemberCount={totalMemberCount}
@@ -623,52 +628,103 @@ function formatCountdown(ms: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
-function HomeLogoMark() {
+// Center of the home top row. Replaces the old decorative floating logo (which
+// left a huge dead column). A live, glass "island pulse" panel: small ring-free
+// crest + time-aware greeting + crew-aboard count + CTAs. Earns its space and
+// reads at night (the night scene's centre is dark sky, so a transparent gap
+// here looked empty — this gives the column purpose without hiding the scene).
+function IslandPulse({
+  profile,
+  onlineCount,
+  totalCount,
+  onNavigate
+}: {
+  profile: MeProfile | null;
+  onlineCount: number;
+  totalCount: number;
+  onNavigate: (page: PageId) => void;
+}) {
+  const name = profile?.displayName ?? "friend";
+  const hour = new Date().getHours();
+  const phase =
+    hour < 5
+      ? { icon: "🌙", lead: "Late night on the island" }
+      : hour < 12
+        ? { icon: "🌅", lead: "Morning on the island" }
+        : hour < 17
+          ? { icon: "🏝️", lead: "Afternoon on the island" }
+          : hour < 22
+            ? { icon: "🌆", lead: "Evening on the island" }
+            : { icon: "🌙", lead: "Late night on the island" };
   return (
-    <div
-      aria-hidden="true"
+    <IslandCard
       style={{
-        position: "relative",
-        alignSelf: "stretch",
-        minHeight: 320,
         display: "flex",
+        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        overflow: "visible"
+        textAlign: "center",
+        gap: 10,
+        padding: 18
       }}
     >
-      <div
-        style={{
-          position: "absolute",
-          inset: "-10% -8%",
-          background:
-            "radial-gradient(closest-side, rgba(251,191,119,0.22) 0%, rgba(56,189,248,0.10) 38%, transparent 72%)",
-          filter: "blur(6px)",
-          pointerEvents: "none"
-        }}
-      />
-      <img
-        src={LOGO_BG_URL}
-        alt=""
-        style={{
-          position: "relative",
-          width: 275,
-          height: 275,
-          display: "block",
-          clipPath: "circle(40%)",
-          WebkitClipPath: "circle(40%)",
-          filter:
-            "drop-shadow(0 0 18px rgba(251,191,119,0.35)) drop-shadow(0 14px 24px rgba(0,0,0,0.45))",
-          animation: "homeLogoFloat 6s ease-in-out infinite"
-        }}
-      />
+      <div style={{ position: "relative", width: 76, height: 76, flexShrink: 0 }}>
+        <div
+          style={{
+            position: "absolute",
+            inset: "-18%",
+            background:
+              "radial-gradient(closest-side, rgba(251,191,119,0.24) 0%, rgba(56,189,248,0.10) 40%, transparent 72%)",
+            filter: "blur(6px)",
+            pointerEvents: "none"
+          }}
+        />
+        <img
+          src={LOGO_BG_URL}
+          alt=""
+          aria-hidden="true"
+          style={{
+            position: "relative",
+            width: 76,
+            height: 76,
+            display: "block",
+            clipPath: "circle(42%)",
+            WebkitClipPath: "circle(42%)",
+            filter: "drop-shadow(0 8px 16px rgba(0,0,0,0.4))",
+            animation: "homeLogoFloat 6s ease-in-out infinite"
+          }}
+        />
+      </div>
+
+      <div className="island-display" style={{ fontSize: 18, fontWeight: 700, lineHeight: 1.15 }}>
+        {phase.icon} {phase.lead}
+      </div>
+
+      <div style={{ fontSize: 14, color: islandTheme.color.textSubtle, lineHeight: 1.45 }}>
+        Welcome back,{" "}
+        <span style={{ color: islandTheme.palette.sandWarmAccent, fontStyle: "italic" }}>{name}</span>.
+        <br />
+        {onlineCount > 0
+          ? `${onlineCount} of ${totalCount || "—"} crew aboard right now.`
+          : "Quiet shoreline — be the first one back."}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 2, flexWrap: "wrap", justifyContent: "center" }}>
+        <HeroButton variant="primary" onClick={() => onNavigate("games")}>
+          Plan a night
+        </HeroButton>
+        <HeroButton variant="ghost" onClick={() => onNavigate("community")}>
+          Open community
+        </HeroButton>
+      </div>
+
       <style>{`
         @keyframes homeLogoFloat {
           0%, 100% { transform: translateY(0); }
           50% { transform: translateY(-4px); }
         }
       `}</style>
-    </div>
+    </IslandCard>
   );
 }
 
