@@ -35,6 +35,63 @@ function SourceFavicon({ url }: { url: string }) {
   );
 }
 
+// Themed tropical wash shown while a cover image loads and as the fallback when
+// an external image 404s / hotlink-403s from our server. No image pipeline —
+// these URLs are runtime (RSS / scraped og:image), so we reserve space with the
+// parent's aspect-ratio box and degrade to this gradient on error.
+const COVER_FALLBACK_BG =
+  "linear-gradient(135deg, var(--bi-tool-accent) 0%, var(--bi-primary) 72%)";
+
+/**
+ * Cover image that fills its (position:relative) parent. Reserves no space
+ * itself — the parent box owns the aspect-ratio. Fades in on load, drops to the
+ * themed gradient on error, and optionally runs the Ken Burns drift.
+ */
+function CoverImage({
+  src,
+  alt = "",
+  eager = false,
+  kenBurns = false,
+  objectPosition = "center 30%"
+}: {
+  src: string | null;
+  alt?: string;
+  eager?: boolean;
+  kenBurns?: boolean;
+  objectPosition?: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const show = Boolean(src) && !failed;
+  return (
+    <div
+      aria-hidden={alt === "" ? true : undefined}
+      style={{ position: "absolute", inset: 0, background: COVER_FALLBACK_BG, overflow: "hidden" }}
+    >
+      {show && (
+        <img
+          src={src ?? undefined}
+          alt={alt}
+          loading={eager ? "eager" : "lazy"}
+          decoding="async"
+          ref={eager ? (el) => { el?.setAttribute("fetchpriority", "high"); } : undefined}
+          onError={() => setFailed(true)}
+          onLoad={(e) => { e.currentTarget.style.opacity = "1"; }}
+          className={kenBurns ? "news-kenburns" : undefined}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            objectPosition,
+            display: "block",
+            opacity: 0,
+            transition: "opacity 0.4s ease"
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 export function GamingNewsPage({ generalNews }: GamingNewsPageProps) {
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -203,8 +260,8 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
     }
     if (sortMode === "top") {
       items = [...items].sort((a, b) => {
-        const sa = (a.aiRelevanceScore ?? 0) + (a.upvotes - a.downvotes * 0.5) * 0.08;
-        const sb = (b.aiRelevanceScore ?? 0) + (b.upvotes - b.downvotes * 0.5) * 0.08;
+        const sa = (a.aiRelevanceScore ?? 0) + (a.upvotes - a.downvotes) * 0.2;
+        const sb = (b.aiRelevanceScore ?? 0) + (b.upvotes - b.downvotes) * 0.2;
         return sb - sa;
       });
     }
@@ -243,6 +300,35 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
         }
         @media (max-width: 520px) {
           .news-featured-small { grid-template-columns: 1fr; }
+        }
+        .news-kenburns {
+          animation: news-kenburns 26s ease-in-out infinite alternate;
+          animation-play-state: paused;
+          transform-origin: 50% 50%;
+          will-change: transform;
+        }
+        .news-hero-sheen {
+          position: absolute;
+          inset: -50% 0;
+          pointer-events: none;
+          z-index: 0;
+          background: linear-gradient(100deg, transparent 38%, rgba(255,255,255,0.10) 50%, transparent 62%);
+          mix-blend-mode: screen;
+          transform: translateX(-120%) skewX(-18deg);
+          animation: news-sheen 8s ease-in-out 3s infinite;
+          animation-play-state: paused;
+        }
+        @keyframes news-kenburns {
+          from { transform: scale(1) translate3d(0, 0, 0); }
+          to   { transform: scale(1.08) translate3d(-2%, -1.5%, 0); }
+        }
+        @keyframes news-sheen {
+          0%   { transform: translateX(-120%) skewX(-18deg); }
+          22%  { transform: translateX(120%) skewX(-18deg); }
+          100% { transform: translateX(120%) skewX(-18deg); }
+        }
+        @media (prefers-reduced-motion: no-preference) {
+          .news-kenburns, .news-hero-sheen { animation-play-state: running; }
         }
       `}</style>
       <section style={{ display: "grid", gap: 14 }}>
@@ -427,7 +513,6 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
                         spoilerRevealed={revealedSpoilers.has(item.externalId)}
                         onRevealSpoiler={() => revealSpoiler(item.externalId)}
                         onOpen={() => setActiveArticle(item)}
-                        onTagClick={handleTagClick}
                         userVote={userVotes[item.id] ?? 0}
                         onVote={(dir) => handleVote(item.id, dir)}
                       />
@@ -558,15 +643,10 @@ function NewsHeroCard({
   const { mode } = useDayNight();
 
   const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
-  const summary = item.aiSummary ?? truncateContents(item.contents, 200);
+  const excerpt = deriveExcerpt(item.aiSummary, 110) ?? truncateContents(item.contents, 110);
   const labelColor = LABEL_COLORS[item.aiLabel ?? ""] ?? islandTheme.color.textMuted;
   const labelText = LABEL_LABELS[item.aiLabel ?? ""] ?? null;
   const displayTags = (item.aiTags ?? []).slice(0, 3);
-  const whyText =
-    item.aiWhyRecommended ??
-    ((item.matchedTags?.length ?? 0) > 0
-      ? `Crew match: ${item.matchedTags.slice(0, 2).join(", ")}`
-      : item.sourceName);
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
 
   function handleShare(e: React.MouseEvent) {
@@ -593,16 +673,15 @@ function NewsHeroCard({
         position: "relative",
         borderRadius: 16,
         overflow: "hidden",
-        background: item.imageUrl
-          ? mode === "day"
-            ? `linear-gradient(135deg, rgba(240,248,255,0.90) 40%, rgba(240,248,255,0.65) 75%, rgba(240,248,255,0.25) 100%), url("${item.imageUrl}") center / cover no-repeat`
-            : `linear-gradient(135deg, rgba(8,16,34,0.92) 40%, rgba(8,16,34,0.6) 75%, rgba(8,16,34,0.25) 100%), url("${item.imageUrl}") center / cover no-repeat`
-          : `linear-gradient(135deg, rgba(37,99,235,0.28) 0%, ${islandTheme.color.panelBg} 80%)`,
+        isolation: "isolate",
+        minHeight: 340,
+        aspectRatio: "16 / 10",
         border: `1px solid ${islandTheme.color.cardBorder}`,
         display: "flex",
         flexDirection: "column",
-        transition: "transform 180ms ease, box-shadow 180ms ease",
-        cursor: "pointer"
+        justifyContent: "flex-end",
+        cursor: "pointer",
+        transition: "transform 180ms ease, box-shadow 180ms ease"
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.transform = "translateY(-2px)";
@@ -613,13 +692,29 @@ function NewsHeroCard({
         e.currentTarget.style.boxShadow = "none";
       }}
     >
-      <div style={{ padding: "18px 20px 12px", display: "grid", gap: 8, flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-          <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+      <CoverImage src={item.imageUrl} eager kenBurns objectPosition="center 35%" />
+      <div className="news-hero-sheen" />
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          background:
+            mode === "day"
+              ? "linear-gradient(to top, rgba(3,7,18,0.82) 0%, rgba(3,7,18,0.34) 40%, rgba(3,7,18,0.04) 66%)"
+              : "linear-gradient(to top, rgba(3,7,18,0.88) 0%, rgba(3,7,18,0.44) 42%, rgba(3,7,18,0.06) 68%)"
+        }}
+      />
+
+      <div style={{ position: "relative", zIndex: 1, padding: "18px 20px 14px", display: "grid", gap: 8, color: "#fff" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <SourceFavicon url={item.url} />
+          <span className="island-mono" style={{ fontSize: 12, color: "rgba(255,255,255,0.82)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
             {item.sourceName}
           </span>
           {labelText && (
-            <span className="island-mono" style={islandTagStyle({ color: labelColor })}>
+            <span className="island-mono" style={{ ...islandTagStyle({ color: labelColor }), marginLeft: "auto" }}>
               {labelText}
             </span>
           )}
@@ -627,77 +722,55 @@ function NewsHeroCard({
 
         <h3
           className="island-display"
-          style={{ margin: 0, fontSize: "clamp(15px, 2vw, 19px)", lineHeight: 1.15, color: islandTheme.color.textPrimary }}
+          style={{ margin: 0, fontSize: "clamp(20px, 2.6vw, 30px)", lineHeight: 1.1, color: "#fff", textShadow: "0 2px 14px rgba(0,0,0,0.55)" }}
         >
           {item.aiTitle ?? item.title}
         </h3>
 
         {item.aiSubtitle && (
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.4, color: islandTheme.color.textSubtle, maxWidth: "68ch" }}>
+          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.4, color: "rgba(255,255,255,0.9)", maxWidth: "60ch" }}>
             {item.aiSubtitle}
           </p>
         )}
 
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-          {displayTags.map((tag) => (
-            <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
-          ))}
-        </div>
-
         {isSpoiler ? (
           <SpoilerBlock onReveal={(e) => { e.stopPropagation(); onRevealSpoiler(); }} />
-        ) : summary ? (
-          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: islandTheme.color.textSubtle, opacity: 0.95 }}>
-            {summary}
+        ) : excerpt ? (
+          <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, color: "rgba(255,255,255,0.72)" }}>
+            {excerpt}
           </p>
         ) : null}
-      </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "auto 1fr auto",
-          gap: 8,
-          alignItems: "start",
-          padding: "8px 20px",
-          borderTop: `1px solid ${islandTheme.color.cardBorder}`,
-          background: islandTheme.color.panelMutedBg
-        }}
-      >
-        <button
-          type="button"
-          onClick={handleShare}
-          aria-label="Share article"
-          title="Share article"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: islandTheme.color.textMuted,
-            cursor: "pointer",
-            padding: "2px 4px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-            font: "inherit",
-            marginTop: 1
-          }}
-        >
-          <ShareIcon />
-        </button>
+        {displayTags.length > 0 && (
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+            {displayTags.map((tag) => (
+              <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
+            ))}
+          </div>
+        )}
 
-        <div
-          className="island-mono"
-          style={{
-            fontSize: 12,
-            color: islandTheme.color.textMuted,
-            lineHeight: 1.4,
-            letterSpacing: "0.02em"
-          }}
-        >
-          {whyText}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 2 }}>
+          <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} />
+          <button
+            type="button"
+            onClick={handleShare}
+            aria-label="Share article"
+            title="Share article"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "rgba(255,255,255,0.82)",
+              cursor: "pointer",
+              padding: "2px 4px",
+              borderRadius: 6,
+              display: "flex",
+              alignItems: "center",
+              font: "inherit"
+            }}
+          >
+            <ShareIcon />
+          </button>
         </div>
-
-        <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} />
       </div>
     </article>
   );
@@ -710,7 +783,6 @@ function NewsCard({
   spoilerRevealed,
   onRevealSpoiler,
   onOpen,
-  onTagClick,
   userVote,
   onVote
 }: {
@@ -718,13 +790,13 @@ function NewsCard({
   spoilerRevealed: boolean;
   onRevealSpoiler: () => void;
   onOpen: () => void;
-  onTagClick?: (tag: string) => void;
   userVote: 1 | -1 | 0;
   onVote: (dir: 1 | -1) => void;
 }) {
   const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
-  const summary = item.aiSummary ?? truncateContents(item.contents, 180);
-  const displayTags = (item.aiTags ?? []).slice(0, 3);
+  const excerpt = deriveExcerpt(item.aiSummary, 80) ?? truncateContents(item.contents, 80);
+  const labelColor = LABEL_COLORS[item.aiLabel ?? ""] ?? islandTheme.color.textMuted;
+  const labelText = LABEL_LABELS[item.aiLabel ?? ""] ?? null;
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
 
   function handleShare(e: React.MouseEvent) {
@@ -748,8 +820,8 @@ function NewsCard({
       onClick={onOpen}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onOpen(); }}
       style={{
-        display: "flex",
-        flexDirection: "column",
+        display: "grid",
+        gridTemplateColumns: "minmax(104px, 40%) 1fr",
         borderRadius: 12,
         background: islandTheme.color.panelBg,
         backdropFilter: islandTheme.glass.blur,
@@ -759,6 +831,7 @@ function NewsCard({
         overflow: "hidden",
         transition: `border-color ${islandTheme.motion.dur.fast} ease, transform ${islandTheme.motion.dur.fast} ease`,
         height: "100%",
+        minHeight: 96,
         boxSizing: "border-box"
       }}
       onMouseEnter={(e) => {
@@ -770,140 +843,103 @@ function NewsCard({
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
-      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", padding: "8px 10px 0" }}>
-        {displayTags.map((tag) => (
-          <TagPill key={tag} tag={tag} onTagClick={onTagClick} />
-        ))}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "68px 1fr", gap: 8, padding: "6px 10px" }}>
-        {item.imageUrl ? (
-          <img
-            src={item.imageUrl}
-            alt=""
-            style={{ width: 68, height: 50, borderRadius: 6, objectFit: "cover", display: "block", flexShrink: 0 }}
-          />
-        ) : (
-          <div
-            style={{
-              width: 68,
-              height: 50,
-              borderRadius: 6,
-              background: islandTheme.color.panelMutedBg,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 18,
-              flexShrink: 0
-            }}
+      <div style={{ position: "relative" }}>
+        <CoverImage src={item.imageUrl} objectPosition="center 35%" />
+        {labelText && (
+          <span
+            className="island-mono"
+            style={{ ...islandTagStyle({ color: labelColor }), position: "absolute", top: 6, left: 6, zIndex: 1 }}
           >
-            📰
-          </div>
+            {labelText}
+          </span>
         )}
-        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2, justifyContent: "center" }}>
-          <div
-            style={{
-              fontSize: 14,
-              fontWeight: 700,
-              lineHeight: 1.25,
-              color: islandTheme.color.textPrimary,
-              overflow: "hidden",
-              display: "-webkit-box",
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: "vertical"
-            }}
-          >
-            {item.aiTitle ?? item.title}
-          </div>
-          {item.aiSubtitle && (
-            <div
-              style={{
-                fontSize: 12,
-                color: islandTheme.color.textSubtle,
-                lineHeight: 1.4,
-                overflow: "hidden",
-                display: "-webkit-box",
-                WebkitLineClamp: 2,
-                WebkitBoxOrient: "vertical"
-              }}
-            >
-              {item.aiSubtitle}
-            </div>
-          )}
-        </div>
       </div>
 
-      <div style={{ padding: "0 10px", flex: 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, padding: "9px 11px", minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            lineHeight: 1.22,
+            color: islandTheme.color.textPrimary,
+            overflow: "hidden",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical"
+          }}
+        >
+          {item.aiTitle ?? item.title}
+        </div>
+
         {isSpoiler ? (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onRevealSpoiler(); }}
             style={{
+              alignSelf: "flex-start",
               background: "rgba(245, 158, 11, 0.12)",
               border: "1px solid rgba(245, 158, 11, 0.3)",
               borderRadius: 6,
               color: "#f59e0b",
-              fontSize: 12,
-              padding: "2px 7px",
+              fontSize: 11,
+              padding: "2px 6px",
               cursor: "pointer",
-              font: "inherit",
-              textAlign: "left"
+              font: "inherit"
             }}
           >
-            ⚠ Spoiler — tap to reveal
+            ⚠ Spoiler
           </button>
-        ) : summary ? (
+        ) : excerpt ? (
           <div
             style={{
               fontSize: 12,
               color: islandTheme.color.textSubtle,
-              lineHeight: 1.5,
+              lineHeight: 1.4,
               overflow: "hidden",
               display: "-webkit-box",
               WebkitLineClamp: 2,
               WebkitBoxOrient: "vertical"
             }}
           >
-            {summary}
+            {excerpt}
           </div>
         ) : null}
-      </div>
 
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "6px 10px",
-          borderTop: `1px solid ${islandTheme.color.cardBorder}`,
-          marginTop: 6
-        }}
-      >
-        <button
-          type="button"
-          onClick={handleShare}
-          aria-label="Share article"
-          title="Share article"
+        <div
           style={{
-            background: "transparent",
-            border: "none",
-            color: islandTheme.color.textMuted,
-            cursor: "pointer",
-            padding: "2px 4px",
-            borderRadius: 6,
             display: "flex",
+            justifyContent: "space-between",
             alignItems: "center",
-            justifyContent: "center",
-            font: "inherit",
-            transition: `color ${islandTheme.motion.dur.fast} ease`
+            marginTop: "auto",
+            paddingTop: 4
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = islandTheme.color.textSubtle; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = islandTheme.color.textMuted; }}
         >
-          <ShareIcon />
-        </button>
+          <button
+            type="button"
+            onClick={handleShare}
+            aria-label="Share article"
+            title="Share article"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: islandTheme.color.textMuted,
+              cursor: "pointer",
+              padding: "2px 4px",
+              borderRadius: 6,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              font: "inherit",
+              transition: `color ${islandTheme.motion.dur.fast} ease`
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = islandTheme.color.textSubtle; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = islandTheme.color.textMuted; }}
+          >
+            <ShareIcon />
+          </button>
 
-        <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} />
+          <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} size="compact" />
+        </div>
       </div>
     </article>
   );
@@ -974,28 +1010,9 @@ function NewsListRow({
         e.currentTarget.style.transform = "translateY(0)";
       }}
     >
-      {item.imageUrl ? (
-        <img
-          src={item.imageUrl}
-          alt=""
-          style={{ width: 80, height: 60, borderRadius: 6, objectFit: "cover", display: "block" }}
-        />
-      ) : (
-        <div
-          style={{
-            width: 80,
-            height: 60,
-            borderRadius: 6,
-            background: islandTheme.color.panelBg,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 22
-          }}
-        >
-          📰
-        </div>
-      )}
+      <div style={{ position: "relative", width: 80, height: 60, borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
+        <CoverImage src={item.imageUrl} objectPosition="center 35%" />
+      </div>
 
       <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
         <div
@@ -1011,6 +1028,20 @@ function NewsListRow({
         >
           {item.aiTitle ?? item.title}
         </div>
+        {item.aiSubtitle && (
+          <div
+            style={{
+              fontSize: 12,
+              color: islandTheme.color.textSubtle,
+              lineHeight: 1.35,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap"
+            }}
+          >
+            {item.aiSubtitle}
+          </div>
+        )}
         <div
           className="island-mono"
           style={{
@@ -1262,11 +1293,9 @@ function NewsArticleModal({
           ✕
         </button>
 
-        {item.imageUrl && (
-          <div style={{ marginBottom: 20, borderRadius: 12, overflow: "hidden", maxHeight: 200 }}>
-            <img src={item.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
-          </div>
-        )}
+        <div style={{ position: "relative", aspectRatio: "16 / 9", marginBottom: 20, borderRadius: 12, overflow: "hidden" }}>
+          <CoverImage src={item.imageUrl} eager objectPosition="center 35%" />
+        </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
           <SourceFavicon url={item.url} />
@@ -1557,6 +1586,27 @@ function truncateContents(contents: string | null, maxChars: number): string | n
   if (!contents) return null;
   const stripped = contents.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
   return stripped.length > maxChars ? stripped.slice(0, maxChars) + "…" : stripped;
+}
+
+// Half-sentence teaser from the AI summary for the Hero/Cards. Strips markdown
+// (bullets, bold, links, code), keeps the first sentence, and caps at maxChars
+// on a word boundary so cards stay short and uniform.
+function deriveExcerpt(summary: string | null, maxChars = 90): string | null {
+  if (!summary) return null;
+  const flat = summary
+    .replace(/^[\s>#*\-•]+/gm, "")
+    .replace(/\*\*?([^*]+)\*\*?/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!flat) return null;
+  const m = flat.match(/^(.{20,}?[.!?])(\s|$)/);
+  const firstSentence = m ? m[1] : flat;
+  if (firstSentence.length <= maxChars) return firstSentence;
+  const cut = firstSentence.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > 40 ? cut.slice(0, lastSpace) : cut).replace(/[,;:.\s]+$/, "") + "…";
 }
 
 function relativeAgo(iso: string): string {
