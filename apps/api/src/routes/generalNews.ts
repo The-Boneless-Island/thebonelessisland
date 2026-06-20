@@ -3,7 +3,7 @@ import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
 import { getAiCostTotalUsd } from "../lib/ai/usageTally.js";
 import { backfillEmbeddings, isEmbeddingColumnAvailable } from "../lib/news/embeddings.js";
-import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration } from "../lib/generalNewsIngestion.js";
+import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages } from "../lib/generalNewsIngestion.js";
 
 export const generalNewsRouter = Router();
 
@@ -226,6 +226,24 @@ generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentR
     res.json({ ok: true, embedded, remaining });
   } catch (err) {
     console.error("[generalNews] embed-backfill error:", err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
+  }
+});
+
+/**
+ * POST /news/general/image-backfill
+ * Admin — scrape og:image covers for already-ingested rows that have none (the
+ * ingest hook only touches freshly-inserted rows). Bounded per call (default
+ * 50); poll until remaining returns 0. Image scraping is network-bound, so keep
+ * the limit modest to avoid request timeouts.
+ */
+generalNewsRouter.post("/general/image-backfill", requireSession, requireParentRole, async (req, res) => {
+  try {
+    const limit = Math.min(200, Math.max(1, parseInt(String((req.body as { limit?: number } | undefined)?.limit ?? 50), 10)));
+    const result = await backfillMissingImages(limit);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("[generalNews] image-backfill error:", err);
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
   }
 });

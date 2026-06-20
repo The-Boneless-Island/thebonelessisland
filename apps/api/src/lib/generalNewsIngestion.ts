@@ -532,8 +532,8 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
  * sets image_resolved_at even on failure so a dead page isn't re-hit every run.
  * Best-effort and fail-open — never blocks ingestion.
  */
-async function resolveMissingImages(newIds: number[]): Promise<void> {
-  if (newIds.length === 0) return;
+async function resolveMissingImages(newIds: number[]): Promise<{ scanned: number; resolved: number }> {
+  if (newIds.length === 0) return { scanned: 0, resolved: 0 };
   const rows = await db.query<{ id: number; url: string }>(
     `SELECT id, url FROM general_news
       WHERE id = ANY($1::int[])
@@ -541,7 +541,7 @@ async function resolveMissingImages(newIds: number[]): Promise<void> {
         AND image_resolved_at IS NULL`,
     [newIds]
   );
-  if (rows.rows.length === 0) return;
+  if (rows.rows.length === 0) return { scanned: 0, resolved: 0 };
 
   let resolved = 0;
   for (const row of rows.rows) {
@@ -563,6 +563,30 @@ async function resolveMissingImages(newIds: number[]): Promise<void> {
   console.log(
     `[generalNews] og:image scrape — resolved ${resolved}/${rows.rows.length} imageless row(s)`
   );
+  return { scanned: rows.rows.length, resolved };
+}
+
+/**
+ * One-time backfill of cover images for already-ingested rows that never got an
+ * og:image scrape (the ingest hook only touches freshly-inserted rows). Bounded
+ * per call so the admin endpoint stays responsive; poll until remaining hits 0.
+ */
+export async function backfillMissingImages(
+  maxRows = 50
+): Promise<{ scanned: number; resolved: number; remaining: number }> {
+  const candidates = await db.query<{ id: number }>(
+    `SELECT id FROM general_news
+      WHERE image_url IS NULL AND image_resolved_at IS NULL
+      ORDER BY published_at DESC
+      LIMIT $1`,
+    [maxRows]
+  );
+  const { scanned, resolved } = await resolveMissingImages(candidates.rows.map((r) => r.id));
+  const rem = await db.query<{ c: string }>(
+    `SELECT COUNT(*)::text AS c FROM general_news
+      WHERE image_url IS NULL AND image_resolved_at IS NULL`
+  );
+  return { scanned, resolved, remaining: parseInt(rem.rows[0]?.c ?? "0", 10) };
 }
 
 /**
