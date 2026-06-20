@@ -40,6 +40,9 @@ type AdminPageProps = {
   onTriggerGeneralNewsEmbedBackfill: (
     limit?: number
   ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
+  onTriggerGeneralNewsImageBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string }>;
   onFetchGeneralNewsRecurateStatus: () => Promise<{
     state: "idle" | "running" | "done" | "error";
     reset: number;
@@ -93,6 +96,7 @@ export function AdminPage(props: AdminPageProps) {
             onRecurate={props.onTriggerGeneralNewsRecurate}
             onCancelRecurate={props.onCancelGeneralNewsRecurate}
             onEmbedBackfill={props.onTriggerGeneralNewsEmbedBackfill}
+            onImageBackfill={props.onTriggerGeneralNewsImageBackfill}
             onFetchRecurateStatus={props.onFetchGeneralNewsRecurateStatus}
             onCurateGameNews={props.onTriggerNewsCuration}
           />

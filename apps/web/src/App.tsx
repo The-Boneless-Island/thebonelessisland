@@ -1053,6 +1053,23 @@ export function App() {
     }
   }
 
+  async function triggerGeneralNewsImageBackfill(limit = 50) {
+    try {
+      const response = await apiFetch("/news/general/image-backfill", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ limit })
+      });
+      const data = (await response.json().catch(() => null)) as {
+        ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string;
+      } | null;
+      return data ?? { ok: false, error: "No response" };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
   async function triggerGeneralNewsRecurate(
     onProgress?: (snap: {
       state: "running" | "done" | "error";
@@ -1868,6 +1885,7 @@ export function App() {
           onTriggerGeneralNewsRecurate={triggerGeneralNewsRecurate}
           onCancelGeneralNewsRecurate={cancelGeneralNewsRecurate}
           onTriggerGeneralNewsEmbedBackfill={triggerGeneralNewsEmbedBackfill}
+          onTriggerGeneralNewsImageBackfill={triggerGeneralNewsImageBackfill}
           onFetchGeneralNewsRecurateStatus={fetchGeneralNewsRecurateStatus}
         />
       ) : null}

@@ -77,6 +77,9 @@ type NewsPageProps = {
   onEmbedBackfill: (
     limit?: number
   ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
+  onImageBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string }>;
   onFetchRecurateStatus: () => Promise<{
     state: "idle" | "running" | "done" | "error";
     reset: number;
@@ -275,6 +278,7 @@ function ManualTriggersCard({
   onRecurate,
   onCancelRecurate,
   onEmbedBackfill,
+  onImageBackfill,
   onFetchRecurateStatus,
   onCurateGameNews
 }: NewsPageProps) {
@@ -587,7 +591,80 @@ function ManualTriggersCard({
         </div>
         <EmbedBackfillButton onEmbedBackfill={onEmbedBackfill} />
       </div>
+
+      <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
+        <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Cover Image Backfill</div>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
+          Scrape an og:image cover for existing articles that have none (mainly Reddit + image-less RSS). The ingest hook only covers newly-fetched articles, so run this once after enabling the image feature. Processes 20 rows per request and loops until none remain.
+        </div>
+        <ImageBackfillButton onImageBackfill={onImageBackfill} />
+      </div>
     </IslandCard>
+  );
+}
+
+function ImageBackfillButton({
+  onImageBackfill
+}: {
+  onImageBackfill: (
+    limit?: number
+  ) => Promise<{ ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string }>;
+}) {
+  const [state, setState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [msg, setMsg] = useState("");
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <IslandButton
+        variant="secondary"
+        disabled={state === "running"}
+        onClick={async () => {
+          setState("running");
+          let totalResolved = 0;
+          // Image scraping is network-bound (one fetch per article), so use a
+          // small per-request batch and loop until the server reports 0 left.
+          for (let i = 0; i < 80; i++) {
+            setMsg(`Scraping batch ${i + 1}… (${totalResolved} cover${totalResolved === 1 ? "" : "s"} found so far)`);
+            const result = await onImageBackfill(20);
+            if (!result.ok) {
+              setState("error");
+              setMsg(result.error ?? "Backfill failed");
+              return;
+            }
+            totalResolved += result.resolved ?? 0;
+            const remaining = result.remaining ?? 0;
+            if (remaining === 0 || (result.scanned ?? 0) === 0) {
+              setState("done");
+              setMsg(`Done — ${totalResolved} cover${totalResolved === 1 ? "" : "s"} scraped, ${remaining} remaining.`);
+              setTimeout(() => setState("idle"), 15000);
+              return;
+            }
+          }
+          setState("done");
+          setMsg(`Stopped at iteration cap — ${totalResolved} covers scraped. Click again to continue.`);
+          setTimeout(() => setState("idle"), 15000);
+        }}
+      >
+        {state === "running" ? "Scraping…" : "Backfill Cover Images"}
+      </IslandButton>
+      {msg && (
+        <span
+          role="status"
+          aria-live="polite"
+          style={{
+            fontSize: 12,
+            color:
+              state === "error"
+                ? islandTheme.color.dangerAccent
+                : state === "done"
+                  ? islandTheme.color.successAccent
+                  : islandTheme.color.textSubtle
+          }}
+        >
+          {msg}
+        </span>
+      )}
+    </div>
   );
 }
 
