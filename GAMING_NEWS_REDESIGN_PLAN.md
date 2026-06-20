@@ -14,9 +14,11 @@ Done + committed on branch `claude/wizardly-shaw-0503dc` (typecheck-clean, 0 vul
 - Phase A — summary completeness + 1350-word cap + jargon + batch 6 / maxTokens 16384 + `summary_too_long` validation (`76a4db2`)
 - Phase B — og:image scrape + pre-flight SSRF guard + migration 064 (`3be88c8`)
 - Phase D + F — single Source Attribution pop-out; content-vote re-aim + ranking weight 0.2 + story-level placement (`f050c57`)
+- Phase C — image-forward Hero (Ken Burns + sheen), CoverImage primitive, compact horizontal News Cards, News Row subtitle + fallback thumb, deriveExcerpt, 16:9 reader banner (`aca4665`)
 
-**Next: Phase C** (visual rebuild) — do WITH live preview (`/run` + Claude Preview) to tune the
-Ken Burns + sheen feel, hero crop, and excerpt length. See §4 Phase C + the §5 CSS block.
+**All 6 build phases (A–F) landed.** Next: Phase E (verify on deploy) + image backfill.
+Visual tuning of the Hero/cards may follow from preview feedback (motion speed, hero height,
+excerpt length are all single-constant tweaks). See §4 Phase E + follow-ups below.
 
 Known follow-ups:
 - **Image backfill** — `resolveMissingImages` only scrapes newly-ingested rows; existing imageless
