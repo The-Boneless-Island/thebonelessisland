@@ -9,6 +9,7 @@ import {
   isEmbeddingColumnAvailable,
   setEmbedding
 } from "./news/embeddings.js";
+import { resolveHeroImage } from "./news/ogImage.js";
 import { getAISetting } from "./serverSettings.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -523,6 +524,45 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
   }
 
   return insertedIds;
+}
+
+/**
+ * For freshly-inserted rows with no feed image, scrape the article's og:image
+ * (or twitter:image) so the Hero/Cards have a large cover to show. Scrape-once:
+ * sets image_resolved_at even on failure so a dead page isn't re-hit every run.
+ * Best-effort and fail-open — never blocks ingestion.
+ */
+async function resolveMissingImages(newIds: number[]): Promise<void> {
+  if (newIds.length === 0) return;
+  const rows = await db.query<{ id: number; url: string }>(
+    `SELECT id, url FROM general_news
+      WHERE id = ANY($1::int[])
+        AND image_url IS NULL
+        AND image_resolved_at IS NULL`,
+    [newIds]
+  );
+  if (rows.rows.length === 0) return;
+
+  let resolved = 0;
+  for (const row of rows.rows) {
+    let img: Awaited<ReturnType<typeof resolveHeroImage>> = null;
+    try {
+      img = await resolveHeroImage(row.url);
+    } catch {
+      img = null;
+    }
+    await db.query(
+      `UPDATE general_news
+          SET image_url = $1, image_source = $2, image_width = $3,
+              image_height = $4, image_resolved_at = NOW()
+        WHERE id = $5`,
+      [img?.url ?? null, img?.source ?? "none", img?.width ?? null, img?.height ?? null, row.id]
+    );
+    if (img?.url) resolved++;
+  }
+  console.log(
+    `[generalNews] og:image scrape — resolved ${resolved}/${rows.rows.length} imageless row(s)`
+  );
 }
 
 /**
@@ -1335,6 +1375,14 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
 
     const insertedIds = await upsertGeneralNews(allItems);
     totalFetched = insertedIds.length;
+
+    // Scrape a large og:image for rows the feed left imageless (esp. Reddit).
+    // Isolated so a scrape failure never blocks clustering/curation.
+    try {
+      await resolveMissingImages(insertedIds);
+    } catch (err) {
+      console.warn("[generalNews] image resolution step failed:", err);
+    }
 
     // Deterministic clustering pass: embed each new row, fold cosine-similar
     // articles into existing primary cards as siblings (no LLM curation). Big
