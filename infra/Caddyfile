@@ -72,6 +72,8 @@ bonelessisland.com {
 	# revalidate so a deploy takes effect immediately (no stale shell).
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable, no-transform"
+	@milestones path /art/milestones/*
+	header @milestones Cache-Control "public, max-age=300, must-revalidate"
 	@notassets not path /assets/*
 	header @notassets Cache-Control "no-cache"
 }

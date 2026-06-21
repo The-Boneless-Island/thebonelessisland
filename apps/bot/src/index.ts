@@ -740,9 +740,10 @@ const TIER_ROLE_KEYS_IN_LADDER_ORDER = [
   "milestone_role_rank_08",
 ];
 
-// Ladder-ordered coin slug + accent color (mirrors MILESTONE_TIERS / the web
-// rankTiers.ts). Drives the rank card art + role-icon sync. Index-aligned with
+// Ladder-ordered badge slug + accent color (mirrors the web rankTiers.ts).
+// Drives the rank card art + role-icon sync. Index-aligned with
 // TIER_ROLE_KEYS_IN_LADDER_ORDER above.
+const RANK_ART_VERSION = "badge-v2";
 const TIER_LADDER: Array<{ slug: string; accent: string }> = [
   { slug: "vault-dweller", accent: "#94a3b8" },
   { slug: "silver", accent: "#cbd5e1" },
@@ -857,7 +858,7 @@ async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<
                 displayName: member.displayName,
                 avatarUrl: member.displayAvatarURL({ extension: "png", size: 128 }),
                 tierLabel: payload.label,
-                coinUrl: `${webOrigin}/art/milestones/${tier.slug}.png`,
+                coinUrl: `${webOrigin}/art/milestones/${tier.slug}.png?v=${RANK_ART_VERSION}`,
                 accent: tier.accent,
                 bonus: payload.bonus,
                 currentThreshold: payload.threshold,
@@ -1044,7 +1045,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const slug = TIER_LADDER[i]?.slug;
           if (!roleId || !slug) continue;
           try {
-            const res = await fetch(`${webOrigin}/art/milestones/${slug}.png`);
+            const res = await fetch(`${webOrigin}/art/milestones/${slug}.png?v=${RANK_ART_VERSION}`);
             if (!res.ok) throw new Error(`art fetch ${res.status}`);
             const buf = Buffer.from(await res.arrayBuffer());
             await guild.roles.edit(roleId, { icon: buf });
