@@ -2,6 +2,29 @@ import { API_BASE_URL } from "../api/client.js";
 import { AuthCinematicVideo } from "../components/AuthCinematicVideo.js";
 import { islandTheme } from "../theme.js";
 
+/** Set when the user leaves for Discord OAuth; survives the full-page return. */
+export const LOGIN_RETURN_VIDEO_KEY = "bi:login-return-video";
+
+export function markPendingLoginReturn() {
+  try {
+    sessionStorage.setItem(LOGIN_RETURN_VIDEO_KEY, "1");
+  } catch {
+    // Private mode / blocked storage — skip return video on next load.
+  }
+}
+
+export function consumePendingLoginReturn(): boolean {
+  try {
+    if (sessionStorage.getItem(LOGIN_RETURN_VIDEO_KEY) === "1") {
+      sessionStorage.removeItem(LOGIN_RETURN_VIDEO_KEY);
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 const STYLES = `
   @keyframes cardFadeIn {
     0%   { opacity: 0; transform: scale(0.96) translateY(18px); }
@@ -137,6 +160,7 @@ export function LoginScreen({ loading, authError, exiting, onExitComplete }: Log
           ) : (
             <a
               href={`${API_BASE_URL}/auth/discord/login`}
+              onClick={() => markPendingLoginReturn()}
               style={{
                 display: "flex",
                 alignItems: "center",

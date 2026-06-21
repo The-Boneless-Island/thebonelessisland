@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { ScrollRestoration, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
 import { putClientState } from "./api/clientState.js";
-import { LoginScreen } from "./pages/LoginScreen.js";
+import { consumePendingLoginReturn, LoginScreen } from "./pages/LoginScreen.js";
 import { useLoginOverlay } from "./scene/LoginOverlayContext.js";
 import { NotFoundPage } from "./pages/NotFound.js";
 import {
@@ -87,7 +87,6 @@ export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginExiting, setLoginExiting] = useState(false);
-  const prevAuth = useRef<boolean | null>(null);
   const exitSafetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { setLoginOverlayActive } = useLoginOverlay();
   // Last-applied snapshots for polled loaders — used to skip redundant setStates
@@ -396,6 +395,8 @@ export function App() {
     const bootstrapAuth = async () => {
       const authed = await loadProfile(true);
       if (isCancelled) return;
+      const playReturnVideo = authed && consumePendingLoginReturn();
+      if (playReturnVideo) setLoginExiting(true);
       setIsAuthenticated(authed);
       if (authed) {
         // Fire all independent fetches in parallel. syncGuildMembers (Discord POST)
@@ -1686,7 +1687,8 @@ export function App() {
   );
 
   // On real login (false → true), play the return cinematic.
-  // Skip on refresh (null → true) so already-authed sessions don't flash splash.
+  // OAuth is a full-page redirect, so we detect return via sessionStorage
+  // (set when the user clicks "Sign in with Discord") instead of prevAuth.
   const handleLoginExitComplete = useCallback(() => {
     if (exitSafetyRef.current) {
       clearTimeout(exitSafetyRef.current);
@@ -1700,19 +1702,15 @@ export function App() {
   }, [isAuthenticated, loginExiting, setLoginOverlayActive]);
 
   useEffect(() => {
-    if (prevAuth.current === false && isAuthenticated === true) {
-      setLoginExiting(true);
-      exitSafetyRef.current = setTimeout(handleLoginExitComplete, 2000);
-      prevAuth.current = isAuthenticated;
-      return () => {
-        if (exitSafetyRef.current) {
-          clearTimeout(exitSafetyRef.current);
-          exitSafetyRef.current = null;
-        }
-      };
-    }
-    prevAuth.current = isAuthenticated;
-  }, [isAuthenticated, handleLoginExitComplete]);
+    if (!loginExiting) return;
+    exitSafetyRef.current = setTimeout(handleLoginExitComplete, 5000);
+    return () => {
+      if (exitSafetyRef.current) {
+        clearTimeout(exitSafetyRef.current);
+        exitSafetyRef.current = null;
+      }
+    };
+  }, [loginExiting, handleLoginExitComplete]);
 
   if (isAuthenticated === null) {
     return null;
