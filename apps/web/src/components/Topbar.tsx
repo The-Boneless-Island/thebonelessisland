@@ -75,6 +75,7 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, 
         {onOpenSearch ? (
           <button
             type="button"
+            className="bi-topbar-search"
             onClick={onOpenSearch}
             aria-label="Open quick switcher (Ctrl+K)"
             title="Quick switcher (Ctrl+K)"
@@ -90,11 +91,13 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, 
               cursor: "pointer",
               font: "inherit",
               fontSize: 13,
-              flexShrink: 0
+              flexShrink: 0,
+              minHeight: 44,
+              minWidth: 44
             }}
           >
             <SearchIcon />
-            <span style={{ fontSize: 13 }}>Search</span>
+            <span className="bi-topbar-search-label" style={{ fontSize: 13 }}>Search</span>
           </button>
         ) : null}
         {profile && onOpenForumThread ? (
@@ -128,6 +131,7 @@ function Brand({ tagline }: { tagline?: string }) {
   return (
     <Link
       to="/"
+      className="bi-brand"
       aria-label="The Boneless Island — home"
       style={{
         display: "flex",
@@ -180,7 +184,7 @@ function Brand({ tagline }: { tagline?: string }) {
           The Boneless Island
         </div>
         <div
-          className="island-mono"
+          className="bi-brand-tagline island-mono"
           style={{
             fontSize: 12,
             color: islandTheme.color.textMuted,
@@ -211,9 +215,11 @@ function UserTrigger({ buttonRef, profile, open, onToggle }: UserTriggerProps) {
     <button
       ref={buttonRef}
       type="button"
+      className="bi-topbar-user-trigger"
       onClick={onToggle}
       aria-haspopup="menu"
       aria-expanded={open}
+      aria-label={profile?.username ? `User menu for @${profile.username}` : "User menu"}
       style={{
         display: "flex",
         alignItems: "center",
@@ -224,12 +230,13 @@ function UserTrigger({ buttonRef, profile, open, onToggle }: UserTriggerProps) {
         background: islandTheme.color.panelMutedBg,
         color: islandTheme.color.textPrimary,
         cursor: "pointer",
-        font: "inherit"
+        font: "inherit",
+        minHeight: 44
       }}
     >
       <UserAvatar profile={profile} initials={initials} size={30} />
-      <span style={{ fontSize: 13, fontWeight: 600 }}>{handle}</span>
-      <span style={{ color: islandTheme.color.textMuted, fontSize: 12 }}>{open ? "▲" : "▼"}</span>
+      <span className="bi-topbar-user-handle" style={{ fontSize: 13, fontWeight: 600 }}>{handle}</span>
+      <span className="bi-topbar-user-chevron" style={{ color: islandTheme.color.textMuted, fontSize: 12 }}>{open ? "▲" : "▼"}</span>
     </button>
   );
 }

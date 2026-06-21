@@ -2232,12 +2232,9 @@ function StreamDrawer({ members }: { members: GuildMember[] }) {
     <>
       <button
         type="button"
-        className="island-btn"
+        className="island-btn bi-stream-tab"
         onClick={() => setOpen((v) => !v)}
         style={{
-          position: "fixed",
-          right: 0,
-          top: "44%",
           transform: "translateY(-50%) rotate(180deg)",
           writingMode: "vertical-rl",
           padding: "16px 8px",
@@ -2251,19 +2248,16 @@ function StreamDrawer({ members }: { members: GuildMember[] }) {
           letterSpacing: "0.1em",
           textTransform: "uppercase",
           cursor: "pointer",
-          zIndex: 60,
           font: "inherit",
-          boxShadow: "-4px 0 14px rgba(0,0,0,0.4)"
+          boxShadow: "-4px 0 14px rgba(0,0,0,0.4)",
+          minHeight: 44
         }}
       >
         ● In game · {inGame.length}
       </button>
       <aside
+        className={`bi-stream-drawer${open ? " bi-stream-drawer--open" : ""}`}
         style={{
-          position: "fixed",
-          right: 0,
-          top: 70,
-          bottom: 0,
           width: 320,
           maxWidth: "90vw",
           background: islandTheme.color.panelBg,
@@ -2274,9 +2268,6 @@ function StreamDrawer({ members }: { members: GuildMember[] }) {
           borderTopLeftRadius: 14,
           borderBottomLeftRadius: 14,
           padding: "14px 12px",
-          transform: open ? "translateX(0)" : "translateX(100%)",
-          transition: "transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1)",
-          zIndex: 55,
           overflowY: "auto"
         }}
       >

@@ -89,8 +89,7 @@ For the *why* behind shipped decisions see [`DESIGN_NOTES.md`].
 - **Deploy matrix parallelization** *(partial)* — GHA buildx cache is configured
   (`deploy.yml`), but the three image builds still run sequentially in one job; matrix
   them (deploy latency = recovery time, no rollback).
-- **Remaining mobile polish** *(partial)* — core responsive pass shipped (MobileTabBar,
-  games split, poster wall, palm shrink); sweep for any leftover rigid grids.
+- **Remaining mobile polish** *(shipped 2026-06-21)* — topbar narrow rules, hide hamburger when tab bar active, toast/stream drawer offsets, admin grid stacking, Forums touch targets, Library/PosterCard touch overlay, casino card sizing. Sweep again if new rigid grids land.
 
 ## Scene / polish
 

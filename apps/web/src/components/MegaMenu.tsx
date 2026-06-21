@@ -84,6 +84,7 @@ export function MegaMenu({ page, onNavigate, isAdmin }: MegaMenuProps) {
       <>
         <button
           type="button"
+          className="bi-megamenu-trigger"
           onClick={() => setMobileOpen(true)}
           aria-label="Open navigation"
           style={{
@@ -97,7 +98,9 @@ export function MegaMenu({ page, onNavigate, isAdmin }: MegaMenuProps) {
             alignItems: "center",
             gap: 6,
             font: "inherit",
-            fontSize: 13
+            fontSize: 13,
+            minHeight: 44,
+            minWidth: 44
           }}
         >
           <HamburgerIcon />

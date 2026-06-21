@@ -1729,7 +1729,7 @@ function NewsCardEditor({
           style={{ ...islandInputStyle, width: "100%", resize: "vertical", fontFamily: "inherit" }}
         />
       </Field>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+      <div className="bi-admin-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         <Field label="Tag (optional)">
           <input
             value={tag}

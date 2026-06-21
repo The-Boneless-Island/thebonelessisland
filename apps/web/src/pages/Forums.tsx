@@ -1745,10 +1745,8 @@ function ThreadView({
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <div
+        className="bi-forum-sticky-head"
         style={{
-          position: "sticky",
-          top: 70,
-          zIndex: 20,
           display: "flex",
           alignItems: "center",
           gap: 8,
@@ -2190,14 +2188,15 @@ const MD_TOOLBAR: { action: MdAction; glyph: string; title: string }[] = [
 ];
 
 const mdToolBtn: React.CSSProperties = {
-  minWidth: 28,
-  height: 26,
-  padding: "0 7px",
-  borderRadius: 6,
+  minWidth: 44,
+  minHeight: 44,
+  height: 44,
+  padding: "0 10px",
+  borderRadius: 8,
   border: `1px solid ${islandTheme.color.cardBorder}`,
   background: islandTheme.color.panelMutedBg,
   color: islandTheme.color.textSubtle,
-  fontSize: 12,
+  fontSize: 13,
   fontWeight: 700,
   cursor: "pointer",
   font: "inherit"

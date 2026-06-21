@@ -114,6 +114,13 @@ const POSTER_WALL_CSS = `
     opacity: 1;
     pointer-events: auto;
   }
+  @media (hover: none) {
+    .bi-poster-overlay {
+      opacity: 1;
+      pointer-events: auto;
+      background: linear-gradient(180deg, transparent 40%, rgba(2, 6, 23, 0.82) 100%);
+    }
+  }
 `;
 
 /** Responsive poster grid + its shared CSS. Wrap PosterCard children in this. */

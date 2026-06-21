@@ -208,8 +208,10 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
           placeholder={`Search ${totalGames || 0} games…`}
           style={{
             ...islandInputStyle,
-            flex: "1 1 280px",
-            minWidth: 280,
+            flex: "1 1 160px",
+            minWidth: 0,
+            width: "100%",
+            maxWidth: "100%",
             fontFamily: islandTheme.font.mono,
             fontSize: 12
           }}

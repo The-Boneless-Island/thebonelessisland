@@ -90,6 +90,12 @@ export const islandTheme = {
     pagePaddingWide: "1.2rem",
     pagePaddingNarrow: "0.9rem"
   },
+  breakpoints: {
+    phone: 640,
+    tablet: 768,
+    navDesktop: 820,
+    wide: 880
+  },
   layout: {
     appMaxWidth: 1200,
     authMaxWidth: 900,

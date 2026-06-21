@@ -508,11 +508,8 @@ function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
   const showDelta = deltaMin !== null && deltaHours >= 1;
   return (
     <div
+      className="bi-trending-row"
       style={{
-        display: "grid",
-        gridTemplateColumns: "18px 92px minmax(0, 1fr) auto",
-        gap: 12,
-        alignItems: "center",
         padding: "8px 10px",
         borderRadius: 10,
         background: islandTheme.color.panelMutedBg,
@@ -537,6 +534,7 @@ function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
         appId={game.appId}
         storedUrl={game.headerImageUrl}
         alt={game.name}
+        className="bi-trending-row-art"
         style={{
           width: 92,
           height: 43,

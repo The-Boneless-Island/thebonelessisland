@@ -131,7 +131,7 @@ function SteamProfileContextStats() {
       <p style={{ margin: "0 0 10px 0", fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
         Steam community groups + per-game achievement progress feed the AI news curator. Syncs run on Steam library refresh with a 24h cooldown.
       </p>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      <div className="bi-admin-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <ContextStatRow label="Members with groups synced" value={`${stats.groups_synced_users}/${stats.total_linked}`} sub={`${stats.total_groups} groups total · last sync ${fmt(stats.last_groups_synced_at)}`} />
         <ContextStatRow label="Members with achievements synced" value={`${stats.achievements_synced_users}/${stats.total_linked}`} sub={`${stats.total_progress_rows} progress rows · last sync ${fmt(stats.last_achievements_synced_at)}`} />
       </div>

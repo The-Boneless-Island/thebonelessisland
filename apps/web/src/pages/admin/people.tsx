@@ -49,11 +49,8 @@ export function MembersPage() {
           Roster{loadState === "ready" ? ` · ${sorted.length}` : ""}
         </SubsectionTitle>
         <div
-          className="island-mono"
+          className="bi-admin-member-head island-mono"
           style={{
-            display: "grid",
-            gridTemplateColumns: "1.2fr 1.6fr 90px 80px",
-            gap: 12,
             padding: "8px 16px",
             fontSize: 12,
             textTransform: "uppercase",
@@ -183,12 +180,9 @@ function MemberRow({ entry, firstRow }: { entry: GuildMember; firstRow: boolean 
       : "unknown";
   return (
     <div
+      className="bi-admin-member-row"
       style={{
-        display: "grid",
-        gridTemplateColumns: "1.2fr 1.6fr 90px 80px",
-        gap: 12,
         padding: "12px 16px",
-        alignItems: "center",
         borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`
       }}
     >

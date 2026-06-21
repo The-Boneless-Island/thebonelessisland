@@ -1113,8 +1113,7 @@ function SceneGlobalStyles() {
         }
         .bi-home-top > * { min-width: 0; }
 
-        /* Below desktop the three cards stack full-width. (Deep mobile pass
-           still deferred; single column avoids empty grid cells.) */
+        /* Below desktop the three cards stack full-width. */
         @media (max-width: 900px) {
           .bi-home-top { grid-template-columns: 1fr; }
         }
@@ -1144,20 +1143,138 @@ function SceneGlobalStyles() {
         /* Topbar spacer — height tied to --bi-topbar-h so a single change keeps them in sync */
         .bi-topbar-spacer { height: var(--bi-topbar-h, 62px); }
 
+        /* Admin / settings two-column forms — stack on phones */
+        .bi-admin-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+        }
+        .bi-admin-grid > * { min-width: 0; }
+
+        /* Home trending row — stack art above copy on narrow screens */
+        .bi-trending-row {
+          display: grid;
+          grid-template-columns: 18px 92px minmax(0, 1fr) auto;
+          gap: 12px;
+          align-items: center;
+        }
+
+        /* Games stream drawer — bottom sheet on phones */
+        .bi-stream-drawer {
+          position: fixed;
+          right: 0;
+          top: calc(var(--bi-topbar-h, 62px) + 8px);
+          bottom: 0;
+          z-index: 55;
+          transform: translateX(100%);
+          transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        .bi-stream-drawer--open { transform: translateX(0); }
+        .bi-stream-tab {
+          position: fixed;
+          right: 0;
+          top: 44%;
+          z-index: 60;
+        }
+
+        /* Admin member roster table */
+        .bi-admin-member-head,
+        .bi-admin-member-row {
+          display: grid;
+          grid-template-columns: 1.2fr 1.6fr 90px 80px;
+          gap: 12px;
+          align-items: center;
+        }
+
+        /* Toast host — clear bottom tab bar on phones */
+        .bi-toast-host {
+          position: fixed;
+          right: 18px;
+          bottom: 18px;
+          z-index: 90;
+        }
+
+        /* Forums sticky thread header */
+        .bi-forum-sticky-head {
+          position: sticky;
+          top: calc(var(--bi-topbar-h, 62px) + 8px);
+          z-index: 20;
+        }
+
+        /* ── Topbar narrow (≤640px) ── */
+        @media (max-width: 640px) {
+          /* Tab bar carries primary nav — hide duplicate hamburger */
+          .bi-megamenu-trigger { display: none !important; }
+
+          .bi-topbar-search-label { display: none; }
+          .bi-topbar-search {
+            padding: 8px !important;
+            justify-content: center;
+          }
+          .bi-topbar-user-handle,
+          .bi-topbar-user-chevron { display: none; }
+          .bi-topbar-user-trigger { padding: 4px !important; }
+
+          .bi-toast-host {
+            bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+            left: 12px;
+            right: 12px;
+            width: auto !important;
+            max-width: none !important;
+          }
+
+          .bi-stream-drawer {
+            left: 0;
+            right: 0;
+            top: auto;
+            bottom: calc(88px + env(safe-area-inset-bottom, 0px));
+            width: 100% !important;
+            max-width: none !important;
+            max-height: 55vh;
+            border-top-left-radius: 14px;
+            border-top-right-radius: 14px;
+            border-right: 1px solid var(--bi-border);
+            transform: translateY(100%);
+          }
+          .bi-stream-drawer--open { transform: translateY(0); }
+          .bi-stream-tab {
+            right: 12px;
+            bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+            top: auto;
+            transform: none;
+            writing-mode: horizontal-tb;
+            border-radius: 999px;
+            padding: 10px 14px !important;
+          }
+
+          .bi-trending-row {
+            grid-template-columns: 18px minmax(0, 1fr);
+            grid-template-rows: auto auto;
+          }
+          .bi-trending-row-art {
+            grid-column: 1 / -1;
+            justify-self: start;
+          }
+
+          .bi-admin-grid { grid-template-columns: 1fr; }
+          .bi-admin-member-head { display: none; }
+          .bi-admin-member-row {
+            grid-template-columns: 1fr;
+            gap: 8px;
+            align-items: start;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .bi-brand-tagline { display: none; }
+          .bi-brand { max-width: 52px !important; }
+          .bi-brand .island-display { display: none; }
+        }
+
         /* ── Mobile (≤720px) layout collapses ── */
         @media (max-width: 720px) {
-          /* Games page: side-by-side split + when/where stack to one column */
+          /* Games page: side-by-side split stacks to one column */
           .bi-games-split { grid-template-columns: 1fr !important; }
-          .bi-when-where { grid-template-columns: 1fr !important; }
-
-          /* Library rows/header: collapse the 6-col grid into a stacked card */
-          .bi-lib-head { display: none !important; }
-          .bi-lib-row {
-            display: flex !important;
-            flex-direction: column;
-            align-items: stretch;
-            gap: 8px;
-          }
 
           /* Palm frames eat too much width on phones — hide them */
           .bi-palm-frame { display: none !important; }

@@ -250,6 +250,7 @@ export function ToastHost({ toasts, onDismiss }: ToastHostProps) {
             width: "min(360px, calc(100vw - 24px))",
             maxWidth: "calc(100vw - 24px)"
           }}
+          className="bi-toast-host"
         >
           {toasts.map((toast) => {
             const toneStyle =

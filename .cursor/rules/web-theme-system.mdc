@@ -29,6 +29,9 @@ Injected by `SceneGlobalStyles` in `IslandSceneShell`:
 
 `useDayNight` sets `document.documentElement.dataset.theme` on toggle. Components stay token-driven — never hardcode colors that have a `--bi-*` equivalent.
 
+## Breakpoints (`islandTheme.breakpoints`)
+Canonical widths: `phone: 640`, `tablet: 768`, `navDesktop: 820`, `wide: 880`. Shared mobile utilities live in `IslandSceneShell` (`.bi-admin-grid`, `.bi-megamenu-trigger`, topbar narrow rules, etc.). Phone uses bottom `MobileTabBar`; tablet uses MegaMenu hamburger.
+
 ## Day/night context (apps/web/src/scene/useDayNight.tsx)
 ```ts
 const { mode, toggle, set, isTransitioning } = useDayNight()
