@@ -6,7 +6,7 @@ import { activityHref, pathForGame, pathForIslander } from "../lib/routes.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { LOGO_BG_URL } from "../assets.js";
 import { ActionCard, IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, PresenceRow, StatusDot, islandInputStyle, useCountUp, type StatusTone } from "../islandUi.js";
-import { NuggieBadge } from "../components/NuggieBadge.js";
+import { NuggieShowcase } from "../components/NuggieShowcase.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
@@ -590,12 +590,6 @@ function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
 
 // â"€â"€ Nuggies Snapshot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-const NUGGIE_SLOTS: Array<{ type: "title" | "flair" | "badge"; emoji: string; label: string }> = [
-  { type: "title", emoji: "🏷", label: "Title" },
-  { type: "flair", emoji: "✨", label: "Flair" },
-  { type: "badge", emoji: "🎖", label: "Badge" }
-];
-
 type DailyTx = { type: string; createdAt: string };
 
 // Daily reset boundary: midnight in America/Halifax (= 11pm ET year-round).
@@ -740,7 +734,6 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   const baseBalance = profile?.nuggieBalance;
   const optedOut = profile?.nuggiesOptedOut ?? false;
   const equipped = profile?.equippedItems ?? [];
-  const equippedCount = equipped.length;
   const lifetimeEarned = profile?.lifetimeEarned ?? 0;
 
   const [balanceOverride, setBalanceOverride] = useState<number | null>(null);
@@ -846,52 +839,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
           <div style={{ display: "flex", alignItems: "center", paddingBottom: 8, marginBottom: 2, borderBottom: `1px solid ${islandTheme.color.cardBorder}` }}>
             <MilestoneRankBadge lifetimeEarned={lifetimeEarned} size={64} variant="profile" />
           </div>
-          <div
-            className="island-mono"
-            style={{
-              display: "flex",
-              gap: 6,
-              fontSize: 12,
-              color: islandTheme.color.textMuted,
-              textTransform: "uppercase",
-              letterSpacing: "0.06em"
-            }}
-          >
-            <span>Equipped</span>
-            <span style={{ color: islandTheme.color.textPrimary }}>{equippedCount} / 3</span>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-            {NUGGIE_SLOTS.map((slot) => {
-              const item = equipped.find((e) => e.itemType === slot.type);
-              return item ? (
-                <div key={slot.type} style={{ display: "flex" }}>
-                  <NuggieBadge item={item} size="sm" />
-                </div>
-              ) : (
-                <div
-                  key={slot.type}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    gap: 4,
-                    padding: "4px 6px",
-                    borderRadius: 8,
-                    border: `1px dashed ${islandTheme.color.cardBorder}`,
-                    fontSize: 12,
-                    color: islandTheme.color.textMuted
-                  }}
-                  title={`No ${slot.label.toLowerCase()} equipped`}
-                >
-                  <span style={{ opacity: 0.5 }}>{slot.emoji}</span>
-                  <span className="island-mono" style={{ textTransform: "uppercase", letterSpacing: "0.05em", fontSize: 12 }}>
-                    {slot.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          <NuggieShowcase equipped={equipped} onShop={() => onNavigate("nuggies")} />
         </>
       ) : (
         <div style={{ fontSize: 12, color: islandTheme.color.textSubtle }}>

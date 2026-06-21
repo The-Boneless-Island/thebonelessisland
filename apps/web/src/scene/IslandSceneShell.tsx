@@ -1084,6 +1084,18 @@ function SceneGlobalStyles() {
           box-shadow: none;
         }
 
+        /* ── Nuggies showcase ("trophy case") slot lift ── */
+        .nuggie-showcase-slot {
+          transition: transform 180ms cubic-bezier(.2,.8,.2,1), filter 180ms ease;
+        }
+        .nuggie-showcase-slot:hover {
+          transform: translateY(-3px);
+          filter: brightness(1.12);
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .nuggie-showcase-slot:hover { transform: none; }
+        }
+
         /* ── Input / textarea / select focus ── */
         input:focus, textarea:focus, select:focus {
           outline: 2px solid var(--bi-primary-glow);
