@@ -20,7 +20,7 @@ export function SteamLogo({
 }) {
   return (
     <img
-      src="/steam-logo.png"
+      src="/steam-logo.webp"
       width={size}
       height={size}
       alt="Steam"

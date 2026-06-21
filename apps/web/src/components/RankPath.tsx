@@ -17,10 +17,10 @@ const N = RANK_TIERS.length;
 // Placed in the empty pockets so it sits behind the trail and shields.
 const TRAIL_ART = "/art/trail/";
 const DECOR: Array<{ href: string; cx: number; cy: number; w: number; h: number; op: number }> = [
-  { href: "tbi_island_overhead_mstrail_1.png", cx: 205, cy: 702, w: 300, h: 300, op: 0.92 },
-  { href: "tbi_pyramid_mstrail_2.png", cx: 366, cy: 452, w: 148, h: 148, op: 0.9 },
-  { href: "tbi_volcanobase_mstrail_3.png", cx: 118, cy: 298, w: 214, h: 117, op: 0.92 },
-  { href: "tbi_volcano_summit_mstrail_4.png", cx: 330, cy: 112, w: 224, h: 122, op: 0.94 }
+  { href: "tbi_island_overhead_mstrail_1.webp", cx: 205, cy: 702, w: 300, h: 300, op: 0.92 },
+  { href: "tbi_pyramid_mstrail_2.webp", cx: 366, cy: 452, w: 148, h: 148, op: 0.9 },
+  { href: "tbi_volcanobase_mstrail_3.webp", cx: 118, cy: 298, w: 214, h: 117, op: 0.92 },
+  { href: "tbi_volcano_summit_mstrail_4.webp", cx: 330, cy: 112, w: 224, h: 122, op: 0.94 }
 ];
 
 const VB_W = 480;

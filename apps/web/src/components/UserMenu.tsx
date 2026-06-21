@@ -410,7 +410,7 @@ function SteamNavItem({ linked, onClick }: { linked: boolean; onClick: () => voi
         }}
       >
         <img
-          src="/steam-logo.png"
+          src="/steam-logo.webp"
           width={18}
           height={18}
           alt="Steam"
