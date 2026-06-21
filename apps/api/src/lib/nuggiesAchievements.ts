@@ -212,14 +212,14 @@ export type MilestoneTier = {
 };
 
 export const MILESTONE_TIERS: MilestoneTier[] = [
-  { threshold:    500, label: "TUTORIAL ISLAND",  emblem: "🪵",   bonus:    50, grantKey: "milestone_rank_01", roleSettingKey: "milestone_role_rank_01" },
-  { threshold:  2_000, label: "SIDEKICK",         emblem: "🐢",   bonus:   200, grantKey: "milestone_rank_02", roleSettingKey: "milestone_role_rank_02" },
-  { threshold:  5_000, label: "REGULAR",          emblem: "🐚",   bonus:   500, grantKey: "milestone_rank_03", roleSettingKey: "milestone_role_rank_03" },
-  { threshold: 15_000, label: "RISING STAR",      emblem: "🌊",   bonus:  1500, grantKey: "milestone_rank_04", roleSettingKey: "milestone_role_rank_04" },
-  { threshold: 40_000, label: "A-LISTER",         emblem: "🏖️",   bonus:  4000, grantKey: "milestone_rank_05", roleSettingKey: "milestone_role_rank_05" },
-  { threshold:100_000, label: "KING OF THE HILL", emblem: "⛈️",   bonus: 10000, grantKey: "milestone_rank_06", roleSettingKey: "milestone_role_rank_06" },
-  { threshold:250_000, label: "BIG BOSS",         emblem: "🦑",   bonus: 25000, grantKey: "milestone_rank_07", roleSettingKey: "milestone_role_rank_07" },
-  { threshold:750_000, label: "MR. WORLDWIDE",    emblem: "🔱",   bonus: 75000, grantKey: "milestone_rank_08", roleSettingKey: "milestone_role_rank_08" },
+  { threshold:    500, label: "VAULT DWELLER",  emblem: "☢️",   bonus:    50, grantKey: "milestone_rank_01", roleSettingKey: "milestone_role_rank_01" },
+  { threshold:  2_000, label: "HARD STUCK SILVER",         emblem: "🥈",   bonus:   200, grantKey: "milestone_rank_02", roleSettingKey: "milestone_role_rank_02" },
+  { threshold:  5_000, label: "REGULAR",          emblem: "🍺",   bonus:   500, grantKey: "milestone_rank_03", roleSettingKey: "milestone_role_rank_03" },
+  { threshold: 15_000, label: "DIVINE",      emblem: "🔮",   bonus:  1500, grantKey: "milestone_rank_04", roleSettingKey: "milestone_role_rank_04" },
+  { threshold: 40_000, label: "GOT GUD",         emblem: "🔥",   bonus:  4000, grantKey: "milestone_rank_05", roleSettingKey: "milestone_role_rank_05" },
+  { threshold:100_000, label: "KING OF THE HILL", emblem: "💀",   bonus: 10000, grantKey: "milestone_rank_06", roleSettingKey: "milestone_role_rank_06" },
+  { threshold:250_000, label: "BIG BOSS",         emblem: "🪖",   bonus: 25000, grantKey: "milestone_rank_07", roleSettingKey: "milestone_role_rank_07" },
+  { threshold:750_000, label: "KAPPA",    emblem: "🧰",   bonus: 75000, grantKey: "milestone_rank_08", roleSettingKey: "milestone_role_rank_08" },
 ];
 
 /**
@@ -312,6 +312,7 @@ export async function checkMilestones(discordUserId: string): Promise<void> {
       }
 
       // 4. Outbox row for bot to pick up (Discord role + channel announce).
+      const nextTier = MILESTONE_TIERS[MILESTONE_TIERS.indexOf(tier) + 1];
       await db.query(
         `INSERT INTO bot_announcements (kind, payload) VALUES ('milestone.reached', $1::jsonb)`,
         [
@@ -322,6 +323,10 @@ export async function checkMilestones(discordUserId: string): Promise<void> {
             emblem: tier.emblem,
             bonus: tier.bonus,
             roleSettingKey: tier.roleSettingKey,
+            // For the bot's rank-card progress bar (optional consumer-side).
+            lifetimeEarned: lifetime,
+            nextThreshold: nextTier?.threshold ?? null,
+            nextLabel: nextTier?.label ?? null,
           }),
         ]
       );

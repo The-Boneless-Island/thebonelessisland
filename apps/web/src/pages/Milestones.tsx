@@ -299,9 +299,18 @@ function CurrentRankHero({
             fontSize: 42,
             boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
             flexShrink: 0,
+            overflow: "hidden",
           }}
         >
-          {currentTier?.emblem ?? "○"}
+          {currentTier ? (
+            <img
+              src={currentTier.art}
+              alt={currentTier.label}
+              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+            />
+          ) : (
+            "○"
+          )}
         </div>
         <div style={{ minWidth: 0 }}>
           <div
@@ -440,9 +449,20 @@ function RankTierCard({
             fontSize: reached ? 22 : 16,
             color: reached ? "#0f172a" : islandTheme.color.textMuted,
             flexShrink: 0,
+            overflow: "hidden",
           }}
         >
-          {reached ? tier.emblem : isNext ? "◎" : "○"}
+          {reached ? (
+            <img
+              src={tier.art}
+              alt={tier.label}
+              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+            />
+          ) : isNext ? (
+            "◎"
+          ) : (
+            "○"
+          )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
