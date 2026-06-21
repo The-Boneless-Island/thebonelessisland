@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import dotenv from "dotenv";
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   Client,
@@ -10,6 +11,7 @@ import {
   Events,
   GatewayIntentBits,
   MessageFlags,
+  PermissionFlagsBits,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -17,6 +19,7 @@ import {
   StringSelectMenuOptionBuilder,
 } from "discord.js";
 import { loadSecrets } from "./lib/secrets.js";
+import { renderRankCard } from "./cards/index.js";
 
 dotenv.config({ path: "../../.env" });
 
@@ -462,6 +465,12 @@ const commands = [
       o.setName("bet").setDescription("Amount to bet").setRequired(true).setMinValue(1)
     ),
 
+  // Admin: set each milestone role's icon to its coin art (needs Boost L2).
+  new SlashCommandBuilder()
+    .setName("sync-rank-icons")
+    .setDescription("Admin: set each milestone role's icon to its coin art")
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
   // Loans
   new SlashCommandBuilder()
     .setName("loan")
@@ -731,6 +740,20 @@ const TIER_ROLE_KEYS_IN_LADDER_ORDER = [
   "milestone_role_rank_08",
 ];
 
+// Ladder-ordered coin slug + accent color (mirrors MILESTONE_TIERS / the web
+// rankTiers.ts). Drives the rank card art + role-icon sync. Index-aligned with
+// TIER_ROLE_KEYS_IN_LADDER_ORDER above.
+const TIER_LADDER: Array<{ slug: string; accent: string }> = [
+  { slug: "vault-dweller", accent: "#94a3b8" },
+  { slug: "silver", accent: "#cbd5e1" },
+  { slug: "regular", accent: "#d97706" },
+  { slug: "divine", accent: "#c9a86a" },
+  { slug: "got-gud", accent: "#f59e0b" },
+  { slug: "king-of-the-hill", accent: "#818cf8" },
+  { slug: "big-boss", accent: "#8a9a52" },
+  { slug: "kappa", accent: "#f97316" },
+];
+
 type MilestonePayload = {
   discordUserId: string;
   label: string;
@@ -738,6 +761,11 @@ type MilestonePayload = {
   emblem: string;
   bonus: number;
   roleSettingKey: string;
+  // Optional (added by API for the rank card's progress bar); card degrades
+  // gracefully when absent.
+  lifetimeEarned?: number;
+  nextThreshold?: number | null;
+  nextLabel?: string | null;
 };
 
 type AchievementUnlockedPayload = {
@@ -812,9 +840,52 @@ async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<
     try {
       const channel = await client.channels.fetch(channelId);
       if (channel && channel.isSendable()) {
-        await channel.send(
-          `🌊 <@${payload.discordUserId}> reached **${payload.label}** ${payload.emblem} — ₦${payload.bonus.toLocaleString()} bonus paid!`
-        );
+        const idx = TIER_ROLE_KEYS_IN_LADDER_ORDER.indexOf(payload.roleSettingKey);
+        const tier = idx >= 0 ? TIER_LADDER[idx] : undefined;
+        let posted = false;
+
+        // Preferred: rich rank-up card embed. Falls back to the text line if the
+        // member, art, or render fails — never blocks the role grant below.
+        if (tier && guildId) {
+          try {
+            const guild = await client.guilds.fetch(guildId).catch(() => null);
+            const member = guild
+              ? await guild.members.fetch(payload.discordUserId).catch(() => null)
+              : null;
+            if (member) {
+              const card = await renderRankCard({
+                displayName: member.displayName,
+                avatarUrl: member.displayAvatarURL({ extension: "png", size: 128 }),
+                tierLabel: payload.label,
+                coinUrl: `${webOrigin}/art/milestones/${tier.slug}.png`,
+                accent: tier.accent,
+                bonus: payload.bonus,
+                currentThreshold: payload.threshold,
+                lifetimeEarned: payload.lifetimeEarned,
+                nextThreshold: payload.nextThreshold ?? undefined,
+                nextLabel: payload.nextLabel ?? undefined,
+              });
+              const embed = new EmbedBuilder()
+                .setColor(parseInt(tier.accent.slice(1), 16))
+                .setImage("attachment://rank.png");
+              await channel.send({
+                content: `🎉 <@${payload.discordUserId}> reached **${payload.label}** — +${payload.bonus.toLocaleString()} Nuggies!`,
+                embeds: [embed],
+                files: [new AttachmentBuilder(card, { name: "rank.png" })],
+                allowedMentions: { users: [payload.discordUserId] },
+              });
+              posted = true;
+            }
+          } catch (err) {
+            console.error(`[milestones] card post failed for ${payload.discordUserId}@${payload.label}`, err);
+          }
+        }
+
+        if (!posted) {
+          await channel.send(
+            `🌊 <@${payload.discordUserId}> reached **${payload.label}** ${payload.emblem} — ₦${payload.bonus.toLocaleString()} bonus paid!`
+          );
+        }
       }
     } catch (err) {
       console.error(`[milestones] channel post failed for ${payload.discordUserId}@${payload.label}`, err);
@@ -953,6 +1024,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   try {
     switch (interaction.commandName) {
+
+      // ── Admin: sync milestone role icons to coin art ──────────────────────
+      case "sync-rank-icons": {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (!guildId) {
+          await interaction.editReply("No guild configured.");
+          return;
+        }
+        const guild = await client.guilds.fetch(guildId).catch(() => null);
+        if (!guild) {
+          await interaction.editReply("Guild fetch failed.");
+          return;
+        }
+        let ok = 0;
+        let failed = 0;
+        for (let i = 0; i < TIER_ROLE_KEYS_IN_LADDER_ORDER.length; i++) {
+          const roleId = await getCachedSetting(TIER_ROLE_KEYS_IN_LADDER_ORDER[i]);
+          const slug = TIER_LADDER[i]?.slug;
+          if (!roleId || !slug) continue;
+          try {
+            const res = await fetch(`${webOrigin}/art/milestones/${slug}.png`);
+            if (!res.ok) throw new Error(`art fetch ${res.status}`);
+            const buf = Buffer.from(await res.arrayBuffer());
+            await guild.roles.edit(roleId, { icon: buf });
+            ok++;
+          } catch (err) {
+            console.error(`[rank-icons] ${slug} failed`, err);
+            failed++;
+          }
+        }
+        await interaction.editReply(`Rank icons synced — ${ok} ok, ${failed} failed.`);
+        return;
+      }
 
       // ── Existing recommendation commands ──────────────────────────────────
 

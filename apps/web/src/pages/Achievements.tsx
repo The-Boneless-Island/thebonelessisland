@@ -447,9 +447,20 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
                         ? `0 0 14px ${tier.reachedGlow}`
                         : "none",
                     transition: "box-shadow 240ms ease, transform 240ms ease",
+                    overflow: "hidden",
                   }}
                 >
-                  {reached ? tier.emblem : isNext ? "◎" : "○"}
+                  {reached ? (
+                    <img
+                      src={tier.art}
+                      alt={tier.label}
+                      style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+                    />
+                  ) : isNext ? (
+                    "◎"
+                  ) : (
+                    "○"
+                  )}
                 </div>
                 <div
                   style={{
