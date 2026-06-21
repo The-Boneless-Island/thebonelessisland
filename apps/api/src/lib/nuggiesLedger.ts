@@ -1,4 +1,5 @@
 import { db } from "../db/client.js";
+import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import { broadcast } from "./eventBus.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
 import {
@@ -233,8 +234,8 @@ export async function claimDaily(discordUserId: string): Promise<{ newBalance: n
   const { newBalance } = await applyTransaction({
     discordUserId,
     amount,
-    type: "daily",
-    reason: "Daily claim",
+    type: NUGGIES_TX_TYPE.daily,
+    reason: formatNuggiesReason({ type: NUGGIES_TX_TYPE.daily, amount }),
     skipOptedOutCheck: true, // already checked above
     skipDailyCapCheck: true,  // daily claim is exempt from cap
   });
@@ -411,15 +412,39 @@ export async function executeTrade(opts: {
     const refId = `trade:${opts.toDiscordUserId}`;
     const refIdIn = `trade:${opts.fromDiscordUserId}`;
 
+    const nameRows = await client.query<{ discord_user_id: string; name: string }>(
+      `SELECT u.discord_user_id,
+              COALESCE(gm.display_name, dp.username, u.discord_user_id) AS name
+       FROM users u
+       LEFT JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id
+       LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+       WHERE u.discord_user_id = ANY($1::text[])`,
+      [[opts.fromDiscordUserId, opts.toDiscordUserId]]
+    );
+    const nameByDiscord = new Map(nameRows.rows.map((r) => [r.discord_user_id, r.name]));
+    const toName = nameByDiscord.get(opts.toDiscordUserId) ?? "a crewmate";
+    const fromName = nameByDiscord.get(opts.fromDiscordUserId) ?? "a crewmate";
+
+    const tradeOutReason = formatNuggiesReason({
+      type: NUGGIES_TX_TYPE.trade_out,
+      amount: -opts.amount,
+      metadata: { counterpartyName: toName, feePct },
+    });
+    const tradeInReason = formatNuggiesReason({
+      type: NUGGIES_TX_TYPE.trade_in,
+      amount: received,
+      metadata: { counterpartyName: fromName },
+    });
+
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'trade_out', $3, $4)`,
-      [fromId, -opts.amount, `Sent to ${opts.toDiscordUserId} (${feePct}% fee)`, refId]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [fromId, -opts.amount, NUGGIES_TX_TYPE.trade_out, tradeOutReason, refId]
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'trade_in', $3, $4)`,
-      [toId, received, `Received from ${opts.fromDiscordUserId}`, refIdIn]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [toId, received, NUGGIES_TX_TYPE.trade_in, tradeInReason, refIdIn]
     );
 
     await client.query("COMMIT");
@@ -473,13 +498,25 @@ export async function processDefaultedLoans(): Promise<void> {
         );
         await client.query(
           `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-           VALUES ($1, $2, 'loan_forfeit_in', 'Loan defaulted — collateral received', $3)`,
-          [loan.lender_user_id, collateral, `loan:${loan.id}`]
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            loan.lender_user_id,
+            collateral,
+            NUGGIES_TX_TYPE.loan_forfeit_in,
+            formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_forfeit_in, amount: collateral }),
+            `loan:${loan.id}`,
+          ]
         );
         await client.query(
           `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-           VALUES ($1, $2, 'loan_forfeit_out', 'Loan defaulted — collateral forfeited', $3)`,
-          [loan.borrower_user_id, -collateral, `loan:${loan.id}`]
+           VALUES ($1, $2, $3, $4, $5)`,
+          [
+            loan.borrower_user_id,
+            -collateral,
+            NUGGIES_TX_TYPE.loan_forfeit_out,
+            formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_forfeit_out, amount: -collateral }),
+            `loan:${loan.id}`,
+          ]
         );
       }
       await client.query("COMMIT");

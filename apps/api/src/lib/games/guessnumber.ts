@@ -1,4 +1,8 @@
 import {
+  formatNuggiesReason,
+  NUGGIES_TX_TYPE,
+} from "@island/shared";
+import {
   InvalidGameInputError,
   type GameHandler,
   type GameState,
@@ -37,8 +41,13 @@ export const guessNumberHandler: GameHandler<GuessNumberInput> = {
     const { newBalance } = await gameInternals.applyLedger(ctx.client, {
       userId: ctx.userId,
       amount: net,
-      type: "game_guessnumber",
-      reason: `Guess number ${input.guess} (secret ${secret}, bet ${bet}, payout ${payout})`
+      type: NUGGIES_TX_TYPE.game_guessnumber,
+      reason: formatNuggiesReason({
+        type: NUGGIES_TX_TYPE.game_guessnumber,
+        amount: net,
+        metadata: { guess: input.guess, secret, bet, payout, won },
+      }),
+      referenceId: `game:${sessionId}`,
     });
 
     await gameInternals.deleteActiveGame(ctx.client, sessionId);

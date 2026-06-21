@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@island/shared": "0.1.0",
+    "@sentry/react": "^9.47.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router": "^7.17.0",

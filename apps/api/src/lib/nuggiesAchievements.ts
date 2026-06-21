@@ -1,3 +1,4 @@
+import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import { db } from "../db/client.js";
 import { recordEvent } from "./activityEvents.js";
 
@@ -302,8 +303,12 @@ export async function checkMilestones(discordUserId: string): Promise<void> {
         await ledger.applyTransaction({
           discordUserId,
           amount: tier.bonus,
-          type: "milestone_bonus",
-          reason: `Reached ${tier.label}`,
+          type: NUGGIES_TX_TYPE.milestone_bonus,
+          reason: formatNuggiesReason({
+            type: NUGGIES_TX_TYPE.milestone_bonus,
+            amount: tier.bonus,
+            metadata: { tierLabel: tier.label },
+          }),
           referenceId: tier.label,
           skipDailyCapCheck: true,
         });

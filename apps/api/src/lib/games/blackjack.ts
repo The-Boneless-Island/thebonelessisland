@@ -1,4 +1,8 @@
 import {
+  formatNuggiesReason,
+  NUGGIES_TX_TYPE,
+} from "@island/shared";
+import {
   InvalidGameInputError,
   type GameContext,
   type GameHandler,
@@ -118,17 +122,22 @@ async function settleHand(
   // Bet was already debited at start. Credit the payout (if any).
   const payout = payoutFor(state.bet, result);
   let newBalance: number | undefined;
+  const gameRef = `game:${session.id}`;
   if (payout > 0) {
     const r = await gameInternals.applyLedger(ctx.client, {
       userId: ctx.userId,
       amount: payout,
-      type: "game_blackjack",
-      reason: `Blackjack ${result} (bet ${state.bet}, payout ${payout})`
+      type: NUGGIES_TX_TYPE.game_blackjack,
+      reason: formatNuggiesReason({
+        type: NUGGIES_TX_TYPE.game_blackjack,
+        amount: payout,
+        metadata: { blackjackResult: result, bet: state.bet, payout },
+      }),
+      referenceId: gameRef,
     });
     newBalance = r.newBalance;
   } else {
-    // Loss: balance was already debited at start; no further write.
-    // Read current balance for the response.
+    await gameInternals.updateBlackjackBetReasonOnLoss(ctx.client, ctx.userId, session.id, state.bet);
     const r = await ctx.client.query<{ balance: string }>(
       "SELECT balance FROM nuggies_balances WHERE user_id = $1",
       [ctx.userId]
@@ -236,8 +245,13 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
     await gameInternals.applyLedger(ctx.client, {
       userId: ctx.userId,
       amount: -bet,
-      type: "game_blackjack_bet",
-      reason: `Blackjack bet placed (bet ${bet})`
+      type: NUGGIES_TX_TYPE.game_blackjack_bet,
+      reason: formatNuggiesReason({
+        type: NUGGIES_TX_TYPE.game_blackjack_bet,
+        amount: -bet,
+        metadata: { bet },
+      }),
+      referenceId: `game:${sessionId}`,
     });
 
     // Natural blackjack — resolve immediately so dealer hole-card is checked
@@ -301,8 +315,13 @@ export const blackjackHandler: GameHandler<Record<string, never>> = {
       await gameInternals.applyLedger(ctx.client, {
         userId: ctx.userId,
         amount: -state.originalBet,
-        type: "game_blackjack_bet",
-        reason: `Blackjack double-down (additional ${state.originalBet})`
+        type: NUGGIES_TX_TYPE.game_blackjack_bet,
+        reason: formatNuggiesReason({
+          type: NUGGIES_TX_TYPE.game_blackjack_bet,
+          amount: -state.originalBet,
+          metadata: { isDoubleDown: true, additionalBet: state.originalBet, bet: state.originalBet },
+        }),
+        referenceId: `game:${session.id}`,
       });
 
       const card = state.deck.pop();

@@ -179,11 +179,22 @@ newsCardsRouter.patch("/:id", requireParentRole, async (req, res) => {
     [id]
   );
   const card = result.rows[0] ? rowToCard(result.rows[0]) : null;
+
+  void recordEvent({
+    eventType: "news.card_updated",
+    actorDiscordUserId: String(res.locals.userId),
+    payload: { cardId: id, title: card?.title ?? body.title ?? "" },
+  });
+
   res.json({ card });
 });
 
 newsCardsRouter.delete("/:id", requireParentRole, async (req, res) => {
   const id = String(req.params.id);
+  const existing = await db.query<{ title: string }>(
+    `SELECT title FROM news_cards WHERE id::text = $1 AND archived_at IS NULL`,
+    [id]
+  );
   const update = await db.query(
     `UPDATE news_cards SET archived_at = NOW(), updated_at = NOW() WHERE id::text = $1 AND archived_at IS NULL`,
     [id]
@@ -192,5 +203,10 @@ newsCardsRouter.delete("/:id", requireParentRole, async (req, res) => {
     res.status(404).json({ error: "Card not found" });
     return;
   }
+  void recordEvent({
+    eventType: "news.card_archived",
+    actorDiscordUserId: String(res.locals.userId),
+    payload: { cardId: id, title: existing.rows[0]?.title ?? "" },
+  });
   res.json({ ok: true });
 });

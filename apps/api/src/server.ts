@@ -6,11 +6,15 @@ import helmet from "helmet";
 import { ZodError } from "zod";
 import { env } from "./config.js";
 import { installRedactor } from "./lib/logger.js";
+import { initSentry, Sentry } from "./lib/sentry.js";
+import { installProcessFatalHandlers, log } from "./lib/structuredLog.js";
 
 // Install console redactor immediately after env is parsed. Every log call
 // from this point on (including third-party libraries that use console)
 // will have any matching secret value replaced with [REDACTED].
 installRedactor();
+initSentry("api");
+installProcessFatalHandlers("api");
 import { requireSession } from "./lib/auth.js";
 import { addSubscriber, removeSubscriber, broadcast } from "./lib/eventBus.js";
 import { activityRouter } from "./routes/activity.js";
@@ -46,6 +50,7 @@ import { seedCuratedSources } from "./lib/news/curatedSources.js";
 import { loadSettings } from "./lib/serverSettings.js";
 import { isTaglineStale, refreshTaglines } from "./lib/taglineGenerator.js";
 import { runMigrations } from "./db/runMigrations.js";
+import { backfillNuggiesTransactionReasons } from "./db/backfillNuggiesReasons.js";
 import { snapshotCrewTrending } from "./lib/crewTrendingSnapshots.js";
 import { recommendationRouter } from "./routes/recommendations.js";
 import { steamRouter, syncAllOwnedGames } from "./routes/steam.js";
@@ -258,7 +263,24 @@ app.post(
   express.text({ type: "*/*", limit: "4kb" }),
   (req, res) => {
     if (typeof req.body === "string" && req.body.length > 0) {
-      console.log("[web-vitals]", req.body.slice(0, 500));
+      log.info("web-vitals", "beacon", { body: req.body.slice(0, 500) });
+    }
+    res.status(204).end();
+  }
+);
+
+app.post(
+  "/client-errors",
+  defaultLimiter,
+  requireSession,
+  express.text({ type: "*/*", limit: "8kb" }),
+  (req, res) => {
+    if (typeof req.body === "string" && req.body.length > 0) {
+      log.error("client-errors", "react render error", { body: req.body.slice(0, 2000) });
+      Sentry.captureMessage("client render error", {
+        level: "error",
+        extra: { body: req.body.slice(0, 2000) },
+      });
     }
     res.status(204).end();
   }
@@ -310,7 +332,11 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
     return;
   }
 
-  console.error(error);
+  log.error("api", "unhandled route error", {
+    err: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  Sentry.captureException(error);
   res.status(500).json({ error: "Internal server error" });
 });
 
@@ -348,6 +374,12 @@ async function bootstrap() {
   try {
     const { applied, skipped } = await runMigrations();
     console.log(`[boot] migrations: ${applied} applied, ${skipped} skipped`);
+    log.info("boot", "migrations complete", { applied, skipped });
+    try {
+      await backfillNuggiesTransactionReasons();
+    } catch (err) {
+      console.error("[boot] nuggies reason backfill failed — starting anyway:", err);
+    }
   } catch (err) {
     if (process.env.NODE_ENV === "production") {
       console.error("[boot] FATAL: migration runner failed — refusing to serve with a drifted schema:", err);

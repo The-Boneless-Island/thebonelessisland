@@ -1427,6 +1427,20 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         )
       };
     }
+    case "nuggies.admin_adjustment": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      const note = typeof payload.reason === "string" && payload.reason ? payload.reason : "crew adjustment";
+      return {
+        icon: "⚙️",
+        metaText: ago,
+        body: (
+          <>
+            {actorNode} made a crew adjustment for <ActorLink actor={event.target} /> —{" "}
+            <strong>{amount >= 0 ? "+" : ""}₦{amount.toLocaleString()}</strong> ({note}).
+          </>
+        )
+      };
+    }
     default:
       return {
         icon: "✨",

@@ -135,7 +135,7 @@ export function AdminPage(props: AdminPageProps) {
       case "sync":
         return <SyncAdminPage />;
       case "audit":
-        return <AuditAdminPage profileJson={props.profileJson} />;
+        return <AuditAdminPage />;
     }
   };
 

@@ -438,6 +438,14 @@ function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
       const amount = typeof payload.amount === "number" ? payload.amount : 0;
       return { action: "repaid", target: `₦${amount.toLocaleString()}`, detail: "Loan repaid" };
     }
+    case "nuggies.admin_adjustment": {
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      return {
+        action: "received a crew adjustment of",
+        target: `₦${Math.abs(amount).toLocaleString()}`,
+        detail: typeof payload.reason === "string" ? payload.reason : "Admin adjustment",
+      };
+    }
     default:
       return { action: "fired", target: event.eventType, detail: "Crew activity" };
   }

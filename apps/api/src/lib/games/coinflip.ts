@@ -1,4 +1,9 @@
 import {
+  formatNuggiesReason,
+  NUGGIES_TX_TYPE,
+  type NuggiesTxMetadata,
+} from "@island/shared";
+import {
   InvalidGameInputError,
   type GameHandler,
   type GameState,
@@ -33,8 +38,13 @@ export const coinflipHandler: GameHandler<CoinflipInput> = {
     const { newBalance } = await gameInternals.applyLedger(ctx.client, {
       userId: ctx.userId,
       amount: net,
-      type: "game_coinflip",
-      reason: `Coinflip ${input.call} → ${outcome} (bet ${bet}, payout ${payout})`
+      type: NUGGIES_TX_TYPE.game_coinflip,
+      reason: formatNuggiesReason({
+        type: NUGGIES_TX_TYPE.game_coinflip,
+        amount: net,
+        metadata: { call: input.call, outcome, bet, payout, won },
+      }),
+      referenceId: `game:${sessionId}`,
     });
 
     // Stateless game: clear the active-game slot inside the same txn.

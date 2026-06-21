@@ -10,11 +10,12 @@
   },
   "dependencies": {
     "@aws-sdk/client-ssm": "^3.1068.0",
-    "@island/shared": "0.1.0",
     "@fontsource/inter": "^5.2.8",
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.10",
+    "@island/shared": "0.1.0",
     "@napi-rs/canvas": "^1.0.0",
+    "@sentry/node": "^9.47.1",
     "discord.js": "^14.26.4",
     "dotenv": "^17.2.3"
   },

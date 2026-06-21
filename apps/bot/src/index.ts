@@ -20,13 +20,17 @@ import {
   StringSelectMenuOptionBuilder,
 } from "discord.js";
 import { loadSecrets } from "./lib/secrets.js";
+import { installRedactor } from "./lib/logger.js";
+import { initSentry, Sentry } from "./lib/sentry.js";
+import { installProcessFatalHandlers } from "./lib/structuredLog.js";
 import { renderRankCard } from "./cards/index.js";
 
 dotenv.config({ path: "../../.env" });
 
-// In prod with SECRETS_SOURCE=ssm, fetch secrets before any env-dependent
-// const is initialized below. No-op in dev.
 await loadSecrets();
+installRedactor();
+initSentry();
+installProcessFatalHandlers("bot");
 
 const token = process.env.DISCORD_BOT_TOKEN ?? "";
 const clientId = process.env.DISCORD_BOT_CLIENT_ID ?? "";

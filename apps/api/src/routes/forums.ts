@@ -1,3 +1,4 @@
+import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
@@ -584,8 +585,12 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
       void applyTransaction({
         discordUserId,
         amount: reward,
-        type: "earn",
-        reason: `Forum thread: ${title.slice(0, 50)}`,
+        type: NUGGIES_TX_TYPE.earn,
+        reason: formatNuggiesReason({
+          type: NUGGIES_TX_TYPE.earn,
+          amount: reward,
+          metadata: { threadTitle: title.slice(0, 50) },
+        }),
         referenceId: `forum_thread:${threadId}`,
       }).catch(() => undefined);
     }
@@ -800,8 +805,12 @@ forumsRouter.post("/threads/:id/posts", requireSession, async (req, res) => {
       void applyTransaction({
         discordUserId,
         amount: reward,
-        type: "earn",
-        reason: `Forum reply on: ${t.rows[0].title.slice(0, 50)}`,
+        type: NUGGIES_TX_TYPE.earn,
+        reason: formatNuggiesReason({
+          type: NUGGIES_TX_TYPE.earn,
+          amount: reward,
+          metadata: { threadTitle: t.rows[0].title.slice(0, 50), isForumReply: true },
+        }),
         referenceId: `forum_reply:${parseInt(p.rows[0].id, 10)}`,
       }).catch(() => undefined);
     }

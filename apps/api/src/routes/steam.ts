@@ -1,3 +1,4 @@
+import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import express from "express";
 import { z } from "zod";
 import { env } from "../config.js";
@@ -199,8 +200,8 @@ steamRouter.post("/link", async (req, res) => {
         await applyTransaction({
           discordUserId,
           amount,
-          type: "first_link",
-          reason: "First Steam account link bonus",
+          type: NUGGIES_TX_TYPE.first_link,
+          reason: formatNuggiesReason({ type: NUGGIES_TX_TYPE.first_link, amount }),
           referenceId: "first_steam_link",
           skipDailyCapCheck: true,
         });

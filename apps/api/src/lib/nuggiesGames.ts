@@ -16,6 +16,7 @@
 
 import type { PoolClient } from "pg";
 import { db } from "../db/client.js";
+import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import { broadcast } from "./eventBus.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
 import {
@@ -224,6 +225,24 @@ async function applyLedgerInTx(client: PoolClient, opts: {
   );
 
   return { newBalance };
+}
+
+async function updateBlackjackBetReasonOnLoss(
+  client: PoolClient,
+  userId: bigint,
+  sessionId: number,
+  totalLost: number
+): Promise<void> {
+  const reason = formatNuggiesReason({
+    type: NUGGIES_TX_TYPE.game_blackjack_bet,
+    amount: -totalLost,
+    metadata: { isLossSettlement: true, bet: totalLost },
+  });
+  await client.query(
+    `UPDATE nuggies_transactions SET reason = $1
+     WHERE user_id = $2 AND type = $3 AND reference_id = $4`,
+    [reason, userId, NUGGIES_TX_TYPE.game_blackjack_bet, `game:${sessionId}`]
+  );
 }
 
 // ── Cooldown check inside transaction ────────────────────────────────────────
@@ -599,6 +618,7 @@ export const gameInternals = {
   lockActiveGame,
   lockActiveGameByUser,
   updateActiveGame,
+  updateBlackjackBetReasonOnLoss,
   rowToActiveGame
 };
 

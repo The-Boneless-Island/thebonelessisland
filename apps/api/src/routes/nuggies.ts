@@ -4,6 +4,8 @@ import {
   calcLiquidity,
   calcRepayBreakdown,
   clampLoanDays,
+  formatNuggiesReason,
+  NUGGIES_TX_TYPE,
   PENDING_OFFER_TTL_HOURS,
 } from "@island/shared";
 import { Router } from "express";
@@ -503,8 +505,12 @@ nuggiesRouter.post("/shop/:itemId/buy", requireBotOrSession, async (req, res) =>
     const { newBalance } = await applyTransaction({
       discordUserId,
       amount: -price,
-      type: "spend",
-      reason: `Bought ${item.rows[0].name}`,
+      type: NUGGIES_TX_TYPE.spend,
+      reason: formatNuggiesReason({
+        type: NUGGIES_TX_TYPE.spend,
+        amount: -price,
+        metadata: { itemName: item.rows[0].name },
+      }),
       referenceId: `shop:${itemId}`,
     });
 
@@ -881,8 +887,18 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
       );
       await client.query(
         `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-         VALUES ($1, $2, 'loan_out', 'Collateral locked for loan', $3)`,
-        [userId, -collateral, `loan:${loanId}`]
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          userId,
+          -collateral,
+          NUGGIES_TX_TYPE.loan_out,
+          formatNuggiesReason({
+            type: NUGGIES_TX_TYPE.loan_out,
+            amount: -collateral,
+            metadata: { isCollateral: true },
+          }),
+          `loan:${loanId}`,
+        ]
       );
     }
 
@@ -898,13 +914,25 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'loan_out', 'Loan issued', $3)`,
-      [loan.rows[0].lender_user_id, -principal, `loan:${loanId}`]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        loan.rows[0].lender_user_id,
+        -principal,
+        NUGGIES_TX_TYPE.loan_out,
+        formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_out, amount: -principal }),
+        `loan:${loanId}`,
+      ]
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'loan_in', 'Loan received', $3)`,
-      [userId, principal, `loan:${loanId}`]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        userId,
+        principal,
+        NUGGIES_TX_TYPE.loan_in,
+        formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_in, amount: principal }),
+        `loan:${loanId}`,
+      ]
     );
 
     await client.query(
@@ -980,8 +1008,14 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'loan_repay', 'Loan repaid', $3)`,
-      [userId, -amountDue, `loan:${loanId}`]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        userId,
+        -amountDue,
+        NUGGIES_TX_TYPE.loan_repay,
+        formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_repay, amount: -amountDue }),
+        `loan:${loanId}`,
+      ]
     );
 
     // Lender receives amount_due
@@ -992,8 +1026,14 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'loan_repay', 'Loan repayment received', $3)`,
-      [lenderId, amountDue, `loan:${loanId}`]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        lenderId,
+        amountDue,
+        NUGGIES_TX_TYPE.loan_repay,
+        formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_repay, amount: amountDue }),
+        `loan:${loanId}`,
+      ]
     );
 
     // Return collateral to borrower
@@ -1004,8 +1044,18 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
       );
       await client.query(
         `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-         VALUES ($1, $2, 'loan_forfeit_in', 'Collateral returned after repayment', $3)`,
-        [userId, collateral, `loan:${loanId}`]
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          userId,
+          collateral,
+          NUGGIES_TX_TYPE.loan_forfeit_in,
+          formatNuggiesReason({
+            type: NUGGIES_TX_TYPE.loan_forfeit_in,
+            amount: collateral,
+            metadata: { collateralReturned: true },
+          }),
+          `loan:${loanId}`,
+        ]
       );
     }
 
@@ -1216,8 +1266,14 @@ nuggiesRouter.post("/market/:id/buy", requireBotOrSession, async (req, res) => {
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'market_buy', 'Marketplace purchase', $3)`,
-      [buyerId, -price, `market:${listingId}`]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        buyerId,
+        -price,
+        NUGGIES_TX_TYPE.market_buy,
+        formatNuggiesReason({ type: NUGGIES_TX_TYPE.market_buy, amount: -price }),
+        `market:${listingId}`,
+      ]
     );
 
     // Credit seller (minus fee — fee burns)
@@ -1228,8 +1284,14 @@ nuggiesRouter.post("/market/:id/buy", requireBotOrSession, async (req, res) => {
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-       VALUES ($1, $2, 'market_sell', 'Marketplace sale', $3)`,
-      [sellerId, sellerReceives, `market:${listingId}`]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        sellerId,
+        sellerReceives,
+        NUGGIES_TX_TYPE.market_sell,
+        formatNuggiesReason({ type: NUGGIES_TX_TYPE.market_sell, amount: sellerReceives }),
+        `market:${listingId}`,
+      ]
     );
 
     // Transfer item from seller to buyer
@@ -1303,11 +1365,22 @@ nuggiesRouter.post("/admin/grant", requireBotOrSession, requireParentRole, async
     const { newBalance } = await applyTransaction({
       discordUserId: toDiscordUserId,
       amount,
-      type: amount > 0 ? "admin_grant" : "admin_deduct",
-      reason,
+      type: amount > 0 ? NUGGIES_TX_TYPE.admin_grant : NUGGIES_TX_TYPE.admin_deduct,
+      reason: formatNuggiesReason({
+        type: amount > 0 ? NUGGIES_TX_TYPE.admin_grant : NUGGIES_TX_TYPE.admin_deduct,
+        amount,
+        metadata: { adminReason: reason },
+      }),
       createdByDiscordUserId: adminDiscordId,
       skipOptedOutCheck: true,
       skipDailyCapCheck: true,
+    });
+
+    void recordEvent({
+      eventType: "nuggies.admin_adjustment",
+      actorDiscordUserId: adminDiscordId,
+      targetDiscordUserId: toDiscordUserId,
+      payload: { amount, reason },
     });
 
     // NERFED earned title — fires on any admin grant or deduct.
@@ -1352,8 +1425,12 @@ nuggiesRouter.post("/admin/award-attendance/:gameNightId", requireBotOrSession, 
       await applyTransaction({
         discordUserId: attendee.discord_user_id,
         amount: rewardAmount,
-        type: "attendance",
-        reason: `Game night attendance reward (night #${gameNightId})`,
+        type: NUGGIES_TX_TYPE.attendance,
+        reason: formatNuggiesReason({
+          type: NUGGIES_TX_TYPE.attendance,
+          amount: rewardAmount,
+          metadata: { gameNightId },
+        }),
         referenceId: `attendance:${gameNightId}`,
         skipOptedOutCheck: true,
         skipDailyCapCheck: true,
@@ -1373,6 +1450,68 @@ nuggiesRouter.post("/admin/award-attendance/:gameNightId", requireBotOrSession, 
   }
 
   res.json({ awarded, errors });
+
+  if (awarded > 0) {
+    void recordEvent({
+      eventType: "nuggies.attendance_awarded",
+      actorDiscordUserId: String(res.locals.userId),
+      payload: {
+        gameNightId,
+        awardedCount: awarded,
+        amountPerPerson: rewardAmount,
+      },
+    });
+  }
+});
+
+// ── GET /nuggies/admin/transactions ───────────────────────────────────────────
+// Parent-only economy audit: recent ledger rows across all crew members.
+
+nuggiesRouter.get("/admin/transactions", requireBotOrSession, requireParentRole, async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1), 200);
+  const discordUserId = req.query.discordUserId ? String(req.query.discordUserId) : null;
+  const type = req.query.type ? String(req.query.type) : null;
+
+  const rows = await db.query<{
+    id: string;
+    amount: string;
+    type: string;
+    reason: string;
+    reference_id: string | null;
+    created_at: string;
+    discord_user_id: string;
+    display_name: string | null;
+    username: string | null;
+  }>(
+    `SELECT nt.id, nt.amount, nt.type, nt.reason, nt.reference_id, nt.created_at,
+            u.discord_user_id,
+            gm.display_name,
+            dp.username
+     FROM nuggies_transactions nt
+     INNER JOIN users u ON u.id = nt.user_id
+     LEFT JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id
+     LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+     WHERE ($1::text IS NULL OR u.discord_user_id = $1)
+       AND ($3::text IS NULL OR nt.type = $3)
+     ORDER BY nt.created_at DESC
+     LIMIT $2`,
+    [discordUserId, limit, type]
+  );
+
+  res.json({
+    transactions: rows.rows.map((r) => ({
+      id: parseInt(r.id, 10),
+      amount: parseInt(r.amount, 10),
+      type: r.type,
+      reason: r.reason,
+      referenceId: r.reference_id,
+      createdAt: r.created_at,
+      user: {
+        discordUserId: r.discord_user_id,
+        displayName: r.display_name ?? r.username ?? r.discord_user_id,
+      },
+    })),
+  });
 });
 
 // ── GET /nuggies/admin/overview ───────────────────────────────────────────────
@@ -1444,6 +1583,11 @@ nuggiesRouter.post("/admin/shop-item", requireBotOrSession, requireParentRole, a
        WHERE id = $7`,
       [name, description, price, itemType, JSON.stringify(itemData), isActive, id]
     );
+    void recordEvent({
+      eventType: "nuggies.shop_item_changed",
+      actorDiscordUserId: String(res.locals.userId),
+      payload: { action: "updated", itemId: id, name, price },
+    });
     res.json({ ok: true, id });
   } else {
     const r = await db.query<{ id: string }>(
@@ -1451,6 +1595,12 @@ nuggiesRouter.post("/admin/shop-item", requireBotOrSession, requireParentRole, a
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
       [name, description, price, itemType, JSON.stringify(itemData), isActive]
     );
-    res.json({ ok: true, id: parseInt(r.rows[0].id, 10) });
+    const newId = parseInt(r.rows[0].id, 10);
+    void recordEvent({
+      eventType: "nuggies.shop_item_changed",
+      actorDiscordUserId: String(res.locals.userId),
+      payload: { action: "created", itemId: newId, name, price },
+    });
+    res.json({ ok: true, id: newId });
   }
 });

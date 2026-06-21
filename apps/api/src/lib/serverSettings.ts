@@ -1,5 +1,6 @@
 import { env } from "../config.js";
 import { db } from "../db/client.js";
+import { recordEvent } from "./activityEvents.js";
 
 type SettingRow = {
   key: string;
@@ -110,12 +111,24 @@ export async function upsertSetting(
     return;
   }
 
+  const previous = row?.value ?? "";
+  const displayOld = row?.is_secret ? "[secret]" : previous;
+  const displayNew = row?.is_secret ? "[secret]" : trimmed;
+
   await db.query(
     `UPDATE server_settings
      SET value = $1, updated_at = NOW(), updated_by_user_id = $3
      WHERE key = $2`,
     [trimmed, key, userId]
   );
+
+  if (displayOld !== displayNew) {
+    void recordEvent({
+      eventType: "admin.settings_changed",
+      actorDiscordUserId: discordUserId,
+      payload: { key, oldValue: displayOld, newValue: displayNew },
+    });
+  }
 
   // Refresh the in-memory cache immediately so the next request sees the new value
   await loadSettings();

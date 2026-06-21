@@ -12,6 +12,7 @@ import { NuggieBadge } from "../components/NuggieBadge.js";
 import { ItemGlyph } from "../components/ItemGlyph.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { RankPath } from "../components/RankPath.js";
+import { getTransactionDisplay, renderTransactionIcon } from "../lib/nuggiesTransactionDisplay.js";
 import { islandTheme } from "../theme.js";
 import type {
   NuggieTransaction,
@@ -46,17 +47,6 @@ function relTime(iso: string) {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function txIcon(type: string, amount: number): React.ReactNode {
-  if (type === "daily") return <NuggieCoin size={18} />;
-  if (type === "attendance") return "🎮";
-  if (type.startsWith("game_")) return "🎲";
-  if (type === "first_link") return "🔗";
-  if (type === "admin_grant" || type === "admin_deduct") return "⚙️";
-  if (type === "spend" || type === "market_buy") return "🛒";
-  if (type === "trade_in" || type === "loan_in") return "📥";
-  if (type === "trade_out" || type === "loan_out") return "📤";
-  return amount >= 0 ? "➕" : "➖";
-}
 
 function hasDailyToday(txs: NuggieTransaction[]) {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Halifax" });
@@ -273,7 +263,9 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
         <div style={{ color: islandTheme.color.textMuted, fontSize: 14 }}>No transactions yet.</div>
       ) : (
         <div style={{ display: "grid", gap: 4, maxWidth: islandTheme.layout.listMaxWidth, width: "100%" }}>
-          {me.transactions.slice(0, 15).map((tx) => (
+          {me.transactions.slice(0, 15).map((tx) => {
+            const display = getTransactionDisplay(tx);
+            return (
             <div
               key={tx.id}
               style={{
@@ -286,11 +278,12 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
                 fontSize: 13,
               }}
             >
-              <span style={{ fontSize: 16, flexShrink: 0 }}>{txIcon(tx.type, tx.amount)}</span>
+              <span style={{ fontSize: 16, flexShrink: 0 }}>{renderTransactionIcon(display.iconKey)}</span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: islandTheme.color.textSecondary }}>
-                  {tx.reason}
+                  {display.title}
                 </div>
+                <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginTop: 1 }}>{display.subtitle}</div>
               </div>
               <span style={{ fontWeight: 700, flexShrink: 0, color: tx.amount >= 0 ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>
                 {tx.amount >= 0 ? "+" : ""}{fmt(tx.amount)}
@@ -299,7 +292,8 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
                 {relTime(tx.createdAt)}
               </span>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </IslandCard>

@@ -16,6 +16,36 @@ export {
   loanGuideEmbedFields,
   type LoanStatus,
 } from "./loanCopy.js";
+export {
+  NUGGIES_TX_TYPE,
+  casinoGameLabel,
+  describeNuggiesTransaction,
+  formatNuggiesReason,
+  groupNuggiesTransactions,
+  isLegacyNuggiesReason,
+  parseLegacyReason,
+  transactionCategoryLabel,
+  type GroupedNuggiesTransaction,
+  type NuggiesTransactionDisplay,
+  type NuggiesTransactionView,
+  type NuggiesTxMetadata,
+  type NuggiesTxType,
+} from "./nuggiesTransactionCopy.js";
+export { activityEventDetail, activityEventLabel } from "./activityEventCopy.js";
+export {
+  activityAuditDetailFields,
+  activityAuditScope,
+  activityAuditSummary,
+  auditRowsToCsv,
+  isAdminActivityEvent,
+  modLogActionLabel,
+  modLogAuditDetailFields,
+  modLogAuditSummary,
+  type ActivityAuditInput,
+  type AuditDetailField,
+  type AuditScope,
+  type ModLogAuditInput,
+} from "./auditLog.js";
 
 export type DiscordIdentity = {
   discordUserId: string;

@@ -1,6 +1,8 @@
+import { describeNuggiesTransaction } from "@island/shared";
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../api/client.js";
 import { IslandButton, IslandCard } from "../islandUi.js";
+import { displayTransactions, renderTransactionIcon } from "../lib/nuggiesTransactionDisplay.js";
 import { islandTheme } from "../theme.js";
 import type { NuggieTransaction, PageId } from "../types.js";
 
@@ -64,15 +66,18 @@ export default function NuggiesHistoryPage({ onNavigate }: NuggiesHistoryPagePro
       .finally(() => setLoadingMore(false));
   }
 
+  const displayed = useMemo(() => displayTransactions(transactions), [transactions]);
+
   const { biggestGain, biggestLoss } = useMemo(() => {
     let gain = 0;
     let loss = 0;
-    for (const tx of transactions) {
-      if (tx.amount > gain) gain = tx.amount;
-      if (tx.amount < loss) loss = tx.amount;
+    for (const tx of displayed) {
+      const amount = tx.netAmount;
+      if (amount > gain) gain = amount;
+      if (amount < loss) loss = amount;
     }
     return { biggestGain: gain, biggestLoss: loss };
-  }, [transactions]);
+  }, [displayed]);
 
   const hasMore = transactions.length < total;
 
@@ -132,7 +137,9 @@ export default function NuggiesHistoryPage({ onNavigate }: NuggiesHistoryPagePro
             No transactions yet. Earn or spend some Nuggies and they'll show up here.
           </div>
         ) : (
-          transactions.map((tx, i) => <TransactionRow key={tx.id} tx={tx} firstRow={i === 0} />)
+          displayed.map((tx, i) => (
+            <TransactionRow key={tx.groupedIds.join("-") || tx.id} tx={tx} firstRow={i === 0} />
+          ))
         )}
       </IslandCard>
 
@@ -165,31 +172,45 @@ function SummaryStat({ label, value, tone }: { label: string; value: string; ton
   );
 }
 
-function TransactionRow({ tx, firstRow }: { tx: NuggieTransaction; firstRow: boolean }) {
-  const isEarn = tx.amount >= 0;
+function TransactionRow({
+  tx,
+  firstRow
+}: {
+  tx: ReturnType<typeof displayTransactions>[number];
+  firstRow: boolean;
+}) {
+  const amount = tx.netAmount;
+  const isEarn = amount >= 0;
   const amountColor = isEarn ? islandTheme.color.successAccent : islandTheme.color.dangerAccent;
+  const display = describeNuggiesTransaction({
+    id: tx.id,
+    amount: tx.netAmount,
+    type: tx.type,
+    reason: tx.reason,
+    referenceId: tx.referenceId,
+    createdAt: tx.createdAt,
+  });
   return (
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "1fr auto",
+        gridTemplateColumns: "auto 1fr auto",
         gap: 12,
         padding: "12px 16px",
         alignItems: "center",
         borderTop: firstRow ? "none" : `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
+      <span style={{ fontSize: 16, width: 22, textAlign: "center" }}>{renderTransactionIcon(display.iconKey)}</span>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 14 }}>{tx.reason}</div>
-        <div
-          className="island-mono"
-          style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2, textTransform: "uppercase", letterSpacing: "0.04em" }}
-        >
-          {tx.type} · {relativeAgo(tx.createdAt)}
+        <div style={{ fontWeight: 700, fontSize: 14 }}>{display.title}</div>
+        <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>
+          {display.subtitle}
+          {tx.createdAt ? ` · ${relativeAgo(tx.createdAt)}` : ""}
         </div>
       </div>
       <span className="island-mono" style={{ fontWeight: 700, fontSize: 15, color: amountColor, whiteSpace: "nowrap" }}>
-        {isEarn ? "+" : "-"}₦{Math.abs(tx.amount).toLocaleString()}
+        {isEarn ? "+" : "-"}₦{Math.abs(amount).toLocaleString()}
       </span>
     </div>
   );
