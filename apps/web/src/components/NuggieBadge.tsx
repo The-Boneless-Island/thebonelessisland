@@ -1,5 +1,6 @@
 import { islandTagStyle } from "../islandUi.js";
 import { EquippedItem, NuggiesShopItem } from "../types.js";
+import { ItemGlyph } from "./ItemGlyph.js";
 
 type Item = EquippedItem | NuggiesShopItem;
 
@@ -22,7 +23,7 @@ export function NuggieBadge({ item, size = "md" }: Props) {
         ...(size === "md" ? { fontSize: 12, padding: "2px 8px" } : {})
       }}
     >
-      <span>{itemData.emoji}</span>
+      <ItemGlyph itemData={itemData} size={size === "md" ? 16 : 14} fallback="" />
       {label && <span>{label}</span>}
     </span>
   );

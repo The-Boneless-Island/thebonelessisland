@@ -3,6 +3,7 @@ import { apiFetch } from "../api/client.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { IslandCard, IslandEmptyState, IslandSkeleton, IslandSkeletonCard } from "../islandUi.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
+import { ItemGlyph } from "../components/ItemGlyph.js";
 import {
   MILESTONES,
   RANK_TIERS,
@@ -16,7 +17,7 @@ type EarnedAchievement = {
   name: string;
   description: string;
   itemType: "title" | "flair" | "badge";
-  itemData: { emoji?: string; label?: string; color?: string };
+  itemData: { emoji?: string; label?: string; color?: string; image?: string };
   unlocked: boolean;
   unlockedAt: string | null;
   equipped: boolean;
@@ -527,7 +528,6 @@ function AchievementCard({
   equipPending?: boolean;
 }) {
   const { id, unlocked, equipped, name, description, itemData, unlockedAt, itemType } = achievement;
-  const emoji = itemData.emoji ?? "✨";
 
   return (
     <div
@@ -562,7 +562,7 @@ function AchievementCard({
             filter: unlocked ? "none" : "grayscale(0.7)",
           }}
         >
-          {unlocked ? emoji : "🔒"}
+          {unlocked ? <ItemGlyph itemData={itemData} size={22} /> : "🔒"}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
