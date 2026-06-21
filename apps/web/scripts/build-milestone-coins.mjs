@@ -85,7 +85,34 @@ for (const t of TIERS) {
     .asPng();
   writeFileSync(join(DIR, `${t.out}.png`), png);
 
+  // "Locked" variant — a "guess-that-Pokémon" silhouette: the same subject art
+  // recolored to a near-black shape (feColorMatrix maps RGB to a fixed dark,
+  // keeps alpha) on a muted gray disc. Shown on the ladder for tiers not yet
+  // reached, so members see the shape they're working toward.
+  const lockedSvg = `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${t.label} (locked)">
+  <defs>
+    <radialGradient id="rim" cx=".5" cy=".32" r=".8"><stop offset="0" stop-color="#4b515a"/><stop offset=".55" stop-color="#2e333a"/><stop offset="1" stop-color="#15171b"/></radialGradient>
+    <radialGradient id="scene" cx=".5" cy=".42" r=".72"><stop offset="0" stop-color="#888f9a"/><stop offset="1" stop-color="#3a3f47"/></radialGradient>
+    <clipPath id="clip"><circle cx="50" cy="50" r="37"/></clipPath>
+    <filter id="sil" x="-10%" y="-10%" width="120%" height="120%"><feColorMatrix type="matrix" values="0 0 0 0 0.085  0 0 0 0 0.095  0 0 0 0 0.11  0 0 0 1 0"/></filter>
+  </defs>
+  <circle cx="50" cy="50" r="49" fill="url(#rim)"/>
+  <circle cx="50" cy="50" r="49" fill="none" stroke="#15171b" stroke-width="1" opacity=".5"/>
+  <circle cx="50" cy="50" r="40.5" fill="#15171b"/>
+  <circle cx="50" cy="50" r="37" fill="url(#scene)"/>
+  <g clip-path="url(#clip)">
+    <image href="data:image/png;base64,${b64}" x="${x}" y="${y}" width="${w}" height="${h}" preserveAspectRatio="${fit}" filter="url(#sil)"/>
+  </g>
+  <circle cx="50" cy="50" r="37" fill="none" stroke="#5a616b" stroke-width="1.2" opacity=".5"/>
+</svg>
+`;
+  writeFileSync(join(DIR, `${t.out}-locked.svg`), lockedSvg);
+  const lockedPng = new Resvg(lockedSvg, { fitTo: { mode: "width", value: 512 } })
+    .render()
+    .asPng();
+  writeFileSync(join(DIR, `${t.out}-locked.png`), lockedPng);
+
   console.log(
-    `wrote ${t.out}.svg (${(svg.length / 1024).toFixed(0)} KB) + ${t.out}.png (${(png.length / 1024).toFixed(0)} KB)`,
+    `wrote ${t.out}.svg/.png + ${t.out}-locked.svg/.png`,
   );
 }
