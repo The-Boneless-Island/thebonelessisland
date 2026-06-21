@@ -17,3 +17,18 @@
 # pull the rebuilt image automatically once Caddy republishes on Go 1.26.4+.
 # REMOVE this line then (the CVE will simply stop appearing).
 CVE-2026-42504
+
+# CVE-2026-12151 — undici DoS (unbounded memory) in undici 6.24.1, pulled
+# transitively by discord.js (@discordjs/rest) for the Nuggie bot. Hoists to the
+# root node_modules, so it appears in all three images' scans.
+#
+# Why waived: discord.js pins undici 6.x and there is no non-breaking root bump —
+# an npm `overrides` to 6.27.0 does not reach the workspace lockfile that `npm ci`
+# installs from, and force-regenerating the lock risks broad version drift right
+# before deploy. The finding is a denial-of-service (not RCE), and the bot's
+# undici only makes outbound calls to Discord's own API — no attacker-controlled
+# host is reachable through it.
+#
+# Revisit: remove once discord.js ships a release depending on undici >= 6.27.0
+# (then `npm update discord.js` and this line stops matching).
+CVE-2026-12151
