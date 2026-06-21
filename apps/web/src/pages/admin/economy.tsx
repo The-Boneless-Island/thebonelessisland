@@ -5,6 +5,7 @@ import { apiFetch } from "../../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { GameNight, GuildMember, NuggiesShopItem, ServerSetting } from "../../types.js";
+import { ItemGlyph } from "../../components/ItemGlyph.js";
 import { AdminStatusBanner, InlineSettings, SubsectionTitle } from "./adminUi.js";
 import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
@@ -254,7 +255,7 @@ export function ShopAdminPage() {
           ) : (
             shopItems.map((item) => (
               <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderRadius: 8, background: islandTheme.color.panelMutedBg, fontSize: 13 }}>
-                <span style={{ fontSize: 18 }}>{item.itemData.emoji}</span>
+                <ItemGlyph itemData={item.itemData} size={18} />
                 <span style={{ flex: 1, fontWeight: 600 }}>{item.name}</span>
                 <span style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "capitalize" }}>{item.itemType}</span>
                 <span style={{ fontWeight: 700, color: ACCENT }}>₦{item.price.toLocaleString()}</span>

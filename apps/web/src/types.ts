@@ -329,7 +329,7 @@ export type EquippedItem = {
   id: number;
   name: string;
   itemType: "title" | "flair" | "badge";
-  itemData: { emoji: string; label?: string; color: string };
+  itemData: { emoji: string; label?: string; color: string; image?: string };
 };
 
 export type NuggieTransaction = {
@@ -347,7 +347,7 @@ export type NuggiesShopItem = {
   description: string;
   price: number;
   itemType: "title" | "flair" | "badge";
-  itemData: { emoji: string; label?: string; color: string };
+  itemData: { emoji: string; label?: string; color: string; image?: string };
   owned: boolean;
   equipped: boolean;
 };
@@ -357,7 +357,7 @@ export type NuggiesInventoryItem = {
   name: string;
   description?: string;
   itemType: "title" | "flair" | "badge";
-  itemData: { emoji: string; label?: string; color: string };
+  itemData: { emoji: string; label?: string; color: string; image?: string };
   price: number;
   equipped: boolean;
   purchasedAt: string;
