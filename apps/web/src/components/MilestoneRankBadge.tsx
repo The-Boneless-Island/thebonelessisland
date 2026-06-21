@@ -1,43 +1,75 @@
-import { findCurrentTier } from "../data/rankTiers.js";
+import { findCurrentTier, type RankTier } from "../data/rankTiers.js";
 import { islandTheme } from "../theme.js";
 
-// Auto "highest reached" milestone rank, shown as the tier coin on the homepage
-// Nuggies card + profile pages. Rank is derived from lifetime-earned Nuggies
-// (same threshold logic as the rank ladder), so it always reflects the member's
-// current tier with no equip step. Renders nothing below the first tier.
+/** Badge art is 100×118 — keep aspect everywhere we render rank icons. */
+export const RANK_BADGE_ASPECT = 118 / 100;
+
+export function rankBadgeHeight(width: number): number {
+  return Math.round(width * RANK_BADGE_ASPECT);
+}
+
+type RankBadgeArtProps = {
+  tier: RankTier;
+  reached?: boolean;
+  width: number;
+  alt?: string;
+  glow?: boolean;
+};
+
+/** Shield badge image — art SVG includes its own frame; no circular crop. */
+export function RankBadgeArt({ tier, reached = true, width, alt, glow = true }: RankBadgeArtProps) {
+  const height = rankBadgeHeight(width);
+  const src = reached ? tier.art : tier.artLocked;
+  return (
+    <img
+      src={src}
+      alt={alt ?? tier.label}
+      width={width}
+      height={height}
+      style={{
+        width,
+        height,
+        display: "block",
+        flexShrink: 0,
+        filter: glow && reached ? `drop-shadow(0 0 14px ${tier.reachedGlow})` : undefined,
+        opacity: reached ? 1 : 0.88,
+      }}
+    />
+  );
+}
+
+// Auto "highest reached" milestone rank on the homepage Nuggies card + profile pages.
 export function MilestoneRankBadge({
   lifetimeEarned,
   size = 44,
   showLabel = true,
+  variant = "default",
 }: {
   lifetimeEarned: number;
   size?: number;
   showLabel?: boolean;
+  variant?: "default" | "profile";
 }) {
   const tier = findCurrentTier(lifetimeEarned);
   if (!tier) return null;
+
+  const isProfile = variant === "profile";
+  const badgeWidth = size;
+  const rankLabelSize = isProfile ? 11 : 10;
+  const tierLabelSize = isProfile ? 14 : 12;
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }} title={`Rank: ${tier.label}`}>
-      <img
-        src={tier.art}
-        alt={tier.label}
-        width={size}
-        height={size}
-        style={{
-          width: size,
-          height: size,
-          borderRadius: 999,
-          display: "block",
-          flexShrink: 0,
-          boxShadow: `0 0 12px ${tier.reachedGlow}`,
-        }}
-      />
+    <div
+      style={{ display: "flex", alignItems: "center", gap: isProfile ? 12 : 8 }}
+      title={`Rank: ${tier.label}`}
+    >
+      <RankBadgeArt tier={tier} width={badgeWidth} />
       {showLabel ? (
-        <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
+        <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
           <span
             className="island-mono"
             style={{
-              fontSize: 10,
+              fontSize: rankLabelSize,
               letterSpacing: "0.1em",
               color: islandTheme.color.textMuted,
               textTransform: "uppercase",
@@ -48,7 +80,7 @@ export function MilestoneRankBadge({
           <span
             className="island-mono"
             style={{
-              fontSize: 12,
+              fontSize: tierLabelSize,
               fontWeight: 700,
               letterSpacing: "0.05em",
               color: tier.reachedTextColor,

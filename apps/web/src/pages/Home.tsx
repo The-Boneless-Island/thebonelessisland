@@ -843,8 +843,8 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
 
       {!optedOut ? (
         <>
-          <div style={{ display: "flex", alignItems: "center", paddingBottom: 6, marginBottom: 2, borderBottom: `1px solid ${islandTheme.color.cardBorder}` }}>
-            <MilestoneRankBadge lifetimeEarned={lifetimeEarned} size={40} />
+          <div style={{ display: "flex", alignItems: "center", paddingBottom: 8, marginBottom: 2, borderBottom: `1px solid ${islandTheme.color.cardBorder}` }}>
+            <MilestoneRankBadge lifetimeEarned={lifetimeEarned} size={64} variant="profile" />
           </div>
           <div
             className="island-mono"

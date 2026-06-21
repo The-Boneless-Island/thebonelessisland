@@ -10,6 +10,7 @@ import {
   findCurrentTier,
   findNextTier,
 } from "../data/rankTiers.js";
+import { RankBadgeArt, rankBadgeHeight } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
 
 type EarnedAchievement = {
@@ -289,28 +290,19 @@ function CurrentRankHero({
       >
         <div
           style={{
-            width: 84,
-            height: 84,
-            borderRadius: 999,
-            background: "rgba(15, 23, 42, 0.35)",
-            border: "2px solid rgba(255,255,255,0.4)",
+            width: 96,
+            height: rankBadgeHeight(96),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: 42,
-            boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
             flexShrink: 0,
-            overflow: "hidden",
+            filter: "drop-shadow(0 12px 32px rgba(0,0,0,0.35))",
           }}
         >
           {currentTier ? (
-            <img
-              src={currentTier.art}
-              alt={currentTier.label}
-              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
-            />
+            <RankBadgeArt tier={currentTier} width={96} />
           ) : (
-            "○"
+            <span style={{ fontSize: 42, opacity: 0.5 }}>○</span>
           )}
         </div>
         <div style={{ minWidth: 0 }}>
@@ -436,37 +428,8 @@ function RankTierCard({
         gap: 10,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: 999,
-            background: reached ? tier.reachedGrad : islandTheme.color.panelBg,
-            border: `2px solid ${reached ? tier.reachedBorder : tier.nextBorder}`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: reached ? 22 : 16,
-            color: reached ? "#0f172a" : islandTheme.color.textMuted,
-            flexShrink: 0,
-            overflow: "hidden",
-          }}
-        >
-          {reached ? (
-            <img
-              src={tier.art}
-              alt={tier.label}
-              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
-            />
-          ) : (
-            <img
-              src={tier.artLocked}
-              alt={`${tier.label} (locked)`}
-              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
-            />
-          )}
-        </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <RankBadgeArt tier={tier} reached={reached} width={52} glow={reached || isNext} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             className="island-mono"

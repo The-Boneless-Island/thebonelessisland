@@ -9,6 +9,7 @@ import { NuggieBadge } from "../components/NuggieBadge.js";
 import { ItemGlyph } from "../components/ItemGlyph.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
+import { RankBadgeArt, rankBadgeHeight } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
 import type {
   NuggieTransaction,
@@ -402,12 +403,13 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
       {/* Milestones */}
       <IslandCard as="section" style={{ display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Rank</div>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
           {MILESTONES.map((m, i) => {
             const reached = me.lifetimeEarned >= m;
             const isNext = !reached && (i === 0 || me.lifetimeEarned >= MILESTONES[i - 1]);
             const tier = RANK_TIERS[i];
             const isApex = i === RANK_TIERS.length - 1;
+            const badgeW = 64;
             return (
               <div
                 key={m}
@@ -415,65 +417,36 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
                   display: "flex",
                   flexDirection: "column",
                   alignItems: "center",
-                  gap: 6,
-                  opacity: reached ? 1 : isNext ? 0.92 : 0.4,
-                  flex: "1 1 64px",
-                  minWidth: 64,
+                  gap: 8,
+                  opacity: reached ? 1 : isNext ? 0.92 : 0.45,
+                  flex: "1 1 72px",
+                  minWidth: 72,
                 }}
               >
                 <div
                   className={reached && isApex ? "bi-rank-apex-pulse" : undefined}
                   style={{
-                    width: 52,
-                    height: 52,
-                    borderRadius: 999,
-                    background: reached
-                      ? tier.reachedGrad
-                      : isNext
-                        ? islandTheme.color.panelBg
-                        : islandTheme.color.panelMutedBg,
-                    border: reached
-                      ? `2px solid ${tier.reachedBorder}`
-                      : isNext
-                        ? `2px solid ${tier.nextBorder}`
-                        : `1px solid ${islandTheme.color.border}`,
+                    width: badgeW,
+                    height: rankBadgeHeight(badgeW),
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    fontSize: reached ? 22 : 16,
-                    color: reached ? islandTheme.color.textDark : islandTheme.color.textMuted,
-                    boxShadow: reached
-                      ? `0 0 18px ${tier.reachedGlow}, inset 0 0 0 1px rgba(255,255,255,0.18)`
-                      : isNext
-                        ? `0 0 14px ${tier.reachedGlow}`
-                        : "none",
-                    transition: "box-shadow 240ms ease, transform 240ms ease",
-                    overflow: "hidden",
+                    transition: "transform 240ms ease",
+                    transform: isNext ? "scale(1.04)" : undefined,
                   }}
                 >
-                  {reached ? (
-                    <img
-                      src={tier.art}
-                      alt={tier.label}
-                      style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
-                    />
-                  ) : (
-                    <img
-                      src={tier.artLocked}
-                      alt={`${tier.label} (locked)`}
-                      style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
-                    />
-                  )}
+                  <RankBadgeArt tier={tier} reached={reached} width={badgeW} glow={reached || isNext} />
                 </div>
                 <div
                   style={{
-                    fontSize: 12,
+                    fontSize: 11,
                     color: reached ? tier.reachedTextColor : islandTheme.color.textMuted,
                     fontFamily: islandTheme.font.mono,
-                    letterSpacing: "0.08em",
+                    letterSpacing: "0.06em",
                     fontWeight: reached ? 700 : 500,
                     textAlign: "center",
                     lineHeight: 1.2,
+                    maxWidth: 88,
                   }}
                 >
                   {MILESTONE_LABELS[i]}

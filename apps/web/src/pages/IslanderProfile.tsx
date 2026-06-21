@@ -327,7 +327,7 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
             </div>
             {nuggies.lifetimeEarned > 0 ? (
               <div style={{ marginTop: 2 }}>
-                <MilestoneRankBadge lifetimeEarned={nuggies.lifetimeEarned} size={40} />
+                <MilestoneRankBadge lifetimeEarned={nuggies.lifetimeEarned} size={64} variant="profile" />
               </div>
             ) : null}
             {presence.richPresenceText ? (

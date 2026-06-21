@@ -68,7 +68,7 @@ export async function renderRankCard(opts: RankCardOpts): Promise<Buffer> {
     ctx.fill();
   }
 
-  if (coin) drawImageContain(ctx, coin, 700, 50, 165, 165);
+  if (coin) drawImageContain(ctx, coin, 688, 42, 140, 165);
 
   // Text block.
   const tx = 232;

@@ -13,6 +13,8 @@ export function NuggieBadge({ item, size = "md" }: Props) {
   const { itemData, itemType } = item;
   const isTitle = itemType === "title";
   const label = isTitle && itemData.label ? ` ${itemData.label}` : "";
+  const milestoneArt = Boolean(itemData.image?.includes("/art/milestones/"));
+  const glyphSize = size === "md" ? 16 : milestoneArt ? 24 : 14;
 
   return (
     <span
@@ -23,7 +25,7 @@ export function NuggieBadge({ item, size = "md" }: Props) {
         ...(size === "md" ? { fontSize: 12, padding: "2px 8px" } : {})
       }}
     >
-      <ItemGlyph itemData={itemData} size={size === "md" ? 16 : 14} fallback="" />
+      <ItemGlyph itemData={itemData} size={glyphSize} fallback="" />
       {label && <span>{label}</span>}
     </span>
   );

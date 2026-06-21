@@ -1,8 +1,12 @@
-// Renders a Nuggies item's icon: real art when `itemData.image` is set,
-// otherwise the emoji placeholder. Single swap point so every item surface
-// (badges, inventory, shop, achievements) lights up automatically as art
-// lands for each item — no per-site change needed when a new image is added.
+import { rankBadgeHeight } from "./MilestoneRankBadge.js";
+
+// Renders a Nuggies item icon: real art when `itemData.image` is set, otherwise emoji.
+// Milestone rank badges keep shield aspect via rankBadgeHeight().
 type GlyphData = { emoji?: string; image?: string };
+
+function isMilestoneBadgeArt(src?: string): boolean {
+  return Boolean(src?.includes("/art/milestones/"));
+}
 
 export function ItemGlyph({
   itemData,
@@ -14,16 +18,19 @@ export function ItemGlyph({
   fallback?: string;
 }) {
   if (itemData.image) {
+    const milestone = isMilestoneBadgeArt(itemData.image);
+    const width = size;
+    const height = milestone ? rankBadgeHeight(size) : size;
     return (
       <img
         src={itemData.image}
         alt=""
         aria-hidden="true"
-        width={size}
-        height={size}
+        width={width}
+        height={height}
         style={{
-          width: size,
-          height: size,
+          width,
+          height,
           objectFit: "contain",
           display: "inline-block",
           verticalAlign: "middle",

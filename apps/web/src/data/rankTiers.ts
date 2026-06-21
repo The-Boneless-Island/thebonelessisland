@@ -4,7 +4,7 @@ export type RankTier = {
   /** One-time Nuggie bonus paid when the tier is first reached. */
   bonus: number;
   emblem: string;
-  /** Path to the illustrated coin art shown when the tier is reached. */
+  /** Path to the illustrated badge art shown when the tier is reached. */
   art: string;
   /** Path to the "locked" silhouette variant, shown before the tier is reached. */
   artLocked: string;
