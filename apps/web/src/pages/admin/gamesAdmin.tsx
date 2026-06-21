@@ -5,58 +5,70 @@ import { apiFetch } from "../../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { Recommendation } from "../../types.js";
-import { Field, Slider, smallBtn, SubsectionTitle } from "./adminUi.js";
+import { AdminTabs, Field, Slider, smallBtn, SubsectionTitle } from "./adminUi.js";
 
 // ── Game Library ─────────────────────────────────────────────────────────────
 
 export function LibraryAdminPage() {
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <IslandCard id="library-featured" style={{ padding: 16 }}>
-        <SubsectionTitle>Featured pick</SubsectionTitle>
-        <Field label="Game of the Month">
-          <input defaultValue="Deep Sea Dunkers: The Kraken's Hoard" style={{ ...islandInputStyle, width: "100%" }} />
-        </Field>
-        <Field label="Override blurb">
-          <input
-            defaultValue="Co-op submarine looting in haunted reefs."
-            style={{ ...islandInputStyle, width: "100%" }}
-          />
-        </Field>
-        <IslandButton variant="primary">Save</IslandButton>
-      </IslandCard>
-      <IslandCard id="library-tags" style={{ padding: 16 }}>
-        <SubsectionTitle>Tag overrides</SubsectionTitle>
-        {[
-          { game: "Lethal Company", tags: "horror, co-op" },
-          { game: "Helldivers II", tags: "co-op, shooter" },
-          { game: "Stardew Valley", tags: "cozy, co-op" }
-        ].map((row, i) => (
-          <div
-            key={row.game}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr auto",
-              gap: 12,
-              padding: "10px 0",
-              borderTop: i === 0 ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
-              alignItems: "center"
-            }}
-          >
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{row.game}</div>
-            <span
-              className="island-mono"
-              style={{ fontSize: 12, color: islandTheme.color.textSubtle }}
-            >
-              {row.tags}
-            </span>
-            <button type="button" className="island-btn" style={smallBtn("transparent", islandTheme.color.textMuted, true)}>
-              Edit
-            </button>
-          </div>
-        ))}
-      </IslandCard>
-    </div>
+    <AdminTabs page="library" tabs={[
+      {
+        anchor: "library-featured",
+        label: "Featured",
+        content: (
+          <IslandCard style={{ padding: 16 }}>
+            <SubsectionTitle>Featured pick</SubsectionTitle>
+            <Field label="Game of the Month">
+              <input defaultValue="Deep Sea Dunkers: The Kraken's Hoard" style={{ ...islandInputStyle, width: "100%" }} />
+            </Field>
+            <Field label="Override blurb">
+              <input
+                defaultValue="Co-op submarine looting in haunted reefs."
+                style={{ ...islandInputStyle, width: "100%" }}
+              />
+            </Field>
+            <IslandButton variant="primary">Save</IslandButton>
+          </IslandCard>
+        )
+      },
+      {
+        anchor: "library-tags",
+        label: "Tags",
+        content: (
+          <IslandCard style={{ padding: 16 }}>
+            <SubsectionTitle>Tag overrides</SubsectionTitle>
+            {[
+              { game: "Lethal Company", tags: "horror, co-op" },
+              { game: "Helldivers II", tags: "co-op, shooter" },
+              { game: "Stardew Valley", tags: "cozy, co-op" }
+            ].map((row, i) => (
+              <div
+                key={row.game}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr auto",
+                  gap: 12,
+                  padding: "10px 0",
+                  borderTop: i === 0 ? "none" : `1px solid ${islandTheme.color.cardBorder}`,
+                  alignItems: "center"
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{row.game}</div>
+                <span
+                  className="island-mono"
+                  style={{ fontSize: 12, color: islandTheme.color.textSubtle }}
+                >
+                  {row.tags}
+                </span>
+                <button type="button" className="island-btn" style={smallBtn("transparent", islandTheme.color.textMuted, true)}>
+                  Edit
+                </button>
+              </div>
+            ))}
+          </IslandCard>
+        )
+      }
+    ]} />
   );
 }
 
@@ -377,39 +389,50 @@ export function RecommenderAdminPage({
   onRunRecommendation: () => void;
 }) {
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <IslandCard id="rec-weights" style={{ padding: 16, display: "grid", gap: 10 }}>
-        <SubsectionTitle>Scoring weights</SubsectionTitle>
-        <div style={{ fontSize: 13, color: islandTheme.color.textSubtle }}>
-          Selected members from the Games page crew picker:{" "}
-          <strong style={{ color: islandTheme.color.textPrimary }}>{selectedMemberCount}</strong>
-        </div>
-        <div style={{ display: "grid", gap: 12 }}>
-          {WEIGHTS.map((w) => (
-            <Slider key={w.label} label={w.label} value={w.value} hint={w.hint} />
-          ))}
-        </div>
-        <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
-          Weights are currently fixed server-side; this view shows the live formula. In-app tuning is planned.
-        </p>
-        <IslandButton variant="primary" onClick={onRunRecommendation} style={{ marginTop: 4 }}>
-          Run "What can we play"
-        </IslandButton>
-      </IslandCard>
-
-      <IslandCard id="rec-results" style={{ padding: 0, overflow: "hidden" }}>
-        <SubsectionTitle style={{ padding: "14px 16px 0" }}>
-          Ranked results · {recommendations.length}
-        </SubsectionTitle>
-        {recommendations.length ? (
-          recommendations.map((r, i) => <RecRow key={r.appId} rec={r} firstRow={i === 0} />)
-        ) : (
-          <p style={{ padding: "10px 16px 16px", margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>
-            No tester results yet. Pick crew + run.
-          </p>
-        )}
-      </IslandCard>
-    </div>
+    <AdminTabs page="recommender" tabs={[
+      {
+        anchor: "rec-weights",
+        label: "Weights",
+        content: (
+          <IslandCard style={{ padding: 16, display: "grid", gap: 10 }}>
+            <SubsectionTitle>Scoring weights</SubsectionTitle>
+            <div style={{ fontSize: 13, color: islandTheme.color.textSubtle }}>
+              Selected members from the Games page crew picker:{" "}
+              <strong style={{ color: islandTheme.color.textPrimary }}>{selectedMemberCount}</strong>
+            </div>
+            <div style={{ display: "grid", gap: 12 }}>
+              {WEIGHTS.map((w) => (
+                <Slider key={w.label} label={w.label} value={w.value} hint={w.hint} />
+              ))}
+            </div>
+            <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
+              Weights are currently fixed server-side; this view shows the live formula. In-app tuning is planned.
+            </p>
+            <IslandButton variant="primary" onClick={onRunRecommendation} style={{ marginTop: 4 }}>
+              Run "What can we play"
+            </IslandButton>
+          </IslandCard>
+        )
+      },
+      {
+        anchor: "rec-results",
+        label: "Results",
+        content: (
+          <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+            <SubsectionTitle style={{ padding: "14px 16px 0" }}>
+              Ranked results · {recommendations.length}
+            </SubsectionTitle>
+            {recommendations.length ? (
+              recommendations.map((r, i) => <RecRow key={r.appId} rec={r} firstRow={i === 0} />)
+            ) : (
+              <p style={{ padding: "10px 16px 16px", margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>
+                No tester results yet. Pick crew + run.
+              </p>
+            )}
+          </IslandCard>
+        )
+      }
+    ]} />
   );
 }
 

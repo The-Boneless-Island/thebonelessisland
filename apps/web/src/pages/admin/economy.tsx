@@ -6,7 +6,7 @@ import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { GameNight, GuildMember, NuggiesShopItem, ServerSetting } from "../../types.js";
 import { ItemGlyph } from "../../components/ItemGlyph.js";
-import { AdminStatusBanner, InlineSettings, SubsectionTitle } from "./adminUi.js";
+import { AdminStatusBanner, AdminTabs, InlineSettings, SubsectionTitle } from "./adminUi.js";
 import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
 // Accent comes from the nav registry — one source for sidebar, search, and page chrome.
@@ -119,81 +119,98 @@ export function EconomyOpsPage() {
   };
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <AdminStatusBanner
-        accent={ACCENT}
-        icon="🍗"
-        kicker="Economy Overview"
-        title={`${overview ? overview.totalSupply.toLocaleString() : "…"} Nuggies in circulation`}
-        subtitle={overview ? `${overview.optedOutCount} opted out` : "Loading…"}
-      />
-
-      {/* Grant / Deduct */}
-      <IslandCard id="economy-grant" style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>Grant / Deduct</SubsectionTitle>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Positive = grant, negative = deduct. Bypasses daily cap and opt-out checks. Applied to every selected user.
-        </p>
-        <div style={{ display: "grid", gap: 8 }}>
-          <MemberMultiSelect
-            members={members}
-            selectedIds={grantTargets}
-            onToggle={toggleGrantTarget}
-            onClear={() => setGrantTargets([])}
-            search={grantSearch}
-            onSearchChange={setGrantSearch}
-            open={grantPickerOpen}
-            onOpenChange={setGrantPickerOpen}
-          />
-          <input placeholder="Amount (e.g. 200 or -50)" type="number" value={grantAmount} onChange={(e) => setGrantAmount(e.target.value)} style={{ ...islandInputStyle }} />
-          <input placeholder="Reason" value={grantReason} onChange={(e) => setGrantReason(e.target.value)} style={{ ...islandInputStyle }} />
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <IslandButton variant="primary" onClick={() => void handleGrant()} disabled={granting || grantTargets.length === 0 || !grantAmount || !grantReason}>
-              {granting ? "Applying…" : `Apply${grantTargets.length > 1 ? ` to ${grantTargets.length}` : ""}`}
-            </IslandButton>
-            {grantMsg && <span style={{ fontSize: 13, color: grantMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{grantMsg.text}</span>}
-          </div>
-        </div>
-      </IslandCard>
-
-      {/* Attendance Awards */}
-      <IslandCard id="economy-attendance" style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>Attendance Awards</SubsectionTitle>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Award Nuggies to all attendees of a finalized game night. Already-awarded attendees are skipped.
-        </p>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <select value={selectedNight} onChange={(e) => setSelectedNight(e.target.value ? parseInt(e.target.value, 10) : "")} style={{ ...islandInputStyle, flex: 1, minWidth: 200 }}>
-            <option value="">Select a game night…</option>
-            {gameNights.map((n) => (
-              <option key={n.id} value={n.id}>
-                {n.title} — {n.selectedGameName ?? "?"} ({new Date(n.scheduledFor).toLocaleDateString()})
-              </option>
-            ))}
-          </select>
-          <IslandButton variant="primary" onClick={() => void handleAwardAttendance()} disabled={awarding || !selectedNight}>
-            {awarding ? "Awarding…" : "Award 🍗 to Attendees"}
-          </IslandButton>
-          {awardMsg && <span style={{ fontSize: 13, color: awardMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{awardMsg.text}</span>}
-        </div>
-      </IslandCard>
-
-      {/* Top Holders */}
-      {overview && overview.topHolders.length > 0 && (
-        <IslandCard id="economy-holders" style={{ padding: "16px 18px" }}>
-          <SubsectionTitle>Top Holders</SubsectionTitle>
-          <div style={{ display: "grid", gap: 4 }}>
-            {overview.topHolders.map((h, i) => (
-              <div key={h.discordUserId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderRadius: 8, background: islandTheme.color.panelMutedBg, fontSize: 13 }}>
-                <span style={{ fontFamily: islandTheme.font.mono, width: 24, color: islandTheme.color.textMuted, flexShrink: 0 }}>#{i + 1}</span>
-                <span style={{ flex: 1, fontWeight: 600 }}>{h.username}</span>
-                <span style={{ fontWeight: 700, color: ACCENT }}>₦{h.balance.toLocaleString()}</span>
+    <AdminTabs
+      page="economy"
+      tabs={[
+        {
+          anchor: "economy-grant",
+          label: "Grant",
+          content: (
+            <>
+              <AdminStatusBanner
+                accent={ACCENT}
+                icon="🍗"
+                kicker="Economy Overview"
+                title={`${overview ? overview.totalSupply.toLocaleString() : "…"} Nuggies in circulation`}
+                subtitle={overview ? `${overview.optedOutCount} opted out` : "Loading…"}
+              />
+              <IslandCard style={{ padding: "16px 18px" }}>
+                <SubsectionTitle>Grant / Deduct</SubsectionTitle>
+                <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                  Positive = grant, negative = deduct. Bypasses daily cap and opt-out checks. Applied to every selected user.
+                </p>
+                <div style={{ display: "grid", gap: 8 }}>
+                  <MemberMultiSelect
+                    members={members}
+                    selectedIds={grantTargets}
+                    onToggle={toggleGrantTarget}
+                    onClear={() => setGrantTargets([])}
+                    search={grantSearch}
+                    onSearchChange={setGrantSearch}
+                    open={grantPickerOpen}
+                    onOpenChange={setGrantPickerOpen}
+                  />
+                  <input placeholder="Amount (e.g. 200 or -50)" type="number" value={grantAmount} onChange={(e) => setGrantAmount(e.target.value)} style={{ ...islandInputStyle }} />
+                  <input placeholder="Reason" value={grantReason} onChange={(e) => setGrantReason(e.target.value)} style={{ ...islandInputStyle }} />
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                    <IslandButton variant="primary" onClick={() => void handleGrant()} disabled={granting || grantTargets.length === 0 || !grantAmount || !grantReason}>
+                      {granting ? "Applying…" : `Apply${grantTargets.length > 1 ? ` to ${grantTargets.length}` : ""}`}
+                    </IslandButton>
+                    {grantMsg && <span style={{ fontSize: 13, color: grantMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{grantMsg.text}</span>}
+                  </div>
+                </div>
+              </IslandCard>
+            </>
+          ),
+        },
+        {
+          anchor: "economy-attendance",
+          label: "Attendance",
+          content: (
+            <IslandCard style={{ padding: "16px 18px" }}>
+              <SubsectionTitle>Attendance Awards</SubsectionTitle>
+              <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                Award Nuggies to all attendees of a finalized game night. Already-awarded attendees are skipped.
+              </p>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <select value={selectedNight} onChange={(e) => setSelectedNight(e.target.value ? parseInt(e.target.value, 10) : "")} style={{ ...islandInputStyle, flex: 1, minWidth: 200 }}>
+                  <option value="">Select a game night…</option>
+                  {gameNights.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.title} — {n.selectedGameName ?? "?"} ({new Date(n.scheduledFor).toLocaleDateString()})
+                    </option>
+                  ))}
+                </select>
+                <IslandButton variant="primary" onClick={() => void handleAwardAttendance()} disabled={awarding || !selectedNight}>
+                  {awarding ? "Awarding…" : "Award 🍗 to Attendees"}
+                </IslandButton>
+                {awardMsg && <span style={{ fontSize: 13, color: awardMsg.ok ? islandTheme.color.successAccent : islandTheme.color.dangerAccent }}>{awardMsg.text}</span>}
               </div>
-            ))}
-          </div>
-        </IslandCard>
-      )}
-    </div>
+            </IslandCard>
+          ),
+        },
+        {
+          anchor: "economy-holders",
+          label: "Holders",
+          content: (
+            overview && overview.topHolders.length > 0 ? (
+              <IslandCard style={{ padding: "16px 18px" }}>
+                <SubsectionTitle>Top Holders</SubsectionTitle>
+                <div style={{ display: "grid", gap: 4 }}>
+                  {overview.topHolders.map((h, i) => (
+                    <div key={h.discordUserId} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 10px", borderRadius: 8, background: islandTheme.color.panelMutedBg, fontSize: 13 }}>
+                      <span style={{ fontFamily: islandTheme.font.mono, width: 24, color: islandTheme.color.textMuted, flexShrink: 0 }}>#{i + 1}</span>
+                      <span style={{ flex: 1, fontWeight: 600 }}>{h.username}</span>
+                      <span style={{ fontWeight: 700, color: ACCENT }}>₦{h.balance.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </IslandCard>
+            ) : null
+          ),
+        },
+      ]}
+    />
   );
 }
 

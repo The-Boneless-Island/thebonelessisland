@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "../../api/client.js";
 import { IslandCard } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
-import { ContextStatRow, SubsectionTitle } from "./adminUi.js";
+import { AdminTabs, ContextStatRow, SubsectionTitle } from "./adminUi.js";
 
 // ── Data Sync ────────────────────────────────────────────────────────────────
 
@@ -21,32 +21,39 @@ export function SyncAdminPage() {
     { name: "Steam Wishlist", cadence: "every 30m" }
   ];
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <IslandCard id="sync-connectors" style={{ padding: 0, overflow: "hidden" }}>
-        <SubsectionTitle style={{ padding: "14px 16px 0" }}>Connectors</SubsectionTitle>
-        <p style={{ margin: "0 16px 4px", fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
-          Configured sync cadence per connector. Per-connector health telemetry isn’t wired up yet.
-        </p>
-        {connectors.map((c, i) => (
-          <ConnectorRow key={c.name} entry={c} firstRow={i === 0} />
-        ))}
-        <p
-          style={{
-            margin: 0,
-            padding: "10px 16px 14px",
-            fontSize: 12,
-            color: islandTheme.color.textMuted,
-            borderTop: `1px solid ${islandTheme.color.cardBorder}`
-          }}
-        >
-          Streaming sync log planned — per-run results will appear here once telemetry is collected.
-        </p>
-      </IslandCard>
-
-      <div id="sync-steam-context">
-        <SteamProfileContextStats />
-      </div>
-    </div>
+    <AdminTabs page="sync" tabs={[
+      {
+        anchor: "sync-connectors",
+        label: "Connectors",
+        content: (
+          <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+            <SubsectionTitle style={{ padding: "14px 16px 0" }}>Connectors</SubsectionTitle>
+            <p style={{ margin: "0 16px 4px", fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
+              Configured sync cadence per connector. Per-connector health telemetry isn’t wired up yet.
+            </p>
+            {connectors.map((c, i) => (
+              <ConnectorRow key={c.name} entry={c} firstRow={i === 0} />
+            ))}
+            <p
+              style={{
+                margin: 0,
+                padding: "10px 16px 14px",
+                fontSize: 12,
+                color: islandTheme.color.textMuted,
+                borderTop: `1px solid ${islandTheme.color.cardBorder}`
+              }}
+            >
+              Streaming sync log planned — per-run results will appear here once telemetry is collected.
+            </p>
+          </IslandCard>
+        )
+      },
+      {
+        anchor: "sync-steam-context",
+        label: "Steam context",
+        content: <SteamProfileContextStats />
+      }
+    ]} />
   );
 }
 

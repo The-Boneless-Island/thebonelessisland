@@ -1,9 +1,12 @@
 // Admin dashboard: health chips + quick actions. Read-only status chips are
 // allowed to duplicate toggles here — each links to the page that owns the
-// actual control.
+// actual control. Both groups live in contained panels with even grids so the
+// dashboard reads as two tidy blocks instead of loose chrome floating on the bg.
 
+import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 import { apiFetch } from "../../api/client.js";
+import { IslandCard } from "../../islandUi.js";
 import { QuickActionCard } from "../../components/QuickActionCard.js";
 import { islandTheme } from "../../theme.js";
 import type { ServerSetting } from "../../types.js";
@@ -27,6 +30,15 @@ const QUICK_ACTIONS: QuickAction[] = [
   { id: "news", title: "Re-run news curation", subtitle: "Refresh the home page feed manually", icon: "📰", tone: "primary", page: "news", anchor: "news-triggers" },
   { id: "sync", title: "Data sync health", subtitle: "Connector cadences + Steam context", icon: "🔄", tone: "default", page: "sync" }
 ];
+
+const sectionHeadingStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  fontWeight: 700,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  color: islandTheme.color.textMuted
+};
 
 type DashboardProps = {
   settings: ServerSetting[] | null;
@@ -74,84 +86,74 @@ export function DashboardPage({ settings, onNavigate }: DashboardProps) {
   ];
 
   return (
-    <div style={{ display: "grid", gap: 18 }}>
-      {/* Health strip */}
-      <div style={{ display: "grid", gap: 10 }}>
-        <h2
-          className="island-display"
-          style={{
-            margin: 0,
-            fontSize: 14,
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: islandTheme.color.textMuted
-          }}
-        >
+    <div style={{ display: "grid", gap: 16 }}>
+      {/* Island status — contained, even grid so chips never wrap into orphans */}
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+        <h2 className="island-display" style={sectionHeadingStyle}>
           Island status
         </h2>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        {chips.map((chip) => {
-          const color =
-            chip.ok === null
-              ? islandTheme.color.textMuted
-              : chip.ok
-                ? islandTheme.color.successAccent
-                : islandTheme.color.warnAccent;
-          return (
-            <button
-              key={chip.id}
-              type="button"
-              onClick={() => onNavigate(chip.page)}
-              className="island-mono"
-              title={`Open ${ADMIN_PAGES[chip.page].label}`}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "6px 12px",
-                borderRadius: 999,
-                background: islandTheme.color.panelMutedBg,
-                border: `1px solid ${islandTheme.color.cardBorder}`,
-                color: islandTheme.color.textSubtle,
-                fontSize: 12,
-                fontWeight: 700,
-                letterSpacing: "0.04em",
-                cursor: "pointer",
-                font: "inherit"
-              }}
-            >
-              <span
-                aria-hidden="true"
-                style={{ width: 8, height: 8, borderRadius: 999, background: color, flexShrink: 0 }}
-              />
-              {chip.label}
-              <span style={{ color: islandTheme.color.textMuted, fontWeight: 400 }}>{chip.detail}</span>
-            </button>
-          );
-        })}
-        </div>
-      </div>
-
-      {/* Quick actions */}
-      <div style={{ display: "grid", gap: 10 }}>
-        <h2
-          className="island-display"
+        <div
           style={{
-            margin: 0,
-            fontSize: 14,
-            fontWeight: 700,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: islandTheme.color.textMuted
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+            gap: 8
           }}
         >
+          {chips.map((chip) => {
+            const color =
+              chip.ok === null
+                ? islandTheme.color.textMuted
+                : chip.ok
+                  ? islandTheme.color.successAccent
+                  : islandTheme.color.warnAccent;
+            return (
+              <button
+                key={chip.id}
+                type="button"
+                onClick={() => onNavigate(chip.page)}
+                className="island-mono"
+                title={`Open ${ADMIN_PAGES[chip.page].label}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 7,
+                  width: "100%",
+                  padding: "7px 12px",
+                  borderRadius: islandTheme.radius.control,
+                  background: islandTheme.color.panelMutedBg,
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  color: islandTheme.color.textSubtle,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  letterSpacing: "0.04em",
+                  cursor: "pointer",
+                  font: "inherit",
+                  textAlign: "left"
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  style={{ width: 8, height: 8, borderRadius: 999, background: color, flexShrink: 0 }}
+                />
+                {chip.label}
+                <span style={{ color: islandTheme.color.textMuted, fontWeight: 400, marginLeft: "auto" }}>
+                  {chip.detail}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </IslandCard>
+
+      {/* Quick actions — contained, even grid */}
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+        <h2 className="island-display" style={sectionHeadingStyle}>
           Quick actions
         </h2>
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
             gap: 10
           }}
         >
@@ -167,12 +169,7 @@ export function DashboardPage({ settings, onNavigate }: DashboardProps) {
             />
           ))}
         </div>
-      </div>
-
-      <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textMuted }}>
-        Tip: press <kbd style={{ font: "inherit", padding: "1px 6px", borderRadius: 4, border: `1px solid ${islandTheme.color.cardBorder}`, background: islandTheme.color.panelMutedBg }}>/</kbd>{" "}
-        to search every setting, page, and section.
-      </p>
+      </IslandCard>
     </div>
   );
 }

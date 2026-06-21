@@ -32,6 +32,7 @@ import type {
 } from "../../types.js";
 import {
   AdminStatusBanner,
+  AdminTabs,
   BannerToggle,
   Field,
   InlineSettings,
@@ -131,32 +132,50 @@ export function NewsAdminPage(props: NewsPageProps) {
   }
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <AdminStatusBanner
-        id="news-status"
-        accent={ACCENT}
-        icon="🌐"
-        kicker="External News Feed"
-        title={generalEnabled ? "External news feed active" : "External news feed disabled"}
-        subtitle="Sources, keys, and pipeline controls below"
-        control={
-          <BannerToggle
-            on={generalEnabled}
-            onToggle={() => {
-              const next = !generalEnabled;
-              setGeneralEnabled(next);
-              onUpdate("news_general_enabled", next ? "true" : "false");
-            }}
-          />
-        }
-      />
-
-      <div id="news-sources">
-        <NewsSourceRegistryPanel accent={ACCENT} />
-      </div>
-
-      {/* API keys */}
-      <IslandCard id="news-keys" style={{ padding: "16px 18px", display: "grid", gap: 16 }}>
+    <AdminTabs
+      page="news"
+      trailing={
+        <InlineSettings
+          keys={inlineSettingKeysFor("news")}
+          settings={settings}
+          onSave={onUpdate}
+          title="More settings"
+        />
+      }
+      tabs={[
+        {
+          anchor: "news-status",
+          label: "Feed",
+          content: (
+            <AdminStatusBanner
+              accent={ACCENT}
+              icon="🌐"
+              kicker="External News Feed"
+              title={generalEnabled ? "External news feed active" : "External news feed disabled"}
+              subtitle="Sources, keys, and pipeline controls live in the tabs above"
+              control={
+                <BannerToggle
+                  on={generalEnabled}
+                  onToggle={() => {
+                    const next = !generalEnabled;
+                    setGeneralEnabled(next);
+                    onUpdate("news_general_enabled", next ? "true" : "false");
+                  }}
+                />
+              }
+            />
+          )
+        },
+        {
+          anchor: "news-sources",
+          label: "Sources",
+          content: <NewsSourceRegistryPanel accent={ACCENT} />
+        },
+        {
+          anchor: "news-keys",
+          label: "API keys",
+          content: (
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 16 }}>
         <SubsectionTitle style={{ marginBottom: 0 }}>API Keys</SubsectionTitle>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>GNews</div>
@@ -221,9 +240,13 @@ export function NewsAdminPage(props: NewsPageProps) {
           </div>
         </div>
       </IslandCard>
-
-      {/* Developer Diversity Cap */}
-      <IslandCard id="news-dev-cap" style={{ padding: "16px 18px" }}>
+          )
+        },
+        {
+          anchor: "news-dev-cap",
+          label: "Dev cap",
+          content: (
+      <IslandCard style={{ padding: "16px 18px" }}>
         <SubsectionTitle>Developer Diversity Cap</SubsectionTitle>
         <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
           Maximum games per developer included in the Steam news ingestion. Prevents prolific studios (e.g. Valve) from dominating the feed. Default: 2.
@@ -250,23 +273,25 @@ export function NewsAdminPage(props: NewsPageProps) {
           <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>games per developer</span>
         </div>
       </IslandCard>
-
-      <div id="news-triggers">
-        <ManualTriggersCard {...props} />
-      </div>
-
-      <div id="news-validation" style={{ display: "grid", gap: 12 }}>
-        <SectionLabel title="AI Validation Failures" />
-        <ValidationFailuresStats />
-      </div>
-
-      <InlineSettings
-        keys={inlineSettingKeysFor("news")}
-        settings={settings}
-        onSave={onUpdate}
-        title="More settings"
-      />
-    </div>
+          )
+        },
+        {
+          anchor: "news-triggers",
+          label: "Triggers",
+          content: <ManualTriggersCard {...props} />
+        },
+        {
+          anchor: "news-validation",
+          label: "Validation",
+          content: (
+            <>
+              <SectionLabel title="AI Validation Failures" />
+              <ValidationFailuresStats />
+            </>
+          )
+        }
+      ]}
+    />
   );
 }
 

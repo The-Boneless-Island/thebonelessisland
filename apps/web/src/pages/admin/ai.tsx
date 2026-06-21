@@ -5,7 +5,7 @@ import { apiFetch } from "../../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { ServerSetting } from "../../types.js";
-import { AdminStatusBanner, BannerToggle, InlineSettings, StatRow, SubsectionTitle } from "./adminUi.js";
+import { AdminStatusBanner, AdminTabs, BannerToggle, InlineSettings, StatRow, SubsectionTitle } from "./adminUi.js";
 import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
 // Accent comes from the nav registry — one source for sidebar, search, and page chrome.
@@ -108,189 +108,210 @@ export function AiAdminPage({ settings, onUpdate, onTest }: AiPageProps) {
     : "Not configured";
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      {showCostBanner && cost && (
-        <IslandCard
-          style={{
-            padding: "12px 14px",
-            border: `1.5px solid ${islandTheme.color.dangerAccent}`,
-            background: "rgba(248,113,113,0.08)",
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap"
-          }}
-        >
-          <span style={{ fontSize: 18 }}>⚠️</span>
-          <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.4 }}>
-            <strong>Today's estimated AI spend (${cost.today.toFixed(2)}) has crossed the warning threshold (${cost.threshold.toFixed(2)}).</strong>
-            <br />
-            No calls have been blocked. Review recent activity or raise the threshold below.
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              sessionStorage.setItem("bi:ai-cost-banner-dismissed", "1");
-              setBannerDismissed(true);
-            }}
-            style={{
-              border: "none",
-              background: "transparent",
-              color: islandTheme.color.textSubtle,
-              cursor: "pointer",
-              fontSize: 12,
-              padding: "4px 8px"
-            }}
-          >
-            Dismiss for this session
-          </button>
-        </IslandCard>
-      )}
-
-      <AdminStatusBanner
-        id="ai-status"
-        accent={ACCENT}
-        icon="🤖"
-        kicker="AI Engine"
-        title={providerLabel}
-        subtitle={
-          cost
-            ? `Today: $${cost.today.toFixed(2)} · ${cost.calls} call${cost.calls === 1 ? "" : "s"}${cost.threshold > 0 ? ` (warn ≥ $${cost.threshold.toFixed(2)})` : ""}`
-            : enabled
-              ? "AI features enabled"
-              : "AI features disabled"
-        }
-        control={
-          <BannerToggle
-            on={enabled}
-            onToggle={() => onUpdate("ai_enabled", enabled ? "false" : "true")}
-          />
-        }
-      />
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
-        <StatRow label="Enabled" value={enabled ? "Yes" : "No"} ok={enabled} />
-        <StatRow label="Provider" value={provider || "—"} ok={!!provider} />
-        <StatRow label="Model" value={model || "default"} ok={!!provider} />
-        <StatRow label="Auth" value={keySet ? (provider === "bedrock" ? "IAM role" : "Key set") : "No key"} ok={keySet} />
-      </div>
-
-      <div id="ai-provider-model">
-        <InlineSettings
-          keys={inlineSettingKeysFor("ai")}
-          settings={settings}
-          onSave={onUpdate}
-          title="Provider & model"
-        />
-        {!ready && (
-          <p style={{ margin: "10px 0 0", fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
-            AI is {enabled ? "" : "disabled and "}not fully configured — pick a provider, set its API key below
-            (Bedrock needs none), then run the connection test.
-          </p>
-        )}
-      </div>
-
-      {/* API Keys */}
-      <IslandCard id="ai-keys" style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>API Keys</SubsectionTitle>
-        <p style={{ margin: "0 0 14px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          One slot per provider so you can route different workloads to different vendors (e.g. Anthropic for curation, OpenAI for embedding clustering). Keys are stored server-side and never returned to the browser after saving. Each falls back to its matching env var (<code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> / <code>GEMINI_API_KEY</code>) when blank. Amazon Bedrock needs no key — it uses the server's AWS IAM role.
-        </p>
-
-        <ProviderKeyRow
-          settingKey="anthropic_api_key"
-          label="Anthropic (Claude)"
-          placeholder="sk-ant-..."
-          saved={keySaved["anthropic_api_key"]}
-          isSet={getSetting("anthropic_api_key") === "••••••••"}
-          onSave={(v) => saveKey("anthropic_api_key", v)}
-        />
-        <ProviderKeyRow
-          settingKey="openai_api_key"
-          label="OpenAI (GPT + embeddings)"
-          placeholder="sk-..."
-          saved={keySaved["openai_api_key"]}
-          isSet={getSetting("openai_api_key") === "••••••••"}
-          onSave={(v) => saveKey("openai_api_key", v)}
-          hint="Also used for the text-embedding-3-small clustering pass — set this even if your chat provider is something else."
-        />
-        <ProviderKeyRow
-          settingKey="gemini_api_key"
-          label="Google (Gemini)"
-          placeholder="AIza..."
-          saved={keySaved["gemini_api_key"]}
-          isSet={getSetting("gemini_api_key") === "••••••••"}
-          onSave={(v) => saveKey("gemini_api_key", v)}
-        />
-
-        {/* Legacy single-key slot — kept visible so existing installs can see
-            it and migrate. Hidden once cleared. */}
-        {legacyKeyIsSet ? (
-          <div
-            style={{
-              marginTop: 16,
-              paddingTop: 12,
-              borderTop: `1px dashed ${islandTheme.color.cardBorder}`
-            }}
-          >
-            <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 6 }}>
-              Legacy shared key (used only when the matching per-provider slot is empty). You can leave this alone — once you fill the per-provider key for your active provider, this row becomes inert.
-            </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <input
-                style={{ ...islandInputStyle, flex: 1, fontFamily: islandTheme.font.mono, letterSpacing: "0.05em" }}
-                type="password"
-                value={legacyKey}
-                placeholder="••••••••  (legacy key saved — enter new to replace)"
-                onChange={(e) => setLegacyKey(e.target.value)}
-                autoComplete="off"
+    <AdminTabs
+      page="ai"
+      tabs={[
+        {
+          anchor: "ai-status",
+          label: "Status",
+          content: (
+            <>
+              {showCostBanner && cost && (
+                <IslandCard
+                  style={{
+                    padding: "12px 14px",
+                    border: `1.5px solid ${islandTheme.color.dangerAccent}`,
+                    background: "rgba(248,113,113,0.08)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    flexWrap: "wrap"
+                  }}
+                >
+                  <span style={{ fontSize: 18 }}>⚠️</span>
+                  <div style={{ flex: 1, minWidth: 200, fontSize: 13, lineHeight: 1.4 }}>
+                    <strong>Today's estimated AI spend (${cost.today.toFixed(2)}) has crossed the warning threshold (${cost.threshold.toFixed(2)}).</strong>
+                    <br />
+                    No calls have been blocked. Review recent activity or raise the threshold below.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sessionStorage.setItem("bi:ai-cost-banner-dismissed", "1");
+                      setBannerDismissed(true);
+                    }}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: islandTheme.color.textSubtle,
+                      cursor: "pointer",
+                      fontSize: 12,
+                      padding: "4px 8px"
+                    }}
+                  >
+                    Dismiss for this session
+                  </button>
+                </IslandCard>
+              )}
+              <AdminStatusBanner
+                accent={ACCENT}
+                icon="🤖"
+                kicker="AI Engine"
+                title={providerLabel}
+                subtitle={
+                  cost
+                    ? `Today: $${cost.today.toFixed(2)} · ${cost.calls} call${cost.calls === 1 ? "" : "s"}${cost.threshold > 0 ? ` (warn ≥ $${cost.threshold.toFixed(2)})` : ""}`
+                    : enabled
+                      ? "AI features enabled"
+                      : "AI features disabled"
+                }
+                control={
+                  <BannerToggle
+                    on={enabled}
+                    onToggle={() => onUpdate("ai_enabled", enabled ? "false" : "true")}
+                  />
+                }
               />
-              <IslandButton
-                variant="secondary"
-                onClick={() => {
-                  if (legacyKey) {
-                    saveKey("ai_api_key", legacyKey);
-                    setLegacyKey("");
-                  }
-                }}
-                disabled={!legacyKey || keySaved["ai_api_key"]}
-              >
-                {keySaved["ai_api_key"] ? "Saved" : "Save Key"}
-              </IslandButton>
-            </div>
-          </div>
-        ) : null}
-      </IslandCard>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 8 }}>
+                <StatRow label="Enabled" value={enabled ? "Yes" : "No"} ok={enabled} />
+                <StatRow label="Provider" value={provider || "—"} ok={!!provider} />
+                <StatRow label="Model" value={model || "default"} ok={!!provider} />
+                <StatRow label="Auth" value={keySet ? (provider === "bedrock" ? "IAM role" : "Key set") : "No key"} ok={keySet} />
+              </div>
+            </>
+          )
+        },
+        {
+          anchor: "ai-provider-model",
+          label: "Provider",
+          content: (
+            <>
+              <InlineSettings
+                keys={inlineSettingKeysFor("ai")}
+                settings={settings}
+                onSave={onUpdate}
+                title="Provider & model"
+              />
+              {!ready && (
+                <p style={{ margin: "10px 0 0", fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
+                  AI is {enabled ? "" : "disabled and "}not fully configured — pick a provider, set its API key below
+                  (Bedrock needs none), then run the connection test.
+                </p>
+              )}
+            </>
+          )
+        },
+        {
+          anchor: "ai-keys",
+          label: "Keys",
+          content: (
+            <IslandCard style={{ padding: "16px 18px" }}>
+              <SubsectionTitle>API Keys</SubsectionTitle>
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                One slot per provider so you can route different workloads to different vendors (e.g. Anthropic for curation, OpenAI for embedding clustering). Keys are stored server-side and never returned to the browser after saving. Each falls back to its matching env var (<code>ANTHROPIC_API_KEY</code> / <code>OPENAI_API_KEY</code> / <code>GEMINI_API_KEY</code>) when blank. Amazon Bedrock needs no key — it uses the server's AWS IAM role.
+              </p>
 
-      {/* Test connection */}
-      <IslandCard id="ai-test" style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>Test Connection</SubsectionTitle>
-        <p style={{ margin: "0 0 14px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Sends a short ping to the provider using the saved settings.
-        </p>
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <IslandButton
-            variant="primary"
-            onClick={() => void runTest()}
-            disabled={!provider || testState === "running"}
-          >
-            {testState === "running" ? "Testing…" : "Test Connection"}
-          </IslandButton>
-          {testMsg ? (
-            <span
-              className="island-mono"
-              style={{
-                fontSize: 12,
-                color: testState === "ok" ? islandTheme.color.successAccent : islandTheme.color.dangerAccent,
-                lineHeight: 1.4
-              }}
-            >
-              {testState === "ok" ? "✓ " : "✗ "}{testMsg}
-            </span>
-          ) : null}
-        </div>
-      </IslandCard>
-    </div>
+              <ProviderKeyRow
+                settingKey="anthropic_api_key"
+                label="Anthropic (Claude)"
+                placeholder="sk-ant-..."
+                saved={keySaved["anthropic_api_key"]}
+                isSet={getSetting("anthropic_api_key") === "••••••••"}
+                onSave={(v) => saveKey("anthropic_api_key", v)}
+              />
+              <ProviderKeyRow
+                settingKey="openai_api_key"
+                label="OpenAI (GPT + embeddings)"
+                placeholder="sk-..."
+                saved={keySaved["openai_api_key"]}
+                isSet={getSetting("openai_api_key") === "••••••••"}
+                onSave={(v) => saveKey("openai_api_key", v)}
+                hint="Also used for the text-embedding-3-small clustering pass — set this even if your chat provider is something else."
+              />
+              <ProviderKeyRow
+                settingKey="gemini_api_key"
+                label="Google (Gemini)"
+                placeholder="AIza..."
+                saved={keySaved["gemini_api_key"]}
+                isSet={getSetting("gemini_api_key") === "••••••••"}
+                onSave={(v) => saveKey("gemini_api_key", v)}
+              />
+
+              {/* Legacy single-key slot — kept visible so existing installs can see
+                  it and migrate. Hidden once cleared. */}
+              {legacyKeyIsSet ? (
+                <div
+                  style={{
+                    marginTop: 16,
+                    paddingTop: 12,
+                    borderTop: `1px dashed ${islandTheme.color.cardBorder}`
+                  }}
+                >
+                  <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 6 }}>
+                    Legacy shared key (used only when the matching per-provider slot is empty). You can leave this alone — once you fill the per-provider key for your active provider, this row becomes inert.
+                  </div>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                    <input
+                      style={{ ...islandInputStyle, flex: 1, fontFamily: islandTheme.font.mono, letterSpacing: "0.05em" }}
+                      type="password"
+                      value={legacyKey}
+                      placeholder="••••••••  (legacy key saved — enter new to replace)"
+                      onChange={(e) => setLegacyKey(e.target.value)}
+                      autoComplete="off"
+                    />
+                    <IslandButton
+                      variant="secondary"
+                      onClick={() => {
+                        if (legacyKey) {
+                          saveKey("ai_api_key", legacyKey);
+                          setLegacyKey("");
+                        }
+                      }}
+                      disabled={!legacyKey || keySaved["ai_api_key"]}
+                    >
+                      {keySaved["ai_api_key"] ? "Saved" : "Save Key"}
+                    </IslandButton>
+                  </div>
+                </div>
+              ) : null}
+            </IslandCard>
+          )
+        },
+        {
+          anchor: "ai-test",
+          label: "Test",
+          content: (
+            <IslandCard style={{ padding: "16px 18px" }}>
+              <SubsectionTitle>Test Connection</SubsectionTitle>
+              <p style={{ margin: "0 0 14px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                Sends a short ping to the provider using the saved settings.
+              </p>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <IslandButton
+                  variant="primary"
+                  onClick={() => void runTest()}
+                  disabled={!provider || testState === "running"}
+                >
+                  {testState === "running" ? "Testing…" : "Test Connection"}
+                </IslandButton>
+                {testMsg ? (
+                  <span
+                    className="island-mono"
+                    style={{
+                      fontSize: 12,
+                      color: testState === "ok" ? islandTheme.color.successAccent : islandTheme.color.dangerAccent,
+                      lineHeight: 1.4
+                    }}
+                  >
+                    {testState === "ok" ? "✓ " : "✗ "}{testMsg}
+                  </span>
+                ) : null}
+              </div>
+            </IslandCard>
+          )
+        }
+      ]}
+    />
   );
 }
 

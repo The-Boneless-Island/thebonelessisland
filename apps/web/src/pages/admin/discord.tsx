@@ -5,7 +5,7 @@ import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import { RANK_TIERS } from "../../data/rankTiers.js";
 import type { ServerSetting } from "../../types.js";
-import { AdminStatusBanner, BannerToggle, InlineSettings, SubsectionTitle } from "./adminUi.js";
+import { AdminStatusBanner, AdminTabs, BannerToggle, InlineSettings, SubsectionTitle } from "./adminUi.js";
 import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
 
 // ── Guild Identity ───────────────────────────────────────────────────────────
@@ -126,150 +126,164 @@ export function BridgeAdminPage({
   const configured = enabled && getSetting("milestone_channel_id").trim().length > 0;
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <AdminStatusBanner
-        accent={ACCENT}
-        icon="🌉"
-        kicker="Discord Bridge"
-        title={configured ? "Milestone announcements live" : "Milestone announcements OFF"}
-        subtitle={
-          enabled
-            ? getSetting("milestone_channel_id")
-              ? `Posting to channel ${getSetting("milestone_channel_id")}`
-              : "Toggle ON but no channel set — bot will skip posts"
-            : "Bot will not post tier reaches to any channel"
-        }
-        control={
-          <BannerToggle
-            on={enabled}
-            onToggle={() => {
-              const next = !enabled;
-              setEnabled(next);
-              save("milestone_announcements_enabled", next ? "true" : "false");
-            }}
-          />
-        }
-      />
+    <AdminTabs
+      page="bridge"
+      tabs={[
+        {
+          anchor: "bridge-channel",
+          label: "Channel",
+          content: (
+            <>
+              <AdminStatusBanner
+                accent={ACCENT}
+                icon="🌉"
+                kicker="Discord Bridge"
+                title={configured ? "Milestone announcements live" : "Milestone announcements OFF"}
+                subtitle={
+                  enabled
+                    ? getSetting("milestone_channel_id")
+                      ? `Posting to channel ${getSetting("milestone_channel_id")}`
+                      : "Toggle ON but no channel set — bot will skip posts"
+                    : "Bot will not post tier reaches to any channel"
+                }
+                control={
+                  <BannerToggle
+                    on={enabled}
+                    onToggle={() => {
+                      const next = !enabled;
+                      setEnabled(next);
+                      save("milestone_announcements_enabled", next ? "true" : "false");
+                    }}
+                  />
+                }
+              />
 
-      {/* Channel */}
-      <IslandCard id="bridge-channel" style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>Announcement Channel</SubsectionTitle>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Discord channel ID where the bot posts when a member crosses a rank threshold.
-          Enable Developer Mode in Discord (User Settings → Advanced), then right-click the channel and choose <strong>Copy ID</strong>.
-        </p>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={channelDraft}
-            onChange={(e) => setChannelDraft(e.target.value)}
-            placeholder="1234567890123456789"
-            className="island-mono"
-            style={{
-              ...islandInputStyle,
-              flex: "1 1 240px",
-              maxWidth: 360,
-              fontSize: 13,
-            }}
-          />
-          <IslandButton
-            variant="secondary"
-            onClick={() => save("milestone_channel_id", channelDraft.trim())}
-            disabled={!channelDirty || saved["milestone_channel_id"]}
-          >
-            {saved["milestone_channel_id"] ? "Saved" : "Save Channel"}
-          </IslandButton>
-        </div>
-      </IslandCard>
-
-      {/* Role bindings */}
-      <IslandCard id="bridge-roles" style={{ padding: "16px 18px" }}>
-        <SubsectionTitle>Tier Roles (Optional)</SubsectionTitle>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Discord role ID auto-assigned when a member reaches each tier. Lower tier roles are
-          automatically removed as members climb the ladder, so each member only carries their highest rank.
-          Leave blank to skip role assignment for a tier. The bot needs <strong>Manage Roles</strong>{" "}
-          and must sit above these roles in the role hierarchy.
-        </p>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-            gap: 10,
-          }}
-        >
-          {RANK_TIERS.map((tier, i) => {
-            const key = `milestone_role_rank_${String(i + 1).padStart(2, "0")}`;
-            const draft = roleDrafts[key] ?? "";
-            const stored = getSetting(key);
-            const dirty = draft.trim() !== stored;
-            return (
-              <div
-                key={key}
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  background: islandTheme.color.panelMutedBg,
-                  border: `1px solid ${islandTheme.color.cardBorder}`,
-                  display: "grid",
-                  gap: 6,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 18 }}>{tier.emblem}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="island-mono" style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.05em" }}>
-                      {tier.label}
-                    </div>
-                    <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-                      ₦{tier.threshold.toLocaleString()}
-                    </div>
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
+              <IslandCard style={{ padding: "16px 18px" }}>
+                <SubsectionTitle>Announcement Channel</SubsectionTitle>
+                <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                  Discord channel ID where the bot posts when a member crosses a rank threshold.
+                  Enable Developer Mode in Discord (User Settings → Advanced), then right-click the channel and choose <strong>Copy ID</strong>.
+                </p>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={draft}
-                    onChange={(e) =>
-                      setRoleDrafts((prev) => ({ ...prev, [key]: e.target.value }))
-                    }
-                    placeholder="role ID (optional)"
+                    value={channelDraft}
+                    onChange={(e) => setChannelDraft(e.target.value)}
+                    placeholder="1234567890123456789"
                     className="island-mono"
                     style={{
                       ...islandInputStyle,
-                      flex: 1,
-                      fontSize: 12,
-                      padding: "6px 8px",
+                      flex: "1 1 240px",
+                      maxWidth: 360,
+                      fontSize: 13,
                     }}
                   />
-                  <button
-                    type="button"
-                    onClick={() => save(key, draft.trim())}
-                    disabled={!dirty || saved[key]}
-                    className="island-mono"
-                    style={{
-                      padding: "0 10px",
-                      borderRadius: 6,
-                      border: `1px solid ${dirty ? ACCENT : islandTheme.color.cardBorder}`,
-                      background: dirty ? `${ACCENT}22` : "transparent",
-                      color: dirty ? ACCENT : islandTheme.color.textMuted,
-                      fontSize: 12,
-                      letterSpacing: "0.06em",
-                      textTransform: "uppercase",
-                      cursor: dirty ? "pointer" : "default",
-                      font: "inherit",
-                    }}
+                  <IslandButton
+                    variant="secondary"
+                    onClick={() => save("milestone_channel_id", channelDraft.trim())}
+                    disabled={!channelDirty || saved["milestone_channel_id"]}
                   >
-                    {saved[key] ? "Saved" : "Save"}
-                  </button>
+                    {saved["milestone_channel_id"] ? "Saved" : "Save Channel"}
+                  </IslandButton>
                 </div>
+              </IslandCard>
+            </>
+          ),
+        },
+        {
+          anchor: "bridge-roles",
+          label: "Roles",
+          content: (
+            <IslandCard style={{ padding: "16px 18px" }}>
+              <SubsectionTitle>Tier Roles (Optional)</SubsectionTitle>
+              <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                Discord role ID auto-assigned when a member reaches each tier. Lower tier roles are
+                automatically removed as members climb the ladder, so each member only carries their highest rank.
+                Leave blank to skip role assignment for a tier. The bot needs <strong>Manage Roles</strong>{" "}
+                and must sit above these roles in the role hierarchy.
+              </p>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                {RANK_TIERS.map((tier, i) => {
+                  const key = `milestone_role_rank_${String(i + 1).padStart(2, "0")}`;
+                  const draft = roleDrafts[key] ?? "";
+                  const stored = getSetting(key);
+                  const dirty = draft.trim() !== stored;
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: 10,
+                        background: islandTheme.color.panelMutedBg,
+                        border: `1px solid ${islandTheme.color.cardBorder}`,
+                        display: "grid",
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 18 }}>{tier.emblem}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="island-mono" style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.05em" }}>
+                            {tier.label}
+                          </div>
+                          <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+                            ₦{tier.threshold.toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={draft}
+                          onChange={(e) =>
+                            setRoleDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                          }
+                          placeholder="role ID (optional)"
+                          className="island-mono"
+                          style={{
+                            ...islandInputStyle,
+                            flex: 1,
+                            fontSize: 12,
+                            padding: "6px 8px",
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => save(key, draft.trim())}
+                          disabled={!dirty || saved[key]}
+                          className="island-mono"
+                          style={{
+                            padding: "0 10px",
+                            borderRadius: 6,
+                            border: `1px solid ${dirty ? ACCENT : islandTheme.color.cardBorder}`,
+                            background: dirty ? `${ACCENT}22` : "transparent",
+                            color: dirty ? ACCENT : islandTheme.color.textMuted,
+                            fontSize: 12,
+                            letterSpacing: "0.06em",
+                            textTransform: "uppercase",
+                            cursor: dirty ? "pointer" : "default",
+                            font: "inherit",
+                          }}
+                        >
+                          {saved[key] ? "Saved" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-      </IslandCard>
-    </div>
+            </IslandCard>
+          ),
+        },
+      ]}
+    />
   );
 }

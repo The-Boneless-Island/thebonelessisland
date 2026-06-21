@@ -5,7 +5,7 @@ import { apiFetch } from "../../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { ForumBan, ForumCategory, ForumModLogEntry, ForumReport, GuildMember } from "../../types.js";
-import { Field, smallBtn, SubsectionTitle } from "./adminUi.js";
+import { AdminTabs, Field, smallBtn, SubsectionTitle } from "./adminUi.js";
 
 // ── Members & Roles ──────────────────────────────────────────────────────────
 
@@ -43,62 +43,81 @@ export function MembersPage() {
   );
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      <IslandCard id="members-roster" style={{ padding: 0, overflow: "hidden" }}>
-        <SubsectionTitle style={{ padding: "14px 16px 0" }}>
-          Roster{loadState === "ready" ? ` · ${sorted.length}` : ""}
-        </SubsectionTitle>
-        <div
-          className="bi-admin-member-head island-mono"
-          style={{
-            padding: "8px 16px",
-            fontSize: 12,
-            textTransform: "uppercase",
-            letterSpacing: "0.08em",
-            color: islandTheme.color.textMuted,
-            borderTop: `1px solid ${islandTheme.color.cardBorder}`,
-            borderBottom: `1px solid ${islandTheme.color.cardBorder}`
-          }}
-        >
-          <div>Member</div>
-          <div>Roles</div>
-          <div>Presence</div>
-          <div>In guild</div>
-        </div>
-        {loadState === "loading" ? (
-          <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.textMuted }}>
-            Loading roster…
-          </div>
-        ) : loadState === "error" ? (
-          <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.dangerText }}>
-            Couldn’t load the roster. Try again in a moment.
-          </div>
-        ) : sorted.length === 0 ? (
-          <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.textMuted }}>
-            No members synced yet.
-          </div>
-        ) : (
-          sorted.map((m, i) => <MemberRow key={m.discordUserId} entry={m} firstRow={i === 0} />)
-        )}
-      </IslandCard>
-
-      <IslandCard id="members-roles" style={{ padding: 16 }}>
-        <SubsectionTitle>Role mapping</SubsectionTitle>
-        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Discord roles drive app capabilities. Admin access is granted by role in Discord — manage roles
-          there and they sync here automatically.
-        </p>
-      </IslandCard>
-
-      <IslandCard id="members-onboarding" style={{ padding: 16 }}>
-        <SubsectionTitle>Onboarding</SubsectionTitle>
-        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
-          Re-show the <strong>Washed Ashore</strong> tour to every member on their next visit. Use this after
-          adding new steps or when you want the whole crew to see updated onboarding content.
-        </p>
-        <OnboardingResetButton />
-      </IslandCard>
-    </div>
+    <AdminTabs
+      page="members"
+      tabs={[
+        {
+          anchor: "members-roster",
+          label: "Roster",
+          content: (
+            <IslandCard style={{ padding: 0, overflow: "hidden" }}>
+              <SubsectionTitle style={{ padding: "14px 16px 0" }}>
+                Roster{loadState === "ready" ? ` · ${sorted.length}` : ""}
+              </SubsectionTitle>
+              <div
+                className="bi-admin-member-head island-mono"
+                style={{
+                  padding: "8px 16px",
+                  fontSize: 12,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  color: islandTheme.color.textMuted,
+                  borderTop: `1px solid ${islandTheme.color.cardBorder}`,
+                  borderBottom: `1px solid ${islandTheme.color.cardBorder}`
+                }}
+              >
+                <div>Member</div>
+                <div>Roles</div>
+                <div>Presence</div>
+                <div>In guild</div>
+              </div>
+              {loadState === "loading" ? (
+                <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.textMuted }}>
+                  Loading roster…
+                </div>
+              ) : loadState === "error" ? (
+                <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.dangerText }}>
+                  Couldn’t load the roster. Try again in a moment.
+                </div>
+              ) : sorted.length === 0 ? (
+                <div style={{ padding: "16px", fontSize: 13, color: islandTheme.color.textMuted }}>
+                  No members synced yet.
+                </div>
+              ) : (
+                sorted.map((m, i) => <MemberRow key={m.discordUserId} entry={m} firstRow={i === 0} />)
+              )}
+            </IslandCard>
+          )
+        },
+        {
+          anchor: "members-roles",
+          label: "Roles",
+          content: (
+            <IslandCard style={{ padding: 16 }}>
+              <SubsectionTitle>Role mapping</SubsectionTitle>
+              <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                Discord roles drive app capabilities. Admin access is granted by role in Discord — manage roles
+                there and they sync here automatically.
+              </p>
+            </IslandCard>
+          )
+        },
+        {
+          anchor: "members-onboarding",
+          label: "Onboarding",
+          content: (
+            <IslandCard style={{ padding: 16 }}>
+              <SubsectionTitle>Onboarding</SubsectionTitle>
+              <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                Re-show the <strong>Washed Ashore</strong> tour to every member on their next visit. Use this after
+                adding new steps or when you want the whole crew to see updated onboarding content.
+              </p>
+              <OnboardingResetButton />
+            </IslandCard>
+          )
+        }
+      ]}
+    />
   );
 }
 
@@ -231,43 +250,17 @@ function MemberRow({ entry, firstRow }: { entry: GuildMember; firstRow: boolean 
 
 // ── Forum Moderation ─────────────────────────────────────────────────────────
 
-export function ForumsModPage({ initialTab }: { initialTab?: string }) {
-  const valid = ["reports", "categories", "bans", "log"] as const;
-  type Tab = (typeof valid)[number];
-  const [tab, setTab] = useState<Tab>(
-    valid.includes(initialTab as Tab) ? (initialTab as Tab) : "reports"
-  );
+export function ForumsModPage() {
   return (
-    <div style={{ display: "grid", gap: 14 }}>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {valid.map((t) => (
-          <button
-            key={t}
-            type="button"
-            className="island-btn"
-            onClick={() => setTab(t)}
-            style={{
-              background: tab === t ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
-              color: tab === t ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
-              border: `1px solid ${tab === t ? islandTheme.color.primary : islandTheme.color.cardBorder}`,
-              borderRadius: 999,
-              padding: "6px 14px",
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: "pointer",
-              font: "inherit",
-              textTransform: "capitalize"
-            }}
-          >
-            {t === "log" ? "Mod Log" : t}
-          </button>
-        ))}
-      </div>
-      {tab === "reports" ? <ForumReportsTab /> : null}
-      {tab === "categories" ? <ForumCategoriesTab /> : null}
-      {tab === "bans" ? <ForumBansTab /> : null}
-      {tab === "log" ? <ForumModLogTab /> : null}
-    </div>
+    <AdminTabs
+      page="forums"
+      tabs={[
+        { anchor: "forums-reports", label: "Reports", content: <ForumReportsTab /> },
+        { anchor: "forums-categories", label: "Categories", content: <ForumCategoriesTab /> },
+        { anchor: "forums-bans", label: "Bans", content: <ForumBansTab /> },
+        { anchor: "forums-log", label: "Mod log", content: <ForumModLogTab /> }
+      ]}
+    />
   );
 }
 
@@ -295,7 +288,7 @@ function ForumReportsTab() {
   }
 
   return (
-    <IslandCard id="forums-reports" style={{ padding: 0, overflow: "hidden" }}>
+    <IslandCard style={{ padding: 0, overflow: "hidden" }}>
       <SubsectionTitle style={{ padding: "14px 16px 0" }}>Open Reports · {reports.length}</SubsectionTitle>
       {reports.length === 0 ? (
         <p style={{ margin: 0, padding: "10px 16px 16px", fontSize: 13, color: islandTheme.color.textMuted }}>
@@ -398,7 +391,7 @@ function ForumCategoriesTab() {
   }
 
   return (
-    <div id="forums-categories" style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12 }}>
       {creating ? (
         <CategoryEditor mode="create" onCancel={() => setCreating(false)} onSaved={async () => { setCreating(false); await load(); }} />
       ) : (
@@ -616,7 +609,7 @@ function ForumBansTab() {
   }
 
   return (
-    <div id="forums-bans" style={{ display: "grid", gap: 12 }}>
+    <div style={{ display: "grid", gap: 12 }}>
       <IslandCard style={{ padding: 16 }}>
         <SubsectionTitle>Ban a user</SubsectionTitle>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr auto", gap: 8, alignItems: "end" }}>
@@ -685,7 +678,7 @@ function ForumModLogTab() {
   }, []);
 
   return (
-    <IslandCard id="forums-log" style={{ padding: 0, overflow: "hidden" }}>
+    <IslandCard style={{ padding: 0, overflow: "hidden" }}>
       <SubsectionTitle style={{ padding: "14px 16px 0" }}>Recent moderator actions</SubsectionTitle>
       {log === null ? (
         <p style={{ margin: 0, padding: "10px 16px 16px", fontSize: 13, color: islandTheme.color.textMuted }}>Loading…</p>

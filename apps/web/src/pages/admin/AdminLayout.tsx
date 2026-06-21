@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { islandTheme } from "../../theme.js";
+import { emitAdminAnchor } from "./adminAnchor.js";
 import {
   ADMIN_NAV_GROUPS,
   ADMIN_PAGES,
@@ -43,7 +44,12 @@ export function AdminLayout({ renderPage }: AdminLayoutProps) {
   const navigate = useCallback(
     (next: AdminPageId, anchor?: string) => {
       pendingAnchor.current = anchor ?? null;
-      if (anchor) setAnchorNonce((n) => n + 1);
+      if (anchor) {
+        setAnchorNonce((n) => n + 1);
+        // Let a tabbed target page switch to the tab owning this anchor before
+        // the scroll effect below runs.
+        emitAdminAnchor(anchor);
+      }
       const path = adminPath(next);
       if (location.pathname !== path) routerNavigate(path);
       if (!anchor) {

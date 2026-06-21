@@ -1,10 +1,13 @@
 // Shared admin UI primitives. Extracted from the old monolithic Admin.tsx so
 // every admin page composes the same building blocks.
 
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { IslandCard, IslandSkeletonCard, islandTagStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import { SettingCard } from "../../components/SettingCard.js";
+import { consumePendingAnchor, subscribeAdminAnchor } from "./adminAnchor.js";
+import { ADMIN_PAGES, type AdminPageId } from "./adminNav.js";
 import { SETTING_META } from "./settingMeta.js";
 import type { ServerSetting } from "../../types.js";
 
@@ -337,6 +340,111 @@ export function InlineSettings({ keys, settings, onSave, title = "Settings" }: I
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+// Dense admin pages used to stack every section in one long scroll. AdminTabs
+// shows one section at a time behind a pill bar. All panels stay mounted (their
+// `id` anchors and any data fetching are preserved) — inactive ones are just
+// display:none, so search / quick-action jumps still resolve once the owning tab
+// activates. Tab labels/anchors should mirror ADMIN_PAGES[page].sections so the
+// unified search keeps working.
+
+export type AdminTab = { anchor: string; label: string; content: ReactNode };
+
+type AdminTabsProps = {
+  page: AdminPageId;
+  tabs: AdminTab[];
+  /** Rendered below the active panel on every tab (e.g. inline "More settings"). */
+  trailing?: ReactNode;
+};
+
+export function AdminTabs({ page, tabs, trailing }: AdminTabsProps) {
+  const accent = ADMIN_PAGES[page].accent;
+  const [active, setActive] = useState<string>(() => {
+    const pending = consumePendingAnchor();
+    if (pending && tabs.some((t) => t.anchor === pending)) return pending;
+    return tabs[0]?.anchor ?? "";
+  });
+
+  // Subscribe once; read the live tab list from a ref so a new `tabs` array on
+  // each render does not churn the subscription.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  useEffect(
+    () =>
+      subscribeAdminAnchor((anchor) => {
+        if (tabsRef.current.some((t) => t.anchor === anchor)) setActive(anchor);
+      }),
+    []
+  );
+
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <div
+        role="tablist"
+        aria-label={`${ADMIN_PAGES[page].label} sections`}
+        style={{
+          display: "flex",
+          gap: 6,
+          overflowX: "auto",
+          padding: "4px 4px 8px",
+          margin: "-4px -4px 0",
+          borderBottom: `1px solid ${islandTheme.color.cardBorder}`,
+          scrollbarWidth: "thin"
+        }}
+      >
+        {tabs.map((t) => {
+          const on = t.anchor === active;
+          return (
+            <button
+              key={t.anchor}
+              type="button"
+              role="tab"
+              aria-selected={on}
+              aria-controls={t.anchor}
+              onClick={() => setActive(t.anchor)}
+              style={{
+                flex: "0 0 auto",
+                padding: "6px 14px",
+                borderRadius: 999,
+                border: `1px solid ${on ? `${accent}66` : "transparent"}`,
+                background: on ? `${accent}22` : "transparent",
+                color: on ? islandTheme.color.textPrimary : islandTheme.color.textSubtle,
+                fontSize: 13,
+                fontWeight: on ? 700 : 500,
+                whiteSpace: "nowrap",
+                cursor: "pointer",
+                font: "inherit",
+                transition: `background ${islandTheme.motion.dur.fast} ease, border-color ${islandTheme.motion.dur.fast} ease`
+              }}
+              onMouseEnter={(e) => {
+                if (!on) e.currentTarget.style.background = islandTheme.color.secondary;
+              }}
+              onMouseLeave={(e) => {
+                if (!on) e.currentTarget.style.background = "transparent";
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tabs.map((t) => (
+        <div
+          key={t.anchor}
+          id={t.anchor}
+          role="tabpanel"
+          style={{ display: t.anchor === active ? "grid" : "none", gap: 14 }}
+        >
+          {t.content}
+        </div>
+      ))}
+
+      {trailing}
     </div>
   );
 }
