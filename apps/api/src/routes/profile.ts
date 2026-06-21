@@ -60,6 +60,7 @@ profileRouter.get("/me", async (req, res) => {
     joined_at_guild: string | null;
     premium_since: string | null;
     balance: string | null;
+    lifetime_earned: string | null;
   }>(
     `
       SELECT
@@ -92,7 +93,8 @@ profileRouter.get("/me", async (req, res) => {
         gm.activity_type,
         gm.joined_at_guild,
         gm.premium_since,
-        nb.balance
+        nb.balance,
+        (SELECT COALESCE(SUM(amount), 0) FROM nuggies_transactions WHERE user_id = u.id AND amount > 0) AS lifetime_earned
       FROM users u
       INNER JOIN discord_profiles dp ON dp.user_id = u.id
       LEFT JOIN steam_links sl ON sl.user_id = u.id
@@ -154,6 +156,7 @@ profileRouter.get("/me", async (req, res) => {
         richPresenceText: row.rich_presence_text
       }),
       nuggieBalance: parseInt(row.balance ?? "0", 10),
+      lifetimeEarned: parseInt(row.lifetime_earned ?? "0", 10),
       nuggiesOptedOut: row.nuggies_opted_out,
       equippedItems,
       guildId: getGuildId(),

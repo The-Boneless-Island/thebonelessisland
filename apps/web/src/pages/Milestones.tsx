@@ -3,6 +3,7 @@ import { apiFetch } from "../api/client.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { IslandCard, IslandEmptyState, IslandSkeleton, IslandSkeletonCard } from "../islandUi.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
+import { ItemGlyph } from "../components/ItemGlyph.js";
 import {
   MILESTONES,
   RANK_TIERS,
@@ -16,7 +17,7 @@ type EarnedAchievement = {
   name: string;
   description: string;
   itemType: "title" | "flair" | "badge";
-  itemData: { emoji?: string; label?: string; color?: string };
+  itemData: { emoji?: string; label?: string; color?: string; image?: string };
   unlocked: boolean;
   unlockedAt: string | null;
   equipped: boolean;
@@ -299,9 +300,18 @@ function CurrentRankHero({
             fontSize: 42,
             boxShadow: "0 12px 32px rgba(0,0,0,0.35)",
             flexShrink: 0,
+            overflow: "hidden",
           }}
         >
-          {currentTier?.emblem ?? "○"}
+          {currentTier ? (
+            <img
+              src={currentTier.art}
+              alt={currentTier.label}
+              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+            />
+          ) : (
+            "○"
+          )}
         </div>
         <div style={{ minWidth: 0 }}>
           <div
@@ -440,9 +450,22 @@ function RankTierCard({
             fontSize: reached ? 22 : 16,
             color: reached ? "#0f172a" : islandTheme.color.textMuted,
             flexShrink: 0,
+            overflow: "hidden",
           }}
         >
-          {reached ? tier.emblem : isNext ? "◎" : "○"}
+          {reached ? (
+            <img
+              src={tier.art}
+              alt={tier.label}
+              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+            />
+          ) : (
+            <img
+              src={tier.artLocked}
+              alt={`${tier.label} (locked)`}
+              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+            />
+          )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
@@ -505,7 +528,6 @@ function AchievementCard({
   equipPending?: boolean;
 }) {
   const { id, unlocked, equipped, name, description, itemData, unlockedAt, itemType } = achievement;
-  const emoji = itemData.emoji ?? "✨";
 
   return (
     <div
@@ -540,7 +562,7 @@ function AchievementCard({
             filter: unlocked ? "none" : "grayscale(0.7)",
           }}
         >
-          {unlocked ? emoji : "🔒"}
+          {unlocked ? <ItemGlyph itemData={itemData} size={22} /> : "🔒"}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div

@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { IslandCard, IslandTag, accentHex, memberColor } from "../islandUi.js";
+import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
 import { coverUrl } from "../steamArt.js";
 import { activityHref } from "../lib/routes.js";
@@ -62,6 +63,7 @@ type IslanderProfile = {
   nuggies: {
     balance: number;
     tier: string | null;
+    lifetimeEarned: number;
     equippedTitle: string | null;
   };
   achievements: {
@@ -323,6 +325,11 @@ function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderPr
               {isBooster ? <IslandTag color="#f472b6">💎 Booster</IslandTag> : null}
               {nuggies.equippedTitle ? <IslandTag tone="warning">{nuggies.equippedTitle}</IslandTag> : null}
             </div>
+            {nuggies.lifetimeEarned > 0 ? (
+              <div style={{ marginTop: 2 }}>
+                <MilestoneRankBadge lifetimeEarned={nuggies.lifetimeEarned} size={40} />
+              </div>
+            ) : null}
             {presence.richPresenceText ? (
               <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>{presence.richPresenceText}</div>
             ) : null}

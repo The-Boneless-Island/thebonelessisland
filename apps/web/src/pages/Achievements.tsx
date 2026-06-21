@@ -6,6 +6,7 @@ import { usePushToast } from "../system/toast.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { IslandButton, IslandCard, IslandEmptyState, IslandSkeletonCard, useCountUp } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
+import { ItemGlyph } from "../components/ItemGlyph.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
 import { islandTheme } from "../theme.js";
@@ -447,9 +448,22 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
                         ? `0 0 14px ${tier.reachedGlow}`
                         : "none",
                     transition: "box-shadow 240ms ease, transform 240ms ease",
+                    overflow: "hidden",
                   }}
                 >
-                  {reached ? tier.emblem : isNext ? "◎" : "○"}
+                  {reached ? (
+                    <img
+                      src={tier.art}
+                      alt={tier.label}
+                      style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+                    />
+                  ) : (
+                    <img
+                      src={tier.artLocked}
+                      alt={`${tier.label} (locked)`}
+                      style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+                    />
+                  )}
                 </div>
                 <div
                   style={{
@@ -529,7 +543,7 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
               return (
                 <ItemCard key={item.itemId} tooltip={item.description || undefined}>
                   <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <span style={{ fontSize: 22 }}>{item.itemData.emoji}</span>
+                    <ItemGlyph itemData={item.itemData} size={22} />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
                       <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textTransform: "capitalize", display: "flex", alignItems: "center", gap: 6 }}>
@@ -587,7 +601,7 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
             return (
               <ItemCard key={item.id}>
                 <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <span style={{ fontSize: 22, lineHeight: 1 }}>{item.itemData.emoji}</span>
+                  <ItemGlyph itemData={item.itemData} size={22} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name}</div>
                     <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2, lineHeight: 1.3 }}>{item.description}</div>
