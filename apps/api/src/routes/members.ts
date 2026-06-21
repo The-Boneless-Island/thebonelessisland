@@ -769,6 +769,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
     nuggies: {
       balance,
       tier: nuggieTierFor(lifetimeEarned),
+      lifetimeEarned,
       equippedTitle: nuggiesRow?.title_name ?? null
     },
     achievements: {

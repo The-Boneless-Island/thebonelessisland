@@ -114,6 +114,7 @@ export type MeProfile = {
   inVoice: boolean;
   richPresenceText: string | null;
   nuggieBalance: number;
+  lifetimeEarned: number;
   nuggiesOptedOut: boolean;
   equippedItems: EquippedItem[];
   guildId: string | null;

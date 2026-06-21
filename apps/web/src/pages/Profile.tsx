@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { IslandButton, IslandCard, islandInputStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
+import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
 import { apiFetch } from "../api/client.js";
 import { putClientState } from "../api/clientState.js";
@@ -281,6 +282,7 @@ export function ProfilePage({
         <IslandCard as="div" style={{ marginTop: 8 }}>
           <h3 style={{ marginTop: 0, marginBottom: 8 }}>Nuggies</h3>
           <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <MilestoneRankBadge lifetimeEarned={profileData.lifetimeEarned} size={44} />
             <div style={{ fontSize: 22, fontWeight: 700 }}>
               ₦{profileData.nuggieBalance.toLocaleString()}
               <span style={{ fontSize: 14, fontWeight: 400, color: islandTheme.color.textMuted, marginLeft: 6 }}>Nuggies</span>

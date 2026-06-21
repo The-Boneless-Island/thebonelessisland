@@ -8,6 +8,7 @@ import { LOGO_BG_URL } from "../assets.js";
 import { ActionCard, IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, PresenceRow, StatusDot, islandInputStyle, useCountUp, type StatusTone } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
+import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
 import { GameCover, steamArt } from "../steamArt.js";
 import { useRefetchActivity } from "../system/activityContext.js";
@@ -742,6 +743,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   const optedOut = profile?.nuggiesOptedOut ?? false;
   const equipped = profile?.equippedItems ?? [];
   const equippedCount = equipped.length;
+  const lifetimeEarned = profile?.lifetimeEarned ?? 0;
 
   const [balanceOverride, setBalanceOverride] = useState<number | null>(null);
   const [claimedToday, setClaimedToday] = useState<boolean | null>(null);
@@ -843,6 +845,9 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
 
       {!optedOut ? (
         <>
+          <div style={{ display: "flex", alignItems: "center", paddingBottom: 6, marginBottom: 2, borderBottom: `1px solid ${islandTheme.color.cardBorder}` }}>
+            <MilestoneRankBadge lifetimeEarned={lifetimeEarned} size={40} />
+          </div>
           <div
             className="island-mono"
             style={{
