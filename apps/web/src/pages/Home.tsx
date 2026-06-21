@@ -2319,8 +2319,8 @@ function QuickActions({ guildId, onNavigate }: { guildId: string | null; onNavig
         onClick={() => onNavigate("tide-check")}
       />
       <ActionCard
-        icon="🎲"
-        title="The Arcade"
+        icon="🎰"
+        title="Nuggie Casino"
         subtitle="Coinflip · Blackjack · Hi-Lo"
         tone="warning"
         onClick={() => onNavigate("nuggies-casino")}

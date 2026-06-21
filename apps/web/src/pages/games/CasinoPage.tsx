@@ -131,7 +131,7 @@ export function CasinoPage() {
     return (
       <div style={{ display: "grid", gap: 16 }}>
         <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(24px, 3vw, 32px)" }}>
-          The Arcade
+          Nuggie Casino
         </h1>
         <div style={{ fontSize: 14, color: islandTheme.color.textMuted }}>Loading…</div>
       </div>
@@ -186,10 +186,10 @@ export function CasinoPage() {
             gap: 6
           }}
         >
-          <NuggieCoin size={14} /> Nuggies · The Arcade
+          <NuggieCoin size={14} /> Nuggies · Nuggie Casino
         </span>
         <h1 className="island-display" style={{ margin: 0, fontSize: "clamp(28px, 4vw, 38px)", fontWeight: 700 }}>
-          The Arcade
+          Nuggie Casino
         </h1>
         <p
           style={{
@@ -200,8 +200,8 @@ export function CasinoPage() {
             maxWidth: 640
           }}
         >
-          Same games, same rules as the Discord bot. Play here, play there — but only one
-          game at a time.
+          Same games as Discord — play-money only, bragging rights optional.
+          One game at a time across web and bot.
         </p>
       </header>
 

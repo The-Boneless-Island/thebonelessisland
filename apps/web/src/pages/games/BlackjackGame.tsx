@@ -229,7 +229,7 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
         ) : (
           <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
             <IslandButton variant="primary" onClick={reset}>New hand</IslandButton>
-            <IslandButton variant="secondary" onClick={onBack}>Back to lobby</IslandButton>
+            <IslandButton variant="secondary" onClick={onBack}>Back to casino</IslandButton>
           </div>
         )}
       </div>
@@ -356,7 +356,7 @@ function BackBtn({ onBack }: { onBack: () => void }) {
         font: "inherit"
       }}
     >
-      ← Lobby
+      ← Casino
     </button>
   );
 }

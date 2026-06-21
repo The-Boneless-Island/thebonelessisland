@@ -42,7 +42,7 @@ const NAV_GROUPS: NavGroup[] = [
     defaultId: "nuggies",
     children: [
       { id: "nuggies", label: "Balance & Shop", description: "Your balance and the item shop" },
-      { id: "nuggies-casino", label: "The Arcade", description: "Coinflip, blackjack, hi-lo" },
+      { id: "nuggies-casino", label: "Nuggie Casino", description: "Coinflip, blackjack, hi-lo" },
       { id: "nuggies-history", label: "History", description: "Your transaction log" },
       { id: "nuggies-milestones", label: "Milestones", description: "Rank ladder + achievements" }
     ]
