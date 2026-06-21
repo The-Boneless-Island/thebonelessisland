@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollRestoration, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
+import { putClientState } from "./api/clientState.js";
 import { LoginScreen } from "./pages/LoginScreen.js";
 import { NotFoundPage } from "./pages/NotFound.js";
 import {
@@ -36,14 +37,14 @@ import { ActivityRefetchProvider } from "./system/activityContext.js";
 import { NuggiesSignalProvider } from "./system/nuggiesSignal.js";
 import { AchievementCelebration, useCelebrationQueue } from "./system/celebration.js";
 import { islandCopy, islandTheme } from "./theme.js";
+import { useDayNight } from "./scene/useDayNight.js";
 import { Topbar } from "./components/Topbar.js";
 import { MobileTabBar } from "./components/MobileTabBar.js";
 import { QuickSwitcher } from "./components/QuickSwitcher.js";
 import {
-  isSteamOnboardingSkipped,
-  setSteamOnboardingSkipped,
-  SteamOnboardingModal
-} from "./components/SteamOnboarding.js";
+  CURRENT_ONBOARDING_VERSION,
+  OnboardingFlow
+} from "./components/OnboardingFlow.js";
 import type {
   ActivityEvent,
   CrewOwnedGame,
@@ -128,12 +129,15 @@ export function App() {
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
   const [newsCards, setNewsCards] = useState<NewsCard[]>([]);
   const [serverSettings, setServerSettings] = useState<ServerSetting[] | null>(null);
-  const [steamOnboardingOpen, setSteamOnboardingOpen] = useState(false);
   const [quickSwitchOpen, setQuickSwitchOpen] = useState(false);
   const [tagline, setTagline] = useState<string>("");
   const toastQueue = useToastQueue();
   useToastsFromStatus(status, toastQueue.pushToast);
   const celebrationQueue = useCelebrationQueue();
+  // Destructure the stable enqueue callback so the celebration effect's dep array
+  // doesn't hold the whole celebrationQueue object (a fresh object each render).
+  const { enqueue: enqueueCelebration } = celebrationQueue;
+  const { preference: dayNightPreference, setPreference: setDayNightPreference } = useDayNight();
 
   // Bumped whenever the SSE bus reports this member's Nuggies balance changed,
   // so the Balance/Milestones surfaces refetch immediately (see NuggiesSignal).
@@ -145,24 +149,44 @@ export function App() {
 
   // ── Achievement / milestone unlock celebration ──────────────────────────────
   // Subscribes to the activity_events feed for the current user's
-  // achievement.unlocked + milestone.reached rows. localStorage cursor
-  // prevents re-firing on refresh. First-ever mount seeds the cursor to
-  // NOW so historical unlocks don't spam. Each fresh event is pushed onto
-  // the celebration queue; the overlay shows them one at a time.
+  // achievement.unlocked + milestone.reached rows. Server-side cursor
+  // (last_unlock_seen_at in user_client_state) prevents re-firing across
+  // devices and browsers. First-ever load seeds the cursor to NOW so
+  // historical unlocks don't spam. Each fresh event is pushed onto the
+  // celebration queue; the overlay shows them one at a time.
+  //
+  // The cursor is held in a ref so writes don't depend on a state update or
+  // profile reload — the ref is updated immediately after any write.
+  const lastUnlockSeenRef = useRef<string | null>(null);
+
+  // Seed the cursor from profile on load (once profileData is available).
+  // We only initialize from profile if the ref hasn't been set yet (avoids
+  // overwriting on re-renders after we've already started running).
+  useEffect(() => {
+    if (lastUnlockSeenRef.current !== null) return;
+    const stored = profileData?.clientState?.last_unlock_seen_at;
+    if (typeof stored === "string" && stored) {
+      lastUnlockSeenRef.current = stored;
+    }
+    // If not set in profile yet, leave null — the effect below will handle seeding to now.
+  }, [profileData]);
+
   useEffect(() => {
     const myId = profileData?.discordUserId;
     if (!myId || activityEvents.length === 0) return;
 
-    const STORAGE_KEY = "boneless.lastUnlockToastAt";
-    const storedRaw = window.localStorage.getItem(STORAGE_KEY);
-    if (storedRaw === null) {
-      // First visit — seed to now so we don't celebrate historical events.
-      window.localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+    if (lastUnlockSeenRef.current === null) {
+      // First visit (no server record yet) — seed to now so we don't celebrate historical events.
+      const now = new Date().toISOString();
+      lastUnlockSeenRef.current = now;
+      void putClientState("last_unlock_seen_at", now);
       return;
     }
-    const lastSeenMs = new Date(storedRaw).getTime();
+    const lastSeenMs = new Date(lastUnlockSeenRef.current).getTime();
     if (!Number.isFinite(lastSeenMs)) {
-      window.localStorage.setItem(STORAGE_KEY, new Date().toISOString());
+      const now = new Date().toISOString();
+      lastUnlockSeenRef.current = now;
+      void putClientState("last_unlock_seen_at", now);
       return;
     }
 
@@ -184,7 +208,7 @@ export function App() {
       if (e.eventType === "achievement.unlocked") {
         const name = typeof p.name === "string" ? p.name : "Achievement";
         const itemType = typeof p.itemType === "string" ? p.itemType : "badge";
-        celebrationQueue.enqueue({
+        enqueueCelebration({
           id: e.id,
           kind: "achievement",
           emoji,
@@ -197,7 +221,7 @@ export function App() {
         const threshold = typeof p.threshold === "number" ? p.threshold : 0;
         const bonus = typeof p.bonus === "number" ? p.bonus : 0;
         const emblem = typeof p.emblem === "string" ? p.emblem : emoji;
-        celebrationQueue.enqueue({
+        enqueueCelebration({
           id: e.id,
           kind: "milestone",
           emoji,
@@ -212,8 +236,47 @@ export function App() {
       const t = new Date(e.createdAt).getTime();
       if (t > maxSeen) maxSeen = t;
     }
-    window.localStorage.setItem(STORAGE_KEY, new Date(maxSeen).toISOString());
-  }, [activityEvents, profileData?.discordUserId, celebrationQueue]);
+    const newCursor = new Date(maxSeen).toISOString();
+    lastUnlockSeenRef.current = newCursor;
+    void putClientState("last_unlock_seen_at", newCursor);
+  }, [activityEvents, profileData?.discordUserId, enqueueCelebration]);
+
+  // ── Theme preference — reconcile (server wins) + mirror to server ──────────
+  // useDayNight stores preference in localStorage for first-paint (pre-auth).
+  // Once profileData loads with a theme_pref, apply it if it differs from the
+  // current local preference (server wins for logged-in members — keeps pref
+  // consistent across devices). After that, any preference change is mirrored
+  // to the server so future logins on other devices get the same preference.
+  const profileLoadedRef = useRef(false);
+  // Tracks the last theme value we wrote/confirmed so the mirror effect skips
+  // the redundant write-back on login when the local pref already matches server.
+  const lastSyncedThemeRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!profileData) return;
+    const serverPref = profileData.clientState?.theme_pref;
+    if (serverPref !== "auto" && serverPref !== "day" && serverPref !== "night") return;
+    // Only reconcile once per profile load — don't fight the user's live changes.
+    if (profileLoadedRef.current) return;
+    profileLoadedRef.current = true;
+    // Mark this pref as synced whether or not we apply it, so the mirror below
+    // doesn't fire a redundant PUT immediately after reconcile.
+    lastSyncedThemeRef.current = serverPref;
+    if (serverPref !== dayNightPreference) {
+      setDayNightPreference(serverPref);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileData]);
+
+  // Mirror: any time the preference changes while the user is logged in, write
+  // the new value to the server. Guard with isAuthenticated so we don't fire
+  // on the pre-login default. Skip when the value matches lastSyncedThemeRef so
+  // we don't fire a redundant PUT right after reconcile or on login when unchanged.
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    if (dayNightPreference === lastSyncedThemeRef.current) return;
+    lastSyncedThemeRef.current = dayNightPreference;
+    void putClientState("theme_pref", dayNightPreference);
+  }, [dayNightPreference, isAuthenticated]);
 
   const filteredGuildMembers = useMemo(() => {
     const query = memberSearch.trim().toLowerCase();
@@ -322,20 +385,6 @@ export function App() {
     const nextQuery = params.toString();
     navigate(`${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}`, { replace: true });
   }, []);
-
-  useEffect(() => {
-    if (isAuthenticated !== true) {
-      setSteamOnboardingOpen(false);
-      return;
-    }
-    if (!profileData) return;
-    if (profileData.steamId64) {
-      setSteamOnboardingOpen(false);
-      return;
-    }
-    if (isSteamOnboardingSkipped(profileData.discordUserId)) return;
-    setSteamOnboardingOpen(true);
-  }, [isAuthenticated, profileData]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -1658,18 +1707,34 @@ export function App() {
     );
   }
 
-  const handleSyncSteam = () => {
-    if (!profileData?.steamId64) {
-      setSteamOnboardingOpen(true);
-      return;
+  // ── Onboarding gate ─────────────────────────────────────────────────────────
+  // Show the "Washed Ashore" tour when the member hasn't completed the current
+  // onboarding version. Absent key (null / undefined) is treated as version 0.
+  const showOnboarding =
+    isAuthenticated === true &&
+    !!profileData &&
+    Number(profileData.clientState?.onboarding_version ?? 0) < (profileData.currentOnboardingVersion ?? CURRENT_ONBOARDING_VERSION);
+
+  async function finishOnboarding() {
+    // Remove sessionStorage redirect-resume key (clearSavedStep is inside
+    // OnboardingFlow; this is the App-level safety net on the POST path).
+    try { sessionStorage.removeItem("bi:onboarding-step"); } catch { /* ignore */ }
+    try {
+      await apiFetch("/profile/onboarding/complete", { method: "POST" });
+    } catch {
+      // Best-effort — the gate will re-show on next load if this fails,
+      // but don't block the user from using the app.
     }
+    await loadProfile(true);
+  }
+
+  const handleSyncSteam = () => {
     void syncSteamGames(false);
   };
   const handleLinkSteam = () => {
-    if (profileData?.discordUserId) {
-      setSteamOnboardingSkipped(profileData.discordUserId, false);
-    }
-    setSteamOnboardingOpen(true);
+    // When explicitly re-linking from Settings, just redirect to Steam OAuth.
+    // The onboarding tour is no longer triggered from here.
+    window.location.href = `${API_BASE_URL}/steam/openid/start`;
   };
 
   return (
@@ -1699,15 +1764,10 @@ export function App() {
         onNavigate={navigateToPage}
         onOpenProfile={openProfile}
       />
-      <SteamOnboardingModal
-        open={steamOnboardingOpen}
-        onClose={() => setSteamOnboardingOpen(false)}
-        onSkip={() => {
-          if (profileData?.discordUserId) {
-            setSteamOnboardingSkipped(profileData.discordUserId, true);
-          }
-          setSteamOnboardingOpen(false);
-        }}
+      <OnboardingFlow
+        open={showOnboarding}
+        profile={profileData}
+        onFinish={() => void finishOnboarding()}
       />
       <main
         className="bi-main"

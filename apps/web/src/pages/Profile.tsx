@@ -3,20 +3,21 @@ import { IslandButton, IslandCard, islandInputStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
 import { apiFetch } from "../api/client.js";
+import { putClientState } from "../api/clientState.js";
 import type { MeProfile, OwnedGameLite } from "../types.js";
 
 type SteamVisibility = "private" | "members" | "public";
 
 // One-time consent so "shared by default" stays trustworthy: a member who has
 // never acknowledged sharing sees a clear notice while Crew-shared.
-function SteamShareConsent({ visibility }: { visibility: SteamVisibility }) {
-  const [ack, setAck] = useState(() => {
-    try {
-      return window.localStorage.getItem("island.steamShareConsent") === "1";
-    } catch {
-      return false;
-    }
-  });
+function SteamShareConsent({
+  visibility,
+  clientState,
+}: {
+  visibility: SteamVisibility;
+  clientState?: Record<string, unknown>;
+}) {
+  const [ack, setAck] = useState(() => Boolean(clientState?.steam_share_ack));
   if (visibility === "private" || ack) return null;
   return (
     <div
@@ -39,12 +40,8 @@ function SteamShareConsent({ visibility }: { visibility: SteamVisibility }) {
       <IslandButton
         variant="secondary"
         onClick={() => {
-          try {
-            window.localStorage.setItem("island.steamShareConsent", "1");
-          } catch {
-            /* ignore */
-          }
           setAck(true);
+          void putClientState("steam_share_ack", true);
         }}
       >
         Got it
@@ -301,7 +298,7 @@ export function ProfilePage({
 
       <IslandCard as="div" style={{ marginTop: 8 }}>
         <h3 style={{ marginTop: 0, marginBottom: 8 }}>Privacy & Library Preferences</h3>
-        <SteamShareConsent visibility={steamVisibility} />
+        <SteamShareConsent visibility={steamVisibility} clientState={profileData?.clientState} />
         <p style={{ marginTop: 0, marginBottom: 8 }}>Steam library visibility</p>
         <select
           value={steamVisibility === "public" ? "members" : steamVisibility}
