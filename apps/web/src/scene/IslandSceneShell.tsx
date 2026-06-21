@@ -33,15 +33,25 @@ function SceneBackdrop() {
     ? "linear-gradient(180deg, rgba(255,255,255,.06) 0%, transparent 22%, transparent 70%, rgba(20,40,66,.12) 100%)"
     : "linear-gradient(180deg, rgba(6,14,28,.22) 0%, rgba(6,14,28,.07) 26%, rgba(6,14,28,.14) 64%, rgba(6,14,28,.36) 100%), radial-gradient(130% 90% at 50% 36%, transparent 54%, rgba(6,12,24,.28) 100%)";
 
+  // Defer the heavy backdrop video so it never blocks first paint, and skip the
+  // download entirely for reduced-motion users (the fallback bg stands in).
+  const [showVideo, setShowVideo] = useState(false);
+  useEffect(() => {
+    if (reducedMotion) return;
+    const w = window as unknown as {
+      requestIdleCallback?: (cb: () => void) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    const schedule = w.requestIdleCallback ?? ((cb: () => void) => window.setTimeout(cb, 200));
+    const cancel = w.cancelIdleCallback ?? window.clearTimeout;
+    const id = schedule(() => setShowVideo(true));
+    return () => cancel(id);
+  }, [reducedMotion]);
+
   useEffect(() => {
     const v = videoRef.current;
-    if (!v) return;
-    if (reducedMotion) {
-      v.pause();
-    } else {
-      v.play().catch(() => {});
-    }
-  }, [src, reducedMotion]);
+    if (v && showVideo) v.play().catch(() => {});
+  }, [src, showVideo]);
 
   return (
     <div
@@ -56,22 +66,25 @@ function SceneBackdrop() {
         background: fallbackBg
       }}
     >
-      <video
-        ref={videoRef}
-        key={src}
-        src={src}
-        muted
-        loop
-        autoPlay={!reducedMotion}
-        playsInline
-        style={{
-          position: "absolute",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover"
-        }}
-      />
+      {showVideo && (
+        <video
+          ref={videoRef}
+          key={src}
+          src={src}
+          muted
+          loop
+          autoPlay
+          playsInline
+          preload="auto"
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover"
+          }}
+        />
+      )}
       <div
         aria-hidden="true"
         style={{
