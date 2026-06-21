@@ -11,8 +11,7 @@ import { IslandButton, IslandCard, IslandEmptyState, IslandSkeletonCard, useCoun
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { ItemGlyph } from "../components/ItemGlyph.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
-import { MILESTONES, MILESTONE_LABELS, RANK_TIERS } from "../data/rankTiers.js";
-import { RankBadgeArt, RankBadgeSlot } from "../components/MilestoneRankBadge.js";
+import { RankPath } from "../components/RankPath.js";
 import { islandTheme } from "../theme.js";
 import type {
   NuggieTransaction,
@@ -361,97 +360,7 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
       {/* Milestones */}
       <IslandCard as="section" style={{ display: "grid", gap: 12 }}>
         <div style={{ fontWeight: 700, fontSize: 15 }}>Rank</div>
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center" }}>
-          {MILESTONES.map((m, i) => {
-            const reached = me.lifetimeEarned >= m;
-            const isNext = !reached && (i === 0 || me.lifetimeEarned >= MILESTONES[i - 1]);
-            const tier = RANK_TIERS[i];
-            const isApex = i === RANK_TIERS.length - 1;
-            const badgeW = 64;
-            return (
-              <div
-                key={m}
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  gap: 8,
-                  opacity: reached ? 1 : isNext ? 0.92 : 0.45,
-                  flex: "1 1 72px",
-                  minWidth: 72,
-                }}
-              >
-                <div
-                  className={reached && isApex ? "bi-rank-apex-pulse" : undefined}
-                  style={{
-                    transition: "transform 240ms ease",
-                    transform: isNext ? "scale(1.04)" : undefined,
-                  }}
-                >
-                  <RankBadgeSlot width={badgeW}>
-                    <RankBadgeArt tier={tier} reached={reached} width={badgeW} glow={reached || isNext} />
-                  </RankBadgeSlot>
-                </div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: reached ? tier.reachedTextColor : islandTheme.color.textMuted,
-                    fontFamily: islandTheme.font.mono,
-                    letterSpacing: "0.06em",
-                    fontWeight: reached ? 700 : 500,
-                    textAlign: "center",
-                    lineHeight: 1.2,
-                    maxWidth: 88,
-                  }}
-                >
-                  {MILESTONE_LABELS[i]}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        {(() => {
-          const next = MILESTONES.find((m) => me.lifetimeEarned < m);
-          if (!next) return null;
-          const pct = Math.min(100, Math.round((me.lifetimeEarned / next) * 100));
-          const nextIdx = MILESTONES.indexOf(next);
-          const nextTier = RANK_TIERS[nextIdx];
-          return (
-            <div>
-              <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 6 }}>
-                Lifetime ₦{fmt(me.lifetimeEarned)} / ₦{fmt(next)} · {pct}% to{" "}
-                <span style={{ color: nextTier.reachedTextColor, fontWeight: 700, fontFamily: islandTheme.font.mono, letterSpacing: "0.06em" }}>
-                  {MILESTONE_LABELS[nextIdx]}
-                </span>
-              </div>
-              <div style={{ height: 6, borderRadius: 999, background: islandTheme.color.panelMutedBg, overflow: "hidden" }}>
-                <div
-                  style={{
-                    height: "100%",
-                    width: `${pct}%`,
-                    background: nextTier.reachedGrad,
-                    borderRadius: 999,
-                    transition: "width 600ms ease",
-                    boxShadow: `0 0 8px ${nextTier.reachedGlow}`,
-                  }}
-                />
-              </div>
-            </div>
-          );
-        })()}
-        <style>{`
-          @keyframes biRankApexPulse {
-            0%, 100% {
-              box-shadow: 0 0 18px rgba(244, 114, 182, 0.7), inset 0 0 0 1px rgba(255,255,255,0.18);
-            }
-            50% {
-              box-shadow: 0 0 28px rgba(244, 114, 182, 0.95), inset 0 0 0 1px rgba(255,255,255,0.30);
-            }
-          }
-          .bi-rank-apex-pulse {
-            animation: biRankApexPulse 2.6s ease-in-out infinite;
-          }
-        `}</style>
+        <RankPath lifetimeEarned={me.lifetimeEarned} />
       </IslandCard>
 
       {/* My Items */}
