@@ -458,10 +458,12 @@ function RankTierCard({
               alt={tier.label}
               style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
             />
-          ) : isNext ? (
-            "◎"
           ) : (
-            "○"
+            <img
+              src={tier.artLocked}
+              alt={`${tier.label} (locked)`}
+              style={{ width: "100%", height: "100%", borderRadius: 999, display: "block" }}
+            />
           )}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
