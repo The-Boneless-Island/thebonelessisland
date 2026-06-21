@@ -43,7 +43,7 @@ Page set is driven by `lib/routes.ts` (`PAGE_PATHS` / `pageFromPath`). All pages
 ## Components (apps/web/src/components/)
 - `Topbar` — `position: fixed` glass header (62px spacer div in App.tsx); global search is local state only (not wired to API)
 - `UserMenu` — day/night toggle via `useDayNight`, Steam panel, profile/admin links, logout
-- `SteamOnboarding` — post-login modal; skip state persisted per user in `localStorage`
+- `OnboardingFlow` — "Washed Ashore" 8-step product tour (dim scrim + `IslandCard` steps, progress dots, persistent Skip); shown post-login when `clientState.onboarding_version < currentOnboardingVersion`; completion calls `POST /profile/onboarding/complete`; `SteamOnboarding.tsx` was deleted
 - `steam.tsx` — Steam brand components + `steamSignInUrl()` pointing to `/steam/openid/start`
 
 ## Background sync intervals (App.tsx)
@@ -54,4 +54,4 @@ Page set is driven by `lib/routes.ts` (`PAGE_PATHS` / `pageFromPath`). All pages
 - Steam sync: every 10 min (when linked)
 
 ## Key types (apps/web/src/types.ts)
-`PageId`, `MeProfile`, `GuildMember`, `GameNight`, `GameNightAttendee`, `CrewOwnedGame`, `CrewWishlistGame`, `FeaturedRecommendation`, `GameNewsItem`, `ActivityEvent`, `NewsCard`, `ServerSetting`
+`PageId`, `MeProfile` (includes `clientState: Record<string, unknown>` + `currentOnboardingVersion: number`), `GuildMember`, `GameNight`, `GameNightAttendee`, `CrewOwnedGame`, `CrewWishlistGame`, `FeaturedRecommendation`, `GameNewsItem`, `ActivityEvent`, `NewsCard`, `ServerSetting`

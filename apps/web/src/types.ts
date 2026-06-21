@@ -117,6 +117,8 @@ export type MeProfile = {
   nuggiesOptedOut: boolean;
   equippedItems: EquippedItem[];
   guildId: string | null;
+  clientState: Record<string, unknown>;
+  currentOnboardingVersion?: number;
 };
 
 export type OwnedGameLite = {

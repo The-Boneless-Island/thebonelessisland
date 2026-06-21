@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type CSSPr
 import { createPortal } from "react-dom";
 import { useLocation, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
+import { putClientState } from "../api/clientState.js";
 import { IslandButton, IslandCard, IslandEmptyState, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { GameCover } from "../steamArt.js";
@@ -315,13 +316,13 @@ function ForumHome({
   const defaultCat = categories?.find((c) => !c.isLocked)?.slug ?? "general";
 
   // Getting-started checklist — driven by real stats, except the intro-read
-  // tick which is remembered in localStorage.
+  // tick which is persisted server-side via user_client_state.
   const [introRead, setIntroRead] = useState(
-    () => localStorage.getItem("bi:forum-onboarding-dismissed") === "1"
+    () => Boolean(profile?.clientState?.forum_intro_seen)
   );
   const markIntroRead = () => {
-    localStorage.setItem("bi:forum-onboarding-dismissed", "1");
     setIntroRead(true);
+    void putClientState("forum_intro_seen", true);
   };
   const mine = stats?.mine;
   const reacted = (mine?.reactionsGiven ?? 0) > 0;

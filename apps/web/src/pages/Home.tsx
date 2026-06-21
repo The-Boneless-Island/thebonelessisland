@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
+import { putClientState } from "../api/clientState.js";
 import { activityHref, pathForGame, pathForIslander } from "../lib/routes.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { LOGO_BG_URL } from "../assets.js";
@@ -104,7 +105,15 @@ function HomePageInner({
         </section>
         {featuredArticle && <FeaturedNewsCard item={featuredArticle} onNavigate={onNavigate} />}
         <CrewTrending onNavigate={onNavigate} games={trending.games} loading={trending.loading} />
-        <ActivityFeed events={activityEvents} onNavigate={onNavigate} />
+        <ActivityFeed
+          events={activityEvents}
+          onNavigate={onNavigate}
+          activityLastSeenAt={(() => {
+            const raw = profile?.clientState?.activity_last_seen_at;
+            const n = typeof raw === "number" ? raw : 0;
+            return Number.isFinite(n) ? n : 0;
+          })()}
+        />
         <DriftLog cards={newsCards} onNavigate={onNavigate} />
         <QuickActions guildId={profile?.guildId ?? null} onNavigate={onNavigate} />
       </div>
@@ -1493,32 +1502,21 @@ const ACTIVITY_DATE_WINDOWS: Record<Exclude<ActivityDateRange, "all">, number> =
   "30d": 30 * 24 * 60 * 60 * 1000
 };
 
-const ACTIVITY_LAST_SEEN_KEY = "bi:activity:last-seen";
-
-function readActivityLastSeen(): number {
-  try {
-    const v = localStorage.getItem(ACTIVITY_LAST_SEEN_KEY);
-    const n = v ? Number(v) : 0;
-    return Number.isFinite(n) ? n : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function writeActivityLastSeen(ts: number): void {
-  try {
-    localStorage.setItem(ACTIVITY_LAST_SEEN_KEY, String(ts));
-  } catch {
-    // localStorage unavailable (private mode) — the "new" marker just stays off.
-  }
-}
-
 function eventTs(iso: string): number {
   const n = new Date(iso).getTime();
   return Number.isFinite(n) ? n : 0;
 }
 
-function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityEvent[]; onNavigate: (page: PageId) => void }) {
+function ActivityFeed({
+  events: initialEvents,
+  onNavigate,
+  activityLastSeenAt,
+}: {
+  events: ActivityEvent[];
+  onNavigate: (page: PageId) => void;
+  /** ms timestamp from profile.clientState.activity_last_seen_at (0 = first visit) */
+  activityLastSeenAt: number;
+}) {
   const [tab, setTab] = useState<ActivityCategory>("all");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<ActivitySort>("newest");
@@ -1531,13 +1529,20 @@ function ActivityFeed({ events: initialEvents, onNavigate }: { events: ActivityE
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   // "New since last visit": baseline captured once on mount so the markers
-  // persist for this view; the newest seen timestamp is persisted so the next
-  // visit starts clean. 0 baseline (first-ever visit) shows no markers.
-  const [lastSeenBaseline] = useState(() => readActivityLastSeen());
+  // persist for this view; the newest seen timestamp is persisted server-side
+  // so the next visit (even on another device) starts clean. 0 = first-ever
+  // visit, so no markers are shown.
+  const [lastSeenBaseline] = useState(() => activityLastSeenAt);
+  // Track the last value we wrote so we don't re-PUT on every poll tick (20-min
+  // interval / SSE refresh) when the newest event cursor hasn't advanced.
+  const lastWrittenActivityRef = useRef<number>(0);
   useEffect(() => {
     if (events.length === 0) return;
     const newest = events.reduce((m, e) => Math.max(m, eventTs(e.createdAt)), 0);
-    if (newest > 0) writeActivityLastSeen(newest);
+    if (newest > 0 && newest > lastWrittenActivityRef.current) {
+      lastWrittenActivityRef.current = newest;
+      void putClientState("activity_last_seen_at", newest);
+    }
   }, [events]);
   const newCount = useMemo(
     () =>

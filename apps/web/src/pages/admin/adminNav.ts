@@ -74,7 +74,8 @@ export const ADMIN_PAGES: Record<AdminPageId, AdminPageMeta> = {
     keywords: ["members", "roster", "roles", "presence", "onboarding", "people", "users"],
     sections: [
       { anchor: "members-roster", label: "Roster", keywords: ["roster", "list", "presence", "online"] },
-      { anchor: "members-roles", label: "Role mapping", keywords: ["roles", "mapping", "discord", "promote"] }
+      { anchor: "members-roles", label: "Role mapping", keywords: ["roles", "mapping", "discord", "promote"] },
+      { anchor: "members-onboarding", label: "Onboarding", keywords: ["onboarding", "tour", "washed ashore", "reset", "re-show"] }
     ]
   },
   forums: {

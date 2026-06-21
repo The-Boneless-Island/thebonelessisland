@@ -5,6 +5,14 @@ import { getGuildId } from "../lib/serverSettings.js";
 import { requireSession } from "../lib/auth.js";
 import { getEquippedItemsByUserId } from "../lib/nuggiesLedger.js";
 import { composePresenceText } from "../lib/presence.js";
+import {
+  ALLOWED_CLIENT_STATE_KEYS,
+  CLIENT_STATE_SCHEMAS,
+  ClientStateKey,
+  CURRENT_ONBOARDING_VERSION,
+  getClientState,
+  setClientState,
+} from "../lib/clientState.js";
 
 const patchSchema = z.object({
   steamVisibility: z.enum(["private", "members", "public"]).optional(),
@@ -103,7 +111,11 @@ profileRouter.get("/me", async (req, res) => {
     return;
   }
 
-  const equippedItems = await getEquippedItemsByUserId(BigInt(row.user_id)).catch(() => []);
+  const userId = BigInt(row.user_id);
+  const [equippedItems, clientState] = await Promise.all([
+    getEquippedItemsByUserId(userId).catch(() => []),
+    getClientState(userId).catch(() => ({})),
+  ]);
 
   res.json({
     profile: {
@@ -145,6 +157,8 @@ profileRouter.get("/me", async (req, res) => {
       nuggiesOptedOut: row.nuggies_opted_out,
       equippedItems,
       guildId: getGuildId(),
+      clientState,
+      currentOnboardingVersion: CURRENT_ONBOARDING_VERSION,
     }
   });
 });
@@ -226,5 +240,67 @@ profileRouter.delete("/steam-exclusions/:appId", async (req, res) => {
     `,
     [discordUserId, appId]
   );
+  res.json({ ok: true });
+});
+
+// ── Client state (onboarding, prefs, seen-flags) ────────────────────────────
+
+const clientStateSchema = z.object({
+  key: z.string(),
+  value: z.unknown(),
+});
+
+/**
+ * PUT /profile/client-state
+ * Upsert one key/value pair for the caller.  Only keys in ALLOWED_CLIENT_STATE_KEYS
+ * are accepted; all others are rejected with 400.
+ */
+profileRouter.put("/client-state", async (req, res) => {
+  const parsed = clientStateSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Body must be { key: string, value: unknown }" });
+    return;
+  }
+  const { key, value } = parsed.data;
+  if (!ALLOWED_CLIENT_STATE_KEYS.has(key)) {
+    res.status(400).json({ error: `Unknown client-state key: ${key}` });
+    return;
+  }
+  const schema = CLIENT_STATE_SCHEMAS[key as ClientStateKey];
+  const valueResult = schema.safeParse(value);
+  if (!valueResult.success) {
+    res.status(400).json({ error: "Invalid value for client-state key" });
+    return;
+  }
+  const discordUserId = String(res.locals.userId);
+  const userResult = await db.query<{ id: string }>(
+    `SELECT id FROM users WHERE discord_user_id = $1`,
+    [discordUserId]
+  );
+  const userRow = userResult.rows[0];
+  if (!userRow) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  await setClientState(BigInt(userRow.id), key, valueResult.data);
+  res.json({ ok: true });
+});
+
+/**
+ * POST /profile/onboarding/complete
+ * Mark onboarding done at the current version for the caller.
+ */
+profileRouter.post("/onboarding/complete", async (req, res) => {
+  const discordUserId = String(res.locals.userId);
+  const userResult = await db.query<{ id: string }>(
+    `SELECT id FROM users WHERE discord_user_id = $1`,
+    [discordUserId]
+  );
+  const userRow = userResult.rows[0];
+  if (!userRow) {
+    res.status(404).json({ error: "User not found" });
+    return;
+  }
+  await setClientState(BigInt(userRow.id), "onboarding_version", CURRENT_ONBOARDING_VERSION);
   res.json({ ok: true });
 });

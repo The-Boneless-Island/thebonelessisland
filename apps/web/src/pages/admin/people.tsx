@@ -92,6 +92,69 @@ export function MembersPage() {
           there and they sync here automatically.
         </p>
       </IslandCard>
+
+      <IslandCard id="members-onboarding" style={{ padding: 16 }}>
+        <SubsectionTitle>Onboarding</SubsectionTitle>
+        <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+          Re-show the <strong>Washed Ashore</strong> tour to every member on their next visit. Use this after
+          adding new steps or when you want the whole crew to see updated onboarding content.
+        </p>
+        <OnboardingResetButton />
+      </IslandCard>
+    </div>
+  );
+}
+
+function OnboardingResetButton() {
+  const [state, setState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [msg, setMsg] = useState("");
+
+  const statusColor =
+    state === "error"
+      ? islandTheme.color.dangerAccent
+      : state === "done"
+        ? islandTheme.color.successAccent
+        : islandTheme.color.textSubtle;
+
+  async function handleClick() {
+    if (
+      !window.confirm(
+        "Re-show the Washed Ashore onboarding tour to all members?\n\nEvery member will see the tour again on their next visit."
+      )
+    ) {
+      return;
+    }
+    setState("running");
+    setMsg("Resetting onboarding for all members…");
+    try {
+      const res = await apiFetch("/admin/onboarding/reset-all", { method: "POST" });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; reset?: number; error?: string } | null;
+      if (!res.ok || !data?.ok) {
+        setState("error");
+        setMsg(data?.error ?? `Reset failed (${res.status})`);
+        setTimeout(() => setState("idle"), 20000);
+        return;
+      }
+      setState("done");
+      setMsg(`Done — ${data.reset ?? 0} member${(data.reset ?? 0) === 1 ? "" : "s"} will see the tour again on their next visit.`);
+      setTimeout(() => setState("idle"), 15000);
+    } catch (err) {
+      setState("error");
+      setMsg(err instanceof Error ? err.message : "Reset failed");
+      setTimeout(() => setState("idle"), 20000);
+    }
+  }
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      <IslandButton variant="secondary" disabled={state === "running"} onClick={() => void handleClick()}>
+        {state === "running" ? "Resetting…" : "Re-show onboarding to all members"}
+      </IslandButton>
+      {msg && (
+        <span role="status" aria-live="polite" style={{ fontSize: 12, color: statusColor }}>
+          {msg}
+        </span>
+      )}
     </div>
   );
 }
