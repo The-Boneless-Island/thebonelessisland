@@ -26,6 +26,7 @@ const PAGE_ENTRIES: Array<{ id: PageId; label: string; detail: string; icon: str
   { id: "community-leaderboard", label: "Leaderboard", detail: "Top Nuggies holders", icon: "🏆" },
   { id: "crew-achievements", label: "Crew Achievements", detail: "Achievement progress across the crew", icon: "🎖" },
   { id: "nuggies", label: "Balance & Shop", detail: "Your Nuggies and the item shop", icon: "🍗" },
+  { id: "nuggies-loans", label: "Loans", detail: "Lend, borrow, and repay", icon: "🤝" },
   { id: "nuggies-casino", label: "Nuggie Casino", detail: "Coinflip, blackjack, hi-lo", icon: "🎰" },
   { id: "nuggies-history", label: "Nuggies History", detail: "Your transaction log", icon: "📜" },
   { id: "nuggies-milestones", label: "Milestones", detail: "Rank ladder + achievements", icon: "⭐" },

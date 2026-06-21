@@ -1,3 +1,4 @@
+import { loanGuideEmbedFields } from "@island/shared";
 import { randomUUID } from "crypto";
 import dotenv from "dotenv";
 import {
@@ -112,6 +113,10 @@ async function fetchAutocomplete(
     path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=borrower&status=active`;
   } else if (commandName === "loan" && subcommand === "cancel" && optionName === "id") {
     path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=lender&status=pending`;
+  } else if (commandName === "loan" && subcommand === "info" && optionName === "id") {
+    path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=any&status=any`;
+  } else if (commandName === "loan" && subcommand === "wizard" && optionName === "id") {
+    path = `/internal/autocomplete/loans?discordUserId=${uid}&q=${q}&role=borrower&status=active`;
   } else if (commandName === "nightrecommend" && optionName === "nightid") {
     path = `/internal/autocomplete/game-nights?q=${q}`;
   }
@@ -253,6 +258,24 @@ type ActivityEvent = {
 // ── Activity deep links (mirror apps/web/src/lib/routes.ts) ──────────────────
 const webOrigin = (process.env.WEB_ORIGIN ?? "http://localhost:5173").replace(/\/+$/, "");
 const webUrl = (path: string): string => `${webOrigin}${path}`;
+
+type PendingLoanWizard =
+  | {
+      kind: "offer";
+      userId: string;
+      toDiscordUserId: string;
+      amount: number;
+      durationDays?: number;
+      interestPct?: number;
+      collateral: number;
+    }
+  | { kind: "repay"; userId: string; loanId: number };
+
+const loanWizardPending = new Map<string, PendingLoanWizard>();
+
+function loanWebLink(loanId: number): string {
+  return webUrl(`/nuggies/loans?loan=${loanId}`);
+}
 
 function posIntFrom(value: unknown): number | null {
   const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
@@ -501,7 +524,52 @@ const commands = [
     )
     .addSubcommand((s) =>
       s.setName("list")
-        .setDescription("View your active loans")
+        .setDescription("View your loans")
+        .addStringOption((o) =>
+          o
+            .setName("status")
+            .setDescription("Filter by status")
+            .setRequired(false)
+            .addChoices(
+              { name: "All", value: "all" },
+              { name: "Pending", value: "pending" },
+              { name: "Active", value: "active" },
+              { name: "History", value: "history" }
+            )
+        )
+    )
+    .addSubcommand((s) => s.setName("guide").setDescription("How island loans work (rules + status key)"))
+    .addSubcommand((s) =>
+      s.setName("calc")
+        .setDescription("Preview amount due for a loan offer")
+        .addIntegerOption((o) => o.setName("principal").setDescription("Principal amount").setRequired(true).setMinValue(1))
+        .addIntegerOption((o) => o.setName("interest").setDescription("Interest % (default from settings)").setRequired(false))
+        .addIntegerOption((o) => o.setName("days").setDescription("Repayment window in days").setRequired(false))
+    )
+    .addSubcommand((s) =>
+      s.setName("info")
+        .setDescription("View details for a loan")
+        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID").setRequired(true).setAutocomplete(true))
+    )
+    .addSubcommand((s) =>
+      s.setName("wizard")
+        .setDescription("Guided loan flow with confirmation")
+        .addStringOption((o) =>
+          o
+            .setName("action")
+            .setDescription("Create an offer or repay a loan")
+            .setRequired(true)
+            .addChoices(
+              { name: "Offer", value: "offer" },
+              { name: "Repay", value: "repay" }
+            )
+        )
+        .addUserOption((o) => o.setName("borrower").setDescription("Who to lend to (offer only)").setRequired(false))
+        .addIntegerOption((o) => o.setName("amount").setDescription("Principal (offer only)").setRequired(false).setMinValue(1))
+        .addIntegerOption((o) => o.setName("days").setDescription("Repayment days (offer only)").setRequired(false))
+        .addIntegerOption((o) => o.setName("interest").setDescription("Interest % (offer only)").setRequired(false))
+        .addIntegerOption((o) => o.setName("collateral").setDescription("Collateral (offer only)").setRequired(false).setMinValue(0))
+        .addIntegerOption((o) => o.setName("id").setDescription("Loan ID (repay only)").setRequired(false).setAutocomplete(true))
     ),
 
   // Marketplace
@@ -1018,6 +1086,59 @@ client.on(Events.InteractionCreate, async (interaction) => {
     return;
   }
 
+  if (interaction.isButton()) {
+    const id = interaction.customId;
+    if (id === "loan_wizard_confirm" || id === "loan_wizard_cancel") {
+      const pending = loanWizardPending.get(interaction.user.id);
+      if (!pending || pending.userId !== interaction.user.id) {
+        await interaction.reply({ content: "That confirmation expired. Run the wizard again.", flags: MessageFlags.Ephemeral });
+        return;
+      }
+      loanWizardPending.delete(interaction.user.id);
+      if (id === "loan_wizard_cancel") {
+        await interaction.update({ content: "Cancelled.", components: [] });
+        return;
+      }
+      await interaction.deferUpdate();
+      if (pending.kind === "offer") {
+        const { ok, data } = await api("POST", "/nuggies/loan/offer", pending.userId, {
+          toDiscordUserId: pending.toDiscordUserId,
+          amount: pending.amount,
+          durationDays: pending.durationDays,
+          interestPct: pending.interestPct,
+          collateral: pending.collateral,
+        });
+        const d = data as { loanId?: number; amountDue?: number; dueAt?: string; error?: string } | null;
+        if (!ok) {
+          await interaction.editReply({ content: `❌ ${d?.error ?? "Failed"}`, components: [] });
+          return;
+        }
+        await interaction.editReply({
+          content:
+            `✅ Loan offer sent · ID \`${d?.loanId}\` · due ${nuggie(d?.amountDue ?? 0)}\n` +
+            `${loanWebLink(d?.loanId ?? 0)}`,
+          components: [],
+        });
+        return;
+      }
+      const { ok, data } = await api("POST", `/nuggies/loan/${pending.loanId}/repay`, pending.userId);
+      const d = data as { amountPaid?: number; collateralReturned?: number; error?: string } | null;
+      if (!ok) {
+        await interaction.editReply({ content: `❌ ${d?.error ?? "Failed"}`, components: [] });
+        return;
+      }
+      await interaction.editReply({
+        content:
+          `✅ Repaid loan \`${pending.loanId}\` — ${nuggie(d?.amountPaid ?? 0)} paid` +
+          (d?.collateralReturned ? ` + ${nuggie(d.collateralReturned)} collateral returned` : "") +
+          `\n${loanWebLink(pending.loanId)}`,
+        components: [],
+      });
+      return;
+    }
+    return;
+  }
+
   if (!interaction.isChatInputCommand()) return;
 
   const userId = interaction.user.id;
@@ -1497,6 +1618,113 @@ client.on(Events.InteractionCreate, async (interaction) => {
       case "loan": {
         const sub = interaction.options.getSubcommand();
 
+        if (sub === "guide") {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const embed = new EmbedBuilder()
+            .setTitle("How Nuggie Loans Work")
+            .setDescription("Peer-to-peer lending between crew members. Same rules on web and Discord.")
+            .addFields(loanGuideEmbedFields().slice(0, 25))
+            .setURL(webUrl("/nuggies/loans"));
+          await interaction.editReply({ embeds: [embed] });
+          break;
+        }
+
+        if (sub === "calc") {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const principal = interaction.options.getInteger("principal", true);
+          const interest = interaction.options.getInteger("interest", false);
+          const days = interaction.options.getInteger("days", false);
+          const qs = new URLSearchParams({ principal: String(principal) });
+          if (interest != null) qs.set("interestPct", String(interest));
+          if (days != null) qs.set("days", String(days));
+          const { ok, data } = await api("GET", `/nuggies/loan/preview?${qs.toString()}`, userId);
+          const d = data as { amountDue?: number; interestPortion?: number; dueAt?: string; days?: number; interestPct?: number; error?: string } | null;
+          if (!ok) {
+            await interaction.editReply(`❌ ${d?.error ?? "Preview failed"}`);
+            return;
+          }
+          await interaction.editReply(
+            `Principal ${nuggie(principal)} @ ${d?.interestPct ?? "?"}% · ${d?.days ?? "?"} days\n` +
+            `Amount due: ${nuggie(d?.amountDue ?? 0)} (${nuggie(d?.interestPortion ?? 0)} interest)\n` +
+            `Due: <t:${Math.floor(new Date(d?.dueAt ?? Date.now()).getTime() / 1000)}:F>`
+          );
+          break;
+        }
+
+        if (sub === "info") {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const loanId = interaction.options.getInteger("id", true);
+          const { ok, data } = await api("GET", `/nuggies/loan/${loanId}`, userId);
+          const d = data as {
+            loan?: {
+              id: number; status: string; principal: number; amountDue: number; collateral: number;
+              dueAt: string; isLender: boolean; interestRatePct?: number;
+              counterparty?: { displayName: string };
+            };
+            error?: string;
+          } | null;
+          if (!ok || !d?.loan) {
+            await interaction.editReply(`❌ ${d?.error ?? "Loan not found"}`);
+            return;
+          }
+          const l = d.loan;
+          await interaction.editReply(
+            `Loan \`${l.id}\` · **${l.status}**\n` +
+            `${l.isLender ? "Lent" : "Borrowed"} ${nuggie(l.principal)} → due ${nuggie(l.amountDue)}` +
+            (l.interestRatePct != null ? ` @ ${l.interestRatePct}%` : "") +
+            (l.collateral ? ` · collateral ${nuggie(l.collateral)}` : "") +
+            `\nWith: **${l.counterparty?.displayName ?? "crew"}** · Due <t:${Math.floor(new Date(l.dueAt).getTime() / 1000)}:R>\n` +
+            loanWebLink(l.id)
+          );
+          break;
+        }
+
+        if (sub === "wizard") {
+          await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const action = interaction.options.getString("action", true);
+          if (action === "offer") {
+            const borrower = interaction.options.getUser("borrower", false);
+            const amount = interaction.options.getInteger("amount", false);
+            if (!borrower || !amount) {
+              await interaction.editReply("Offer wizard needs **borrower** and **amount**. Example: `/loan wizard action:Offer borrower:@crew amount:100`");
+              return;
+            }
+            loanWizardPending.set(userId, {
+              kind: "offer",
+              userId,
+              toDiscordUserId: borrower.id,
+              amount,
+              durationDays: interaction.options.getInteger("days", false) ?? undefined,
+              interestPct: interaction.options.getInteger("interest", false) ?? undefined,
+              collateral: interaction.options.getInteger("collateral", false) ?? 0,
+            });
+            const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+              new ButtonBuilder().setCustomId("loan_wizard_confirm").setLabel("Confirm offer").setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId("loan_wizard_cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary)
+            );
+            await interaction.editReply({
+              content: `Confirm loan offer to **${borrower.username}** for ${nuggie(amount)}?`,
+              components: [row],
+            });
+            break;
+          }
+          const loanId = interaction.options.getInteger("id", false);
+          if (!loanId) {
+            await interaction.editReply("Repay wizard needs **id** (pick an active borrowed loan).");
+            return;
+          }
+          loanWizardPending.set(userId, { kind: "repay", userId, loanId });
+          const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder().setCustomId("loan_wizard_confirm").setLabel("Confirm repay").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId("loan_wizard_cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary)
+          );
+          await interaction.editReply({
+            content: `Confirm repay for loan \`${loanId}\`?`,
+            components: [row],
+          });
+          break;
+        }
+
         if (sub === "offer") {
           await interaction.deferReply();
           const borrower = interaction.options.getUser("borrower", true);
@@ -1517,7 +1745,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
             `Principal: ${nuggie(amount)} | Due back: ${nuggie(d?.amountDue ?? 0)}` +
             (d?.collateral ? ` | Collateral required: ${nuggie(d.collateral)}` : "") +
             `\nLoan ID: \`${d?.loanId}\` · Due: <t:${Math.floor(new Date(d?.dueAt ?? Date.now()).getTime() / 1000)}:R>\n` +
-            `**${borrower.username}**: use \`/loan accept ${d?.loanId}\` to accept.`
+            `**${borrower.username}**: use \`/loan accept ${d?.loanId}\` to accept.\n` +
+            loanWebLink(d?.loanId ?? 0)
           );
           break;
         }
@@ -1528,7 +1757,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
           const { ok, data } = await api("POST", `/nuggies/loan/${loanId}/accept`, userId);
           const d = data as { principal?: number; dueAt?: string; error?: string } | null;
           if (!ok) { await interaction.editReply(`❌ ${d?.error ?? "Failed"}`); return; }
-          await interaction.editReply(`✅ **${username}** accepted loan \`${loanId}\`. Received ${nuggie(d?.principal ?? 0)} · Due <t:${Math.floor(new Date(d?.dueAt ?? Date.now()).getTime() / 1000)}:R>`);
+          await interaction.editReply(
+            `✅ **${username}** accepted loan \`${loanId}\`. Received ${nuggie(d?.principal ?? 0)} · Due <t:${Math.floor(new Date(d?.dueAt ?? Date.now()).getTime() / 1000)}:R>\n` +
+            loanWebLink(loanId)
+          );
           break;
         }
 
@@ -1540,7 +1772,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
           if (!ok) { await interaction.editReply(`❌ ${d?.error ?? "Failed"}`); return; }
           await interaction.editReply(
             `✅ **${username}** repaid loan \`${loanId}\` — ${nuggie(d?.amountPaid ?? 0)} paid` +
-            (d?.collateralReturned ? ` + ${nuggie(d.collateralReturned)} collateral returned` : "")
+            (d?.collateralReturned ? ` + ${nuggie(d.collateralReturned)} collateral returned` : "") +
+            `\n${loanWebLink(loanId)}`
           );
           break;
         }
@@ -1557,14 +1790,30 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
         if (sub === "list") {
           await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+          const statusFilter = interaction.options.getString("status") ?? "all";
           const { ok, data } = await api("GET", "/nuggies/loans", userId);
           const d = data as { loans?: Array<{ id: number; status: string; principal: number; amountDue: number; dueAt: string; isLender: boolean; collateral: number }> } | null;
-          if (!ok || !d?.loans?.length) { await interaction.editReply("No active loans."); return; }
+          if (!ok || !d?.loans?.length) {
+            await interaction.editReply(`No loans on the books.\n${webUrl("/nuggies/loans")}`);
+            return;
+          }
 
-          const lines = d.loans.map((l) =>
+          const filtered = d.loans.filter((l) => {
+            if (statusFilter === "all") return true;
+            if (statusFilter === "pending") return l.status === "pending";
+            if (statusFilter === "active") return l.status === "active";
+            return l.status === "repaid" || l.status === "defaulted" || l.status === "cancelled";
+          });
+
+          if (!filtered.length) {
+            await interaction.editReply(`No loans match that filter.\n${webUrl("/nuggies/loans")}`);
+            return;
+          }
+
+          const lines = filtered.slice(0, 20).map((l) =>
             `\`${l.id}\` ${l.isLender ? "📤 Lent" : "📥 Borrowed"} ${nuggie(l.principal)} · Due ${nuggie(l.amountDue)} · <t:${Math.floor(new Date(l.dueAt).getTime() / 1000)}:R> · ${l.status}`
           );
-          await interaction.editReply(lines.join("\n"));
+          await interaction.editReply(`${lines.join("\n")}\n\nFull hub: ${webUrl("/nuggies/loans")}`);
           break;
         }
         break;

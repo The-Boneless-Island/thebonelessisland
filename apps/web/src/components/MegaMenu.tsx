@@ -42,6 +42,7 @@ const NAV_GROUPS: NavGroup[] = [
     defaultId: "nuggies",
     children: [
       { id: "nuggies", label: "Balance & Shop", description: "Your balance and the item shop" },
+      { id: "nuggies-loans", label: "Loans", description: "Lend, borrow, and repay on the dock" },
       { id: "nuggies-casino", label: "Nuggie Casino", description: "Coinflip, blackjack, hi-lo" },
       { id: "nuggies-history", label: "History", description: "Your transaction log" },
       { id: "nuggies-milestones", label: "Milestones", description: "Rank ladder + achievements" }
@@ -51,7 +52,7 @@ const NAV_GROUPS: NavGroup[] = [
 
 const GAMES_GROUP_IDS: PageId[] = ["games", "library", "games-news"];
 const COMMUNITY_GROUP_IDS: PageId[] = ["community", "tide-check", "community-forums", "community-leaderboard", "crew-achievements"];
-const NUGGIES_GROUP_IDS: PageId[] = ["nuggies", "nuggies-casino", "nuggies-history", "nuggies-milestones"];
+const NUGGIES_GROUP_IDS: PageId[] = ["nuggies", "nuggies-loans", "nuggies-casino", "nuggies-history", "nuggies-milestones"];
 
 function groupIsActive(group: NavGroup, page: PageId): boolean {
   if (group.label === "Games") return GAMES_GROUP_IDS.includes(page);

@@ -358,16 +358,43 @@ internalRouter.get(
       const role = String(req.query.role ?? "").trim();
       const status = String(req.query.status ?? "").trim();
       const q = String(req.query.q ?? "").trim();
-      if (!discordUserId || (role !== "borrower" && role !== "lender")) {
-        res.json({ choices: [] });
-        return;
-      }
-      if (status !== "pending" && status !== "active") {
+      if (!discordUserId) {
         res.json({ choices: [] });
         return;
       }
       const userId = await resolveUserId(discordUserId);
       if (!userId) {
+        res.json({ choices: [] });
+        return;
+      }
+
+      if (role === "any" && status === "any") {
+        const rows = await db.query<{
+          id: string; principal: string; amount_due: string; status: string; lender_user_id: string;
+        }>(
+          `SELECT id, principal, amount_due, status, lender_user_id
+           FROM nuggies_loans
+           WHERE (lender_user_id = $1 OR borrower_user_id = $1)
+             AND ($2 = '' OR CAST(id AS TEXT) LIKE $2 || '%')
+           ORDER BY created_at DESC
+           LIMIT ${AC_LIMIT}`,
+          [userId, q]
+        );
+        const choices = rows.rows.map((r) => ({
+          name: capName(
+            `#${r.id} — ${Number(r.principal).toLocaleString()}🍗 · ${r.status}${String(r.lender_user_id) === String(userId) ? " · lent" : " · borrowed"}`
+          ),
+          value: Number(r.id),
+        }));
+        res.json({ choices });
+        return;
+      }
+
+      if (role !== "borrower" && role !== "lender") {
+        res.json({ choices: [] });
+        return;
+      }
+      if (status !== "pending" && status !== "active") {
         res.json({ choices: [] });
         return;
       }

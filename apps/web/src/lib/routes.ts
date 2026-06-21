@@ -23,6 +23,7 @@ const PAGE_PATHS: Record<PageId, string> = {
   nuggies: "/nuggies",
   "nuggies-casino": "/nuggies/casino",
   "nuggies-history": "/nuggies/history",
+  "nuggies-loans": "/nuggies/loans",
   "nuggies-milestones": "/nuggies/milestones",
   profile: "/profile",
   settings: "/settings",
@@ -50,6 +51,7 @@ export function pageFromPath(pathname: string): PageId | null {
   if (p === "/achievements") return "crew-achievements";
   if (p === "/nuggies/casino") return "nuggies-casino";
   if (p === "/nuggies/history") return "nuggies-history";
+  if (p === "/nuggies/loans") return "nuggies-loans";
   if (p === "/nuggies/milestones") return "nuggies-milestones";
   if (p === "/nuggies") return "nuggies";
   if (p === "/profile") return "profile";
@@ -78,6 +80,10 @@ export function pathForForumThread(threadId: number, postId?: number | null): st
 // the `game` query param). Used by inline game links in activity feeds.
 export function pathForGame(appId: number): string {
   return `/library?game=${appId}`;
+}
+
+export function pathForLoan(loanId: number): string {
+  return `/nuggies/loans?loan=${loanId}`;
 }
 
 // Minimal structural shape an activity row needs to resolve a destination.
@@ -109,6 +115,10 @@ export function activityHref(event: ActivityHrefInput): string | null {
   }
   if (type.startsWith("game_night.")) return pathForPage("tide-check");
   if (type.startsWith("news.")) return pathForPage("games-news");
+  if (type === "nuggies.loan_accepted" || type === "nuggies.loan_repaid") {
+    const loanId = asId(payload.loanId);
+    if (loanId) return pathForLoan(loanId);
+  }
   // New member → their profile (id lives in the payload since they may have no
   // account row yet).
   if (type === "member.joined") {

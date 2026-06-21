@@ -10,6 +10,7 @@ export type PageId =
   | "nuggies"
   | "nuggies-casino"
   | "nuggies-history"
+  | "nuggies-loans"
   | "nuggies-milestones"
   | "profile"
   | "settings"
@@ -373,15 +374,24 @@ export type NuggiesLeaderboardEntry = {
   equippedTitle: EquippedItem | null;
 };
 
+export type NuggiesLoanCounterparty = {
+  discordUserId: string;
+  username: string;
+  displayName: string;
+  avatarUrl: string | null;
+};
+
 export type NuggiesLoan = {
   id: number;
   status: "pending" | "active" | "repaid" | "defaulted" | "cancelled";
   principal: number;
+  interestRatePct?: number;
   amountDue: number;
   collateral: number;
   dueAt: string;
   isLender: boolean;
-  createdAt: string;
+  createdAt?: string;
+  counterparty?: NuggiesLoanCounterparty | null;
 };
 
 export type ForumAuthor = {

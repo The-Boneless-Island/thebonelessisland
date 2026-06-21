@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { Link } from "react-router";
 import { apiFetch } from "../api/client.js";
+import { LoanRow } from "../components/LoanRow.js";
+import { pathForPage } from "../lib/routes.js";
 import { useRefetchActivity } from "../system/activityContext.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { usePushToast } from "../system/toast.js";
@@ -232,82 +235,37 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
 
   const activeLoans = me.loans?.filter((l) => l.status === "pending" || l.status === "active") ?? [];
 
-  const loansCard = activeLoans.length > 0 ? (
+  const loansCard = (
     <IslandCard as="section" style={{ display: "grid", gap: 10 }}>
-      <div style={{ fontWeight: 700, fontSize: 15 }}>Loans</div>
-      <div style={{ display: "grid", gap: 6 }}>
-        {activeLoans.map((loan) => {
-          const overdue = loan.status === "active" && new Date(loan.dueAt).getTime() < Date.now();
-          const due = new Date(loan.dueAt);
-          const dueLabel = due.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-          const role = loan.isLender ? "Lent" : "Borrowed";
-          const arrow = loan.isLender ? "📤" : "📥";
-          return (
-            <div
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>Loans</div>
+        <Link
+          to={pathForPage("nuggies-loans")}
+          style={{ color: islandTheme.color.primaryGlow, fontSize: 13, fontWeight: 600, textDecoration: "none" }}
+        >
+          Open Loans dock →
+        </Link>
+      </div>
+      {activeLoans.length === 0 ? (
+        <div style={{ fontSize: 13, color: islandTheme.color.textMuted }}>
+          No pending or active loans. Head to the Loans dock to lend or borrow.
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: 6 }}>
+          {activeLoans.map((loan) => (
+            <LoanRow
               key={loan.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                padding: "8px 10px",
-                borderRadius: 8,
-                background: islandTheme.color.panelMutedBg,
-                border: `1px solid ${overdue ? "rgba(239,68,68,0.45)" : islandTheme.color.border}`,
-                fontSize: 13,
-                flexWrap: "wrap",
-              }}
-            >
-              <span style={{ fontSize: 16, flexShrink: 0 }}>{arrow}</span>
-              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
-                <div style={{ fontWeight: 600, color: islandTheme.color.textSecondary }}>
-                  {role} ₦{fmt(loan.principal)} · due ₦{fmt(loan.amountDue)}
-                </div>
-                <div style={{ fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
-                  #{loan.id} · {loan.status} · {overdue ? "OVERDUE · " : ""}due {dueLabel}
-                  {loan.collateral > 0 ? ` · collateral ₦${fmt(loan.collateral)}` : ""}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 6 }}>
-                {loan.status === "pending" && !loan.isLender && (
-                  <IslandButton
-                    variant="primary"
-                    style={{ fontSize: 12, padding: "0.3rem 0.65rem" }}
-                    disabled={loanPending === loan.id}
-                    onClick={() => void loanAction(loan.id, "accept")}
-                  >
-                    {loanPending === loan.id ? "…" : "Accept"}
-                  </IslandButton>
-                )}
-                {loan.status === "pending" && loan.isLender && (
-                  <IslandButton
-                    variant="secondary"
-                    style={{ fontSize: 12, padding: "0.3rem 0.65rem" }}
-                    disabled={loanPending === loan.id}
-                    onClick={() => void loanAction(loan.id, "cancel")}
-                  >
-                    {loanPending === loan.id ? "…" : "Cancel"}
-                  </IslandButton>
-                )}
-                {loan.status === "active" && !loan.isLender && (
-                  <IslandButton
-                    variant="primary"
-                    style={{ fontSize: 12, padding: "0.3rem 0.65rem" }}
-                    disabled={loanPending === loan.id || me.balance < loan.amountDue}
-                    onClick={() => void loanAction(loan.id, "repay")}
-                  >
-                    {loanPending === loan.id ? "…" : "Repay"}
-                  </IslandButton>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 12, color: islandTheme.color.textMuted, fontFamily: islandTheme.font.mono }}>
-        Use /loan in Discord to make new offers.
-      </div>
+              loan={loan}
+              balance={me.balance}
+              pending={loanPending === loan.id}
+              compact
+              onAction={(id, action) => void loanAction(id, action)}
+            />
+          ))}
+        </div>
+      )}
     </IslandCard>
-  ) : null;
+  );
 
   const recentActivity = (
     <IslandCard as="section" style={{ display: "grid", gap: 10 }}>

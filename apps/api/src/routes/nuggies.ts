@@ -1,3 +1,11 @@
+import {
+  calcAmountDue,
+  calcDueAt,
+  calcLiquidity,
+  calcRepayBreakdown,
+  clampLoanDays,
+  PENDING_OFFER_TTL_HOURS,
+} from "@island/shared";
 import { Router } from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
@@ -41,6 +49,82 @@ async function resolveInternalId(discordUserId: string): Promise<bigint | null> 
   return r.rows[0] ? BigInt(r.rows[0].id) : null;
 }
 
+async function isUserOptedOut(userId: bigint): Promise<boolean> {
+  const r = await db.query<{ nuggies_opted_out: boolean }>(
+    "SELECT nuggies_opted_out FROM users WHERE id = $1",
+    [userId]
+  );
+  return r.rows[0]?.nuggies_opted_out ?? false;
+}
+
+async function getLenderLiquidity(userId: bigint) {
+  const r = await db.query<{ balance: string; committed: string }>(
+    `SELECT
+       COALESCE(nb.balance, 0)::text AS balance,
+       COALESCE((
+         SELECT SUM(principal) FROM nuggies_loans
+         WHERE lender_user_id = $1 AND status = 'pending'
+       ), 0)::text AS committed
+     FROM (SELECT 1) _
+     LEFT JOIN nuggies_balances nb ON nb.user_id = $1`,
+    [userId]
+  );
+  const balance = parseInt(r.rows[0]?.balance ?? "0", 10);
+  const committedPrincipal = parseInt(r.rows[0]?.committed ?? "0", 10);
+  return calcLiquidity(balance, committedPrincipal);
+}
+
+type LoanRowDb = {
+  id: string;
+  status: string;
+  principal: string;
+  interest_rate: string;
+  amount_due: string;
+  collateral: string;
+  due_at: string;
+  created_at: string;
+  lender_user_id: string;
+  borrower_user_id: string;
+  counterparty_discord: string | null;
+  counterparty_username: string | null;
+  counterparty_display: string | null;
+  counterparty_avatar: string | null;
+};
+
+const LOAN_SELECT = `
+  SELECT l.id, l.status, l.principal, l.interest_rate, l.amount_due, l.collateral, l.due_at, l.created_at,
+         l.lender_user_id, l.borrower_user_id,
+         cu.discord_user_id AS counterparty_discord,
+         dp.username AS counterparty_username,
+         COALESCE(dp.global_name, dp.username) AS counterparty_display,
+         dp.avatar_url AS counterparty_avatar
+  FROM nuggies_loans l
+  INNER JOIN users cu ON cu.id = CASE WHEN l.lender_user_id = $1 THEN l.borrower_user_id ELSE l.lender_user_id END
+  LEFT JOIN discord_profiles dp ON dp.user_id = cu.id`;
+
+function mapLoanRow(row: LoanRowDb, viewerUserId: bigint) {
+  const rate = parseFloat(row.interest_rate);
+  return {
+    id: parseInt(row.id, 10),
+    status: row.status,
+    principal: parseInt(row.principal, 10),
+    interestRatePct: Math.round(rate * 10000) / 100,
+    amountDue: parseInt(row.amount_due, 10),
+    collateral: parseInt(row.collateral, 10),
+    dueAt: row.due_at,
+    createdAt: row.created_at,
+    isLender: String(row.lender_user_id) === String(viewerUserId),
+    counterparty: row.counterparty_discord
+      ? {
+          discordUserId: row.counterparty_discord,
+          username: row.counterparty_username ?? "",
+          displayName: row.counterparty_display ?? row.counterparty_username ?? "Unknown",
+          avatarUrl: row.counterparty_avatar,
+        }
+      : null,
+  };
+}
+
 // ── GET /nuggies/me ───────────────────────────────────────────────────────────
 
 nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
@@ -78,12 +162,11 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
        ORDER BY (s.acquisition = 'earned') DESC, i.purchased_at DESC`,
       [userId]
     ),
-    db.query<{ id: string; status: string; principal: string; amount_due: string; collateral: string; due_at: string; lender_user_id: string; borrower_user_id: string }>(
-      `SELECT id, status, principal, amount_due, collateral, due_at, lender_user_id, borrower_user_id
-       FROM nuggies_loans
-       WHERE (lender_user_id = $1 OR borrower_user_id = $1)
-         AND status IN ('pending','active')
-       ORDER BY created_at DESC`,
+    db.query<LoanRowDb>(
+      `${LOAN_SELECT}
+       WHERE (l.lender_user_id = $1 OR l.borrower_user_id = $1)
+         AND l.status IN ('pending','active')
+       ORDER BY l.created_at DESC`,
       [userId]
     ),
     db.query<{ total: string }>(
@@ -95,8 +178,17 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
     hasClaimedDailyToday(userId),
   ]);
 
+  const liquidity = calcLiquidity(
+    parseInt(balRow.rows[0]?.balance ?? "0", 10),
+    loanRows.rows
+      .filter((r) => String(r.lender_user_id) === String(userId) && r.status === "pending")
+      .reduce((sum, r) => sum + parseInt(r.principal, 10), 0)
+  );
+
   res.json({
-    balance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
+    balance: liquidity.balance,
+    committedPrincipal: liquidity.committedPrincipal,
+    availableToLend: liquidity.availableToLend,
     lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
     dailyAmount,
     claimedToday,
@@ -120,15 +212,7 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
       purchasedAt: r.purchased_at,
       acquisition: r.acquisition,
     })),
-    loans: loanRows.rows.map((r) => ({
-      id: parseInt(r.id, 10),
-      status: r.status,
-      principal: parseInt(r.principal, 10),
-      amountDue: parseInt(r.amount_due, 10),
-      collateral: parseInt(r.collateral, 10),
-      dueAt: r.due_at,
-      isLender: String(r.lender_user_id) === String(userId),
-    })),
+    loans: loanRows.rows.map((r) => mapLoanRow(r, userId)),
   });
 });
 
@@ -566,6 +650,119 @@ nuggiesRouter.post("/trade", requireBotOrSession, async (req, res) => {
   }
 });
 
+// ── GET /nuggies/members ──────────────────────────────────────────────────────
+
+nuggiesRouter.get("/members", requireSession, async (req, res) => {
+  const q = String(req.query.q ?? "").trim().toLowerCase();
+  const r = await db.query<{ discord_user_id: string; username: string; display_name: string; avatar_url: string | null }>(
+    `SELECT u.discord_user_id, dp.username, COALESCE(dp.global_name, dp.username) AS display_name, dp.avatar_url
+     FROM discord_profiles dp
+     INNER JOIN users u ON u.id = dp.user_id
+     INNER JOIN guild_members gm ON gm.discord_user_id = u.discord_user_id AND gm.in_guild = TRUE
+     WHERE dp.username IS NOT NULL AND dp.username <> ''
+       AND u.nuggies_opted_out = FALSE
+     ORDER BY display_name
+     LIMIT 200`
+  );
+  const members = r.rows
+    .filter((m) => {
+      if (!q) return true;
+      return (
+        m.display_name.toLowerCase().includes(q) ||
+        m.username.toLowerCase().includes(q)
+      );
+    })
+    .slice(0, 50)
+    .map((m) => ({
+      discordUserId: m.discord_user_id,
+      username: m.username,
+      displayName: m.display_name,
+      avatarUrl: m.avatar_url,
+    }));
+  res.json({ members });
+});
+
+// ── GET /nuggies/loan/settings ────────────────────────────────────────────────
+
+nuggiesRouter.get("/loan/settings", requireBotOrSession, async (_req, res) => {
+  if (!isEnabled()) { res.status(503).json({ error: "Nuggies disabled" }); return; }
+  await ensureSettingsLoaded();
+  res.json({
+    maxDays: getSetting("nuggies_loan_max_days", 7),
+    defaultRate: getSetting("nuggies_loan_default_rate", 10),
+    pendingTtlHours: PENDING_OFFER_TTL_HOURS,
+  });
+});
+
+// ── GET /nuggies/loan/preview ─────────────────────────────────────────────────
+
+nuggiesRouter.get("/loan/preview", requireBotOrSession, async (req, res) => {
+  if (!isEnabled()) { res.status(503).json({ error: "Nuggies disabled" }); return; }
+  await ensureSettingsLoaded();
+  const principal = parseInt(String(req.query.principal ?? "0"), 10);
+  const interestPct = parseFloat(String(req.query.interestPct ?? getSetting("nuggies_loan_default_rate", 10)));
+  const maxDays = getSetting("nuggies_loan_max_days", 7);
+  const days = clampLoanDays(
+    req.query.days ? parseInt(String(req.query.days), 10) : undefined,
+    maxDays
+  );
+  if (!Number.isFinite(principal) || principal <= 0) {
+    res.status(400).json({ error: "Invalid principal" });
+    return;
+  }
+  if (!Number.isFinite(interestPct) || interestPct < 0 || interestPct > 100) {
+    res.status(400).json({ error: "Invalid interest" });
+    return;
+  }
+  const amountDue = calcAmountDue(principal, interestPct);
+  const dueAt = calcDueAt(days);
+  res.json({
+    principal,
+    interestPct,
+    days,
+    amountDue,
+    interestPortion: amountDue - principal,
+    dueAt,
+  });
+});
+
+// ── GET /nuggies/loan/:id ─────────────────────────────────────────────────────
+
+nuggiesRouter.get("/loan/:id", requireBotOrSession, async (req, res) => {
+  const loanId = parseInt(String(req.params.id), 10);
+  const userId = await resolveInternalId(String(res.locals.userId));
+  if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+
+  const r = await db.query<LoanRowDb>(
+    `${LOAN_SELECT} WHERE l.id = $2 AND (l.lender_user_id = $1 OR l.borrower_user_id = $1)`,
+    [userId, loanId]
+  );
+  if (!r.rows[0]) { res.status(404).json({ error: "Loan not found" }); return; }
+
+  const row = r.rows[0];
+  const loan = mapLoanRow(row, userId);
+  const breakdown =
+    loan.status === "active" && !loan.isLender
+      ? calcRepayBreakdown({
+          principal: loan.principal,
+          amountDue: loan.amountDue,
+          collateral: loan.collateral,
+          dueAt: loan.dueAt,
+          balance: parseInt(
+            (
+              await db.query<{ balance: string }>(
+                "SELECT balance FROM nuggies_balances WHERE user_id = $1",
+                [userId]
+              )
+            ).rows[0]?.balance ?? "0",
+            10
+          ),
+        })
+      : null;
+
+  res.json({ loan, repayBreakdown: breakdown });
+});
+
 // ── POST /nuggies/loan/offer ──────────────────────────────────────────────────
 
 const loanOfferSchema = z.object({
@@ -588,37 +785,32 @@ nuggiesRouter.post("/loan/offer", requireBotOrSession, async (req, res) => {
   await ensureSettingsLoaded();
   const defaultRate = getSetting("nuggies_loan_default_rate", 10);
   const maxDays = getSetting("nuggies_loan_max_days", 7);
-  const rate = (interestPct ?? defaultRate) / 100;
-  const days = Math.min(durationDays ?? maxDays, maxDays);
-  const amountDue = Math.ceil(amount * (1 + rate));
-  const dueAt = new Date(Date.now() + days * 86_400_000).toISOString();
+  const effectiveInterest = interestPct ?? defaultRate;
+  const days = clampLoanDays(durationDays, maxDays);
+  const amountDue = calcAmountDue(amount, effectiveInterest);
+  const dueAt = calcDueAt(days);
+  const rate = effectiveInterest / 100;
 
   const lenderId = await resolveInternalId(discordUserId);
   const borrowerId = await resolveInternalId(toDiscordUserId);
   if (!lenderId || !borrowerId) { res.status(404).json({ error: "User not found" }); return; }
+  if (await isUserOptedOut(lenderId)) {
+    res.status(403).json({ error: "You have opted out of the Nuggies economy" });
+    return;
+  }
+  if (await isUserOptedOut(borrowerId)) {
+    res.status(403).json({ error: "Borrower has opted out of the Nuggies economy" });
+    return;
+  }
   if (String(lenderId) === String(borrowerId)) {
     res.status(400).json({ error: "Cannot loan Nuggies to yourself" });
     return;
   }
 
-  // Pre-check lender liquidity. Sum existing pending+active loans they've
-  // already committed to so spamming offers can't outrun their balance.
-  const lenderState = await db.query<{ balance: string; committed: string }>(
-    `SELECT
-       COALESCE(nb.balance, 0)::text AS balance,
-       COALESCE((
-         SELECT SUM(principal) FROM nuggies_loans
-         WHERE lender_user_id = $1 AND status = 'pending'
-       ), 0)::text AS committed
-     FROM (SELECT 1) _
-     LEFT JOIN nuggies_balances nb ON nb.user_id = $1`,
-    [lenderId]
-  );
-  const lenderBalance = parseInt(lenderState.rows[0]?.balance ?? "0", 10);
-  const lenderCommitted = parseInt(lenderState.rows[0]?.committed ?? "0", 10);
-  if (lenderBalance - lenderCommitted < amount) {
+  const liquidity = await getLenderLiquidity(lenderId);
+  if (liquidity.availableToLend < amount) {
     res.status(400).json({
-      error: `Insufficient Nuggies. Balance ₦${lenderBalance.toLocaleString()}, ₦${lenderCommitted.toLocaleString()} already committed to pending offers.`,
+      error: `Insufficient Nuggies. Balance ₦${liquidity.balance.toLocaleString()}, ₦${liquidity.committedPrincipal.toLocaleString()} already committed to pending offers.`,
     });
     return;
   }
@@ -643,6 +835,10 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
   const discordUserId = String(res.locals.userId);
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
+  if (await isUserOptedOut(userId)) {
+    res.status(403).json({ error: "You have opted out of the Nuggies economy" });
+    return;
+  }
 
   const loan = await db.query<{ id: string; lender_user_id: string; borrower_user_id: string; principal: string; amount_due: string; collateral: string; due_at: string; status: string }>(
     "SELECT * FROM nuggies_loans WHERE id = $1",
@@ -868,29 +1064,16 @@ nuggiesRouter.get("/loans", requireBotOrSession, async (_req, res) => {
   const userId = await resolveInternalId(String(res.locals.userId));
   if (!userId) { res.json({ loans: [] }); return; }
 
-  // Default sweep runs on a 5-min cron in server.ts boot — no need to do it
-  // synchronously here on every request.
-
-  const r = await db.query<{ id: string; status: string; principal: string; amount_due: string; collateral: string; due_at: string; lender_user_id: string; borrower_user_id: string; created_at: string }>(
-    `SELECT id, status, principal, amount_due, collateral, due_at, lender_user_id, borrower_user_id, created_at
-     FROM nuggies_loans
-     WHERE lender_user_id = $1 OR borrower_user_id = $1
-     ORDER BY created_at DESC
+  const r = await db.query<LoanRowDb>(
+    `${LOAN_SELECT}
+     WHERE l.lender_user_id = $1 OR l.borrower_user_id = $1
+     ORDER BY l.created_at DESC
      LIMIT 50`,
     [userId]
   );
 
   res.json({
-    loans: r.rows.map((row) => ({
-      id: parseInt(row.id, 10),
-      status: row.status,
-      principal: parseInt(row.principal, 10),
-      amountDue: parseInt(row.amount_due, 10),
-      collateral: parseInt(row.collateral, 10),
-      dueAt: row.due_at,
-      isLender: String(row.lender_user_id) === String(userId),
-      createdAt: row.created_at,
-    })),
+    loans: r.rows.map((row) => mapLoanRow(row, userId)),
   });
 });
 

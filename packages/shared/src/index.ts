@@ -1,3 +1,22 @@
+export {
+  MS_PER_DAY,
+  PENDING_OFFER_TTL_HOURS,
+  calcAmountDue,
+  calcDueAt,
+  calcInterestPortion,
+  calcLiquidity,
+  calcRepayBreakdown,
+  clampLoanDays,
+  suggestCollateral,
+} from "./loanMath.js";
+export {
+  LOAN_LEGEND_SECTIONS,
+  LOAN_STATUS_DESCRIPTIONS,
+  LOAN_STATUS_LABELS,
+  loanGuideEmbedFields,
+  type LoanStatus,
+} from "./loanCopy.js";
+
 export type DiscordIdentity = {
   discordUserId: string;
   username: string;

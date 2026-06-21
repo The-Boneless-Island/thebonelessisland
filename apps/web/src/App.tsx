@@ -30,6 +30,7 @@ const SettingsPage = lazy(() => import("./pages/Settings.js").then((m) => ({ def
 const CommunityLeaderboardPage = lazy(() => import("./pages/CommunityLeaderboard.js"));
 const CrewAchievementsPage = lazy(() => import("./pages/CrewAchievements.js"));
 const NuggiesHistoryPage = lazy(() => import("./pages/NuggiesHistory.js"));
+const NuggiesLoansPage = lazy(() => import("./pages/NuggiesLoans.js"));
 const TideCheckPage = lazy(() => import("./pages/TideCheck.js"));
 const IslanderProfilePage = lazy(() => import("./pages/IslanderProfile.js"));
 import { ToastHost, ToastQueueProvider, useToastQueue, useToastsFromStatus } from "./system/toast.js";
@@ -522,7 +523,7 @@ export function App() {
         ? "rgba(34, 211, 238, 0.06)"
         : page === "nuggies-casino"
           ? "rgba(20, 83, 45, 0.16)" // casino felt green
-          : page === "nuggies" || page === "nuggies-milestones" || page === "nuggies-history"
+          : page === "nuggies" || page === "nuggies-milestones" || page === "nuggies-history" || page === "nuggies-loans"
             ? "rgba(251, 191, 119, 0.05)"
             : "transparent";
     document.documentElement.style.setProperty("--bi-scene-tint", tint);
@@ -1887,6 +1888,14 @@ export function App() {
 
       {page === "nuggies-history" ? (
         <NuggiesHistoryPage onNavigate={navigateToPage} />
+      ) : null}
+
+      {page === "nuggies-loans" ? (
+        <NuggiesLoansPage
+          onNavigate={navigateToPage}
+          guildMembers={guildMembers}
+          selfDiscordUserId={profileData?.discordUserId ?? ""}
+        />
       ) : null}
 
       {page === "nuggies-milestones" ? <MilestonesPage /> : null}
