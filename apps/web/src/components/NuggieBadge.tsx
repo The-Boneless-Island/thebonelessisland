@@ -16,6 +16,15 @@ export function NuggieBadge({ item, size = "md" }: Props) {
   const milestoneArt = Boolean(itemData.image?.includes("/art/milestones/"));
   const glyphSize = size === "md" ? 16 : milestoneArt ? 24 : 14;
 
+  // Milestone rank badges ship their own frame — skip the colored tag pill.
+  if (milestoneArt && !label) {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", lineHeight: 0 }}>
+        <ItemGlyph itemData={itemData} size={glyphSize} fallback="" />
+      </span>
+    );
+  }
+
   return (
     <span
       className="island-mono"
