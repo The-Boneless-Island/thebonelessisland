@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "encode:auth-videos": "node scripts/encode-auth-videos.mjs"
   },
   "dependencies": {
     "@island/shared": "0.1.0",

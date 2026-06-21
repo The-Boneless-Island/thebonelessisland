@@ -3,6 +3,7 @@ import { ScrollRestoration, useLocation, useNavigate } from "react-router";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
 import { putClientState } from "./api/clientState.js";
 import { LoginScreen } from "./pages/LoginScreen.js";
+import { useLoginOverlay } from "./scene/LoginOverlayContext.js";
 import { NotFoundPage } from "./pages/NotFound.js";
 import {
   islanderIdFromPath,
@@ -87,6 +88,8 @@ export function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [loginExiting, setLoginExiting] = useState(false);
   const prevAuth = useRef<boolean | null>(null);
+  const exitSafetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { setLoginOverlayActive } = useLoginOverlay();
   // Last-applied snapshots for polled loaders — used to skip redundant setStates
   // (which would otherwise re-render the whole tree every poll tick).
   const lastGuildMembersRef = useRef<string | null>(null);
@@ -1682,17 +1685,34 @@ export function App() {
       (member.presenceStatus !== null && member.presenceStatus !== "offline")
   );
 
-  // On real login (false → true), run 780ms palm-exit animation.
+  // On real login (false → true), play the return cinematic.
   // Skip on refresh (null → true) so already-authed sessions don't flash splash.
+  const handleLoginExitComplete = useCallback(() => {
+    if (exitSafetyRef.current) {
+      clearTimeout(exitSafetyRef.current);
+      exitSafetyRef.current = null;
+    }
+    setLoginExiting(false);
+  }, []);
+
+  useEffect(() => {
+    setLoginOverlayActive(isAuthenticated !== true || loginExiting);
+  }, [isAuthenticated, loginExiting, setLoginOverlayActive]);
+
   useEffect(() => {
     if (prevAuth.current === false && isAuthenticated === true) {
       setLoginExiting(true);
-      const t = setTimeout(() => setLoginExiting(false), 780);
+      exitSafetyRef.current = setTimeout(handleLoginExitComplete, 2000);
       prevAuth.current = isAuthenticated;
-      return () => clearTimeout(t);
+      return () => {
+        if (exitSafetyRef.current) {
+          clearTimeout(exitSafetyRef.current);
+          exitSafetyRef.current = null;
+        }
+      };
     }
     prevAuth.current = isAuthenticated;
-  }, [isAuthenticated]);
+  }, [isAuthenticated, handleLoginExitComplete]);
 
   if (isAuthenticated === null) {
     return null;
@@ -1704,6 +1724,7 @@ export function App() {
         loading={false}
         authError={authError}
         exiting={loginExiting}
+        onExitComplete={handleLoginExitComplete}
       />
     );
   }

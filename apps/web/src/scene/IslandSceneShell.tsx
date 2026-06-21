@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { dayThemeVars, islandTheme, nightThemeVars } from "../theme.js";
+import { LoginOverlayProvider, useLoginOverlay } from "./LoginOverlayContext.js";
 import { DayNightProvider, useDayNight } from "./useDayNight.js";
 
 type IslandSceneShellProps = {
@@ -9,17 +10,20 @@ type IslandSceneShellProps = {
 export function IslandSceneShell({ children }: IslandSceneShellProps) {
   return (
     <DayNightProvider>
-      <SceneGlobalStyles />
-      <SceneBackdrop />
-      <PalmFrameLeft />
-      <PalmFrameRight />
-      {children}
+      <LoginOverlayProvider>
+        <SceneGlobalStyles />
+        <SceneBackdrop />
+        <PalmFrameLeft />
+        <PalmFrameRight />
+        {children}
+      </LoginOverlayProvider>
     </DayNightProvider>
   );
 }
 
 function SceneBackdrop() {
   const { mode } = useDayNight();
+  const { loginOverlayActive } = useLoginOverlay();
   const videoRef = useRef<HTMLVideoElement>(null);
   const reducedMotion = useRef(
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
@@ -50,8 +54,13 @@ function SceneBackdrop() {
 
   useEffect(() => {
     const v = videoRef.current;
-    if (v && showVideo) v.play().catch(() => {});
-  }, [src, showVideo]);
+    if (!v || !showVideo) return;
+    if (loginOverlayActive) {
+      v.pause();
+    } else {
+      v.play().catch(() => {});
+    }
+  }, [src, showVideo, loginOverlayActive]);
 
   return (
     <div
@@ -66,7 +75,7 @@ function SceneBackdrop() {
         background: fallbackBg
       }}
     >
-      {showVideo && (
+      {showVideo && !loginOverlayActive ? (
         <video
           ref={videoRef}
           key={src}
@@ -84,7 +93,7 @@ function SceneBackdrop() {
             objectFit: "cover"
           }}
         />
-      )}
+      ) : null}
       <div
         aria-hidden="true"
         style={{

@@ -1,25 +1,8 @@
 import { API_BASE_URL } from "../api/client.js";
+import { AuthCinematicVideo } from "../components/AuthCinematicVideo.js";
 import { islandTheme } from "../theme.js";
 
 const STYLES = `
-  @keyframes palmSwayL {
-    0%, 100% { transform: rotate(0deg); }
-    35%       { transform: rotate(-1.8deg); }
-    72%       { transform: rotate(1.4deg); }
-  }
-  @keyframes palmSwayR {
-    0%, 100% { transform: rotate(0deg); }
-    35%       { transform: rotate(1.8deg); }
-    72%       { transform: rotate(-1.4deg); }
-  }
-  @keyframes palmExitL {
-    0%   { transform: translateX(0)     rotate(0deg);   opacity: 1; }
-    100% { transform: translateX(-130%) rotate(-14deg); opacity: 0; }
-  }
-  @keyframes palmExitR {
-    0%   { transform: translateX(0)    rotate(0deg);  opacity: 1; }
-    100% { transform: translateX(130%) rotate(14deg); opacity: 0; }
-  }
   @keyframes cardFadeIn {
     0%   { opacity: 0; transform: scale(0.96) translateY(18px); }
     100% { opacity: 1; transform: scale(1)    translateY(0);    }
@@ -28,161 +11,11 @@ const STYLES = `
     0%   { opacity: 1; transform: scale(1)    translateY(0);     }
     100% { opacity: 0; transform: scale(0.93) translateY(12px); }
   }
-  @keyframes frondFloat1 {
-    0%, 100% { transform: rotate(0deg); }
-    50%      { transform: rotate(2.8deg); }
-  }
-  @keyframes frondFloat2 {
-    0%, 100% { transform: rotate(0deg); }
-    60%      { transform: rotate(-2.4deg); }
-  }
-  @keyframes frondFloat3 {
-    0%, 100% { transform: rotate(0deg); }
-    45%      { transform: rotate(1.6deg); }
-    85%      { transform: rotate(-1.2deg); }
-  }
   @keyframes loginSkeletonPulse {
     0%, 100% { opacity: 0.4; }
     50%      { opacity: 0.7; }
   }
 `;
-
-// Frond floats cycle through 3 keyframe names with varied durations/delays
-const FLOAT_ANIMS = ["frondFloat1", "frondFloat2", "frondFloat3"] as const;
-
-type FrondProps = {
-  /** degrees, 0 = pointing right, -90 = pointing straight up */
-  angle: number;
-  length?: number;
-  color?: string;
-  /** how much the tip droops downward, as a fraction of length */
-  droop?: number;
-  animIdx?: number;
-};
-
-function Frond({ angle, length = 190, color = "#2d6a4f", droop = 0.1, animIdx = 0 }: FrondProps) {
-  const halfW = length * 0.085;
-  const tx = length;
-  const ty = droop * length;
-
-  // Upper bezier: sweeps out and slightly droops to tip
-  // Lower bezier: mirrors back to origin
-  const upper = `C ${tx * 0.28} ${-halfW * 1.4} ${tx * 0.65} ${ty * 0.55 - halfW * 1.2} ${tx} ${ty}`;
-  const lower = `C ${tx * 0.65} ${ty + halfW * 1.2} ${tx * 0.28} ${halfW * 1.4} 0 0`;
-  const d = `M 0 0 ${upper} ${lower} Z`;
-
-  const anim = FLOAT_ANIMS[animIdx % 3];
-  const dur = 4.2 + (animIdx * 0.7) % 3.2;
-  const delay = (animIdx * 0.55) % 3.5;
-
-  return (
-    <g
-      transform={`rotate(${angle})`}
-      style={{
-        transformOrigin: "0 0",
-        animation: `${anim} ${dur}s ease-in-out ${delay}s infinite`
-      }}
-    >
-      <path d={d} fill={color} />
-      {/* subtle midrib */}
-      <path
-        d={`M 0 0 C ${tx * 0.35} ${ty * 0.3} ${tx * 0.7} ${ty * 0.75} ${tx} ${ty}`}
-        stroke="rgba(0,0,0,0.18)"
-        strokeWidth="1.2"
-        fill="none"
-      />
-    </g>
-  );
-}
-
-function PalmTrunk({ x1, y1, x2, y2, w = 9 }: { x1: number; y1: number; x2: number; y2: number; w?: number }) {
-  // Slight S-curve trunk using two cubic bezier control points
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
-  const cp1x = x1 + (x2 - x1) * 0.25 - 12;
-  const cp2x = x1 + (x2 - x1) * 0.75 + 10;
-  const hw = w / 2;
-  return (
-    <path
-      d={`
-        M ${x1 - hw} ${y1}
-        C ${cp1x - hw} ${my} ${cp2x - hw} ${my} ${x2 - hw * 0.4} ${y2}
-        L ${x2 + hw * 0.4} ${y2}
-        C ${cp2x + hw} ${my} ${cp1x + hw} ${my} ${x1 + hw} ${y1}
-        Z
-      `}
-      fill="#4a5e2a"
-    />
-  );
-}
-
-function PalmSVGContent({ mirrored = false }: { mirrored?: boolean }) {
-  const sx = mirrored ? -1 : 1;
-  return (
-    <g transform={mirrored ? "scale(-1,1) translate(-520, 0)" : undefined}>
-      {/* ── Palm A — back, leftmost, shorter ── */}
-      <PalmTrunk x1={62} y1={900} x2={82} y2={380} w={8} />
-      <g transform="translate(80, 375)" opacity="0.82">
-        <Frond angle={-125} length={150} color="#1b4332" droop={0.08} animIdx={0} />
-        <Frond angle={-100} length={165} color="#2d6a4f" droop={0.06} animIdx={3} />
-        <Frond angle={-72}  length={158} color="#1b4332" droop={0.08} animIdx={6} />
-        <Frond angle={-45}  length={145} color="#2d6a4f" droop={0.12} animIdx={9} />
-        <Frond angle={-18}  length={132} color="#1b4332" droop={0.18} animIdx={1} />
-        <Frond angle={12}   length={118} color="#2d6a4f" droop={0.28} animIdx={4} />
-      </g>
-
-      {/* ── Palm B — main, tallest, center ── */}
-      <PalmTrunk x1={205} y1={900} x2={220} y2={155} w={11} />
-      <g transform="translate(218, 150)">
-        <Frond angle={-148} length={195} color="#2d6a4f" droop={0.1}  animIdx={2} />
-        <Frond angle={-128} length={215} color="#40916c" droop={0.08} animIdx={5} />
-        <Frond angle={-105} length={235} color="#52b788" droop={0.05} animIdx={8} />
-        <Frond angle={-82}  length={240} color="#40916c" droop={0.04} animIdx={0} />
-        <Frond angle={-58}  length={230} color="#2d6a4f" droop={0.07} animIdx={3} />
-        <Frond angle={-35}  length={215} color="#40916c" droop={0.12} animIdx={6} />
-        <Frond angle={-12}  length={195} color="#2d6a4f" droop={0.19} animIdx={9} />
-        <Frond angle={14}   length={172} color="#1b4332" droop={0.28} animIdx={2} />
-        <Frond angle={40}   length={148} color="#2d6a4f" droop={0.38} animIdx={7} />
-      </g>
-
-      {/* ── Palm C — front, right-of-center ── */}
-      <PalmTrunk x1={355} y1={900} x2={368} y2={295} w={9} />
-      <g transform="translate(366, 290)">
-        <Frond angle={-135} length={172} color="#1b4332" droop={0.09} animIdx={1} />
-        <Frond angle={-108} length={195} color="#2d6a4f" droop={0.06} animIdx={4} />
-        <Frond angle={-80}  length={212} color="#52b788" droop={0.05} animIdx={7} />
-        <Frond angle={-52}  length={208} color="#40916c" droop={0.08} animIdx={0} />
-        <Frond angle={-25}  length={190} color="#2d6a4f" droop={0.14} animIdx={5} />
-        <Frond angle={4}    length={168} color="#1b4332" droop={0.22} animIdx={8} />
-        <Frond angle={30}   length={145} color="#2d6a4f" droop={0.32} animIdx={2} />
-      </g>
-    </g>
-  );
-}
-
-function LeftPalmCluster() {
-  return (
-    <svg
-      viewBox="0 0 520 900"
-      preserveAspectRatio="xMinYMax meet"
-      style={{ width: "100%", height: "100%", display: "block" }}
-    >
-      <PalmSVGContent />
-    </svg>
-  );
-}
-
-function RightPalmCluster() {
-  return (
-    <svg
-      viewBox="0 0 520 900"
-      preserveAspectRatio="xMaxYMax meet"
-      style={{ width: "100%", height: "100%", display: "block" }}
-    >
-      <PalmSVGContent mirrored />
-    </svg>
-  );
-}
 
 function DiscordLogo() {
   return (
@@ -199,9 +32,10 @@ type LoginScreenProps = {
   loading: boolean;
   authError: string | null;
   exiting: boolean;
+  onExitComplete: () => void;
 };
 
-export function LoginScreen({ loading, authError, exiting }: LoginScreenProps) {
+export function LoginScreen({ loading, authError, exiting, onExitComplete }: LoginScreenProps) {
   return (
     <div
       style={{
@@ -210,186 +44,143 @@ export function LoginScreen({ loading, authError, exiting }: LoginScreenProps) {
         overflow: "hidden",
         display: "flex",
         alignItems: "center",
-        justifyContent: "center"
+        justifyContent: "center",
       }}
     >
       <style>{STYLES}</style>
 
-      {/* Ocean shimmer at the bottom */}
-      <div
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: "28%",
-          background:
-            "linear-gradient(180deg, transparent 0%, rgba(3, 105, 161, 0.25) 50%, rgba(2, 132, 199, 0.55) 100%)",
-          pointerEvents: "none"
-        }}
-      />
-
-      {/* ── Left palm cluster ── */}
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          bottom: 0,
-          width: "52vw",
-          height: "100vh",
-          transformOrigin: "28% 100%",
-          animation: exiting
-            ? "palmExitL 0.72s cubic-bezier(0.4, 0, 1, 0.75) forwards"
-            : "palmSwayL 8s ease-in-out infinite",
-          zIndex: 2,
-          pointerEvents: "none"
-        }}
-      >
-        <LeftPalmCluster />
-      </div>
-
-      {/* ── Right palm cluster ── */}
-      <div
-        style={{
-          position: "absolute",
-          right: 0,
-          bottom: 0,
-          width: "52vw",
-          height: "100vh",
-          transformOrigin: "72% 100%",
-          animation: exiting
-            ? "palmExitR 0.72s cubic-bezier(0.4, 0, 1, 0.75) forwards"
-            : "palmSwayR 9s ease-in-out 1.4s infinite",
-          zIndex: 2,
-          pointerEvents: "none"
-        }}
-      >
-        <RightPalmCluster />
-      </div>
+      {exiting ? (
+        <AuthCinematicVideo
+          basePath="/auth/login-return"
+          loop={false}
+          skippable
+          onComplete={onExitComplete}
+        />
+      ) : (
+        <AuthCinematicVideo basePath="/auth/login-intro" loop skippable />
+      )}
 
       {/* ── Login card ── */}
-      <div
-        style={{
-          position: "relative",
-          zIndex: 10,
-          width: 360,
-          maxWidth: "calc(100vw - 48px)",
-          animation: exiting ? "cardFadeOut 0.44s ease forwards" : "cardFadeIn 0.5s ease forwards",
-          background: islandTheme.color.panelBg,
-          backdropFilter: islandTheme.glass.blurStrong,
-          WebkitBackdropFilter: islandTheme.glass.blurStrong,
-          border: `1px solid ${islandTheme.color.cardBorder}`,
-          borderRadius: 20,
-          padding: "32px 28px 24px",
-          boxShadow:
-            "0 32px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06) inset"
-        }}
-      >
-        {/* Logo + heading */}
-        <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <div
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: 999,
-              // Zoom past 100% to crop the black ring baked into the PNG artwork.
-              background: 'url("/boneless-island-logo.png") center / 126%',
-              boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
-              margin: "0 auto 14px"
-            }}
-          />
-          <div
-            className="island-display"
-            style={{ fontWeight: 700, fontSize: 22, lineHeight: 1.2 }}
-          >
-            Welcome to the Island
+      {!exiting ? (
+        <div
+          style={{
+            position: "relative",
+            zIndex: 10,
+            width: 360,
+            maxWidth: "calc(100vw - 48px)",
+            animation: "cardFadeIn 0.5s ease forwards",
+            background: islandTheme.color.panelBg,
+            backdropFilter: islandTheme.glass.blurStrong,
+            WebkitBackdropFilter: islandTheme.glass.blurStrong,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            borderRadius: 20,
+            padding: "32px 28px 24px",
+            boxShadow:
+              "0 32px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.06) inset",
+          }}
+        >
+          <div style={{ textAlign: "center", marginBottom: 24 }}>
+            <div
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 999,
+                background: 'url("/boneless-island-logo.png") center / 126%',
+                boxShadow: "0 8px 24px rgba(0,0,0,0.35)",
+                margin: "0 auto 14px",
+              }}
+            />
+            <div
+              className="island-display"
+              style={{ fontWeight: 700, fontSize: 22, lineHeight: 1.2 }}
+            >
+              Welcome to the Island
+            </div>
+            <div
+              className="island-mono"
+              style={{
+                fontSize: 12,
+                color: islandTheme.color.textMuted,
+                marginTop: 6,
+              }}
+            >
+              {loading ? "Checking your session…" : "Sign in to join the crew"}
+            </div>
           </div>
+
+          {authError ? (
+            <div
+              style={{
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: islandTheme.color.dangerSurface,
+                border: `1px solid ${islandTheme.color.danger}`,
+                color: islandTheme.color.dangerText,
+                fontSize: 13,
+                marginBottom: 16,
+              }}
+            >
+              {authError}
+            </div>
+          ) : null}
+
+          {loading ? (
+            <div
+              style={{
+                height: 50,
+                borderRadius: 12,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                animation: "loginSkeletonPulse 1.6s ease-in-out infinite",
+              }}
+            />
+          ) : (
+            <a
+              href={`${API_BASE_URL}/auth/discord/login`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 10,
+                padding: "13px 16px",
+                borderRadius: 12,
+                background: "linear-gradient(135deg, #5865f2 0%, #4752c4 100%)",
+                color: islandTheme.color.textInverted,
+                textDecoration: "none",
+                fontWeight: 700,
+                fontSize: 15,
+                letterSpacing: "-0.01em",
+                boxShadow: "0 4px 20px rgba(88, 101, 242, 0.52)",
+                transition: "transform 120ms ease, box-shadow 120ms ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = "translateY(-2px)";
+                e.currentTarget.style.boxShadow = "0 8px 28px rgba(88, 101, 242, 0.7)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = "translateY(0)";
+                e.currentTarget.style.boxShadow = "0 4px 20px rgba(88, 101, 242, 0.52)";
+              }}
+            >
+              <DiscordLogo />
+              Sign in with Discord
+            </a>
+          )}
+
           <div
             className="island-mono"
             style={{
+              textAlign: "center",
               fontSize: 12,
               color: islandTheme.color.textMuted,
-              marginTop: 6
+              marginTop: 18,
+              lineHeight: 1.6,
             }}
           >
-            {loading ? "Checking your session…" : "Sign in to join the crew"}
+            Guild members only · Access gated by Discord roles
           </div>
         </div>
-
-        {/* Auth error */}
-        {authError ? (
-          <div
-            style={{
-              padding: "10px 12px",
-              borderRadius: 10,
-              background: islandTheme.color.dangerSurface,
-              border: `1px solid ${islandTheme.color.danger}`,
-              color: islandTheme.color.dangerText,
-              fontSize: 13,
-              marginBottom: 16
-            }}
-          >
-            {authError}
-          </div>
-        ) : null}
-
-        {/* Button area */}
-        {loading ? (
-          <div
-            style={{
-              height: 50,
-              borderRadius: 12,
-              background: islandTheme.color.panelMutedBg,
-              border: `1px solid ${islandTheme.color.cardBorder}`,
-              animation: "loginSkeletonPulse 1.6s ease-in-out infinite"
-            }}
-          />
-        ) : (
-          <a
-            href={`${API_BASE_URL}/auth/discord/login`}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 10,
-              padding: "13px 16px",
-              borderRadius: 12,
-              background: "linear-gradient(135deg, #5865f2 0%, #4752c4 100%)",
-              color: islandTheme.color.textInverted,
-              textDecoration: "none",
-              fontWeight: 700,
-              fontSize: 15,
-              letterSpacing: "-0.01em",
-              boxShadow: "0 4px 20px rgba(88, 101, 242, 0.52)",
-              transition: "transform 120ms ease, box-shadow 120ms ease"
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = "translateY(-2px)";
-              e.currentTarget.style.boxShadow = "0 8px 28px rgba(88, 101, 242, 0.7)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = "translateY(0)";
-              e.currentTarget.style.boxShadow = "0 4px 20px rgba(88, 101, 242, 0.52)";
-            }}
-          >
-            <DiscordLogo />
-            Sign in with Discord
-          </a>
-        )}
-
-        <div
-          className="island-mono"
-          style={{
-            textAlign: "center",
-            fontSize: 12,
-            color: islandTheme.color.textMuted,
-            marginTop: 18,
-            lineHeight: 1.6
-          }}
-        >
-          Guild members only · Access gated by Discord roles
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }
