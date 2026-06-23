@@ -1,6 +1,6 @@
 import express from "express";
 import { z } from "zod";
-import { env } from "../config.js";
+import { isValidBotSecret } from "../lib/auth.js";
 import { db } from "../db/client.js";
 import { getGuildId } from "../lib/serverSettings.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
@@ -20,8 +20,7 @@ function canAccessRecommendations(req: express.Request): boolean {
     return true;
   }
 
-  const botSecret = req.get("x-island-bot-secret");
-  return Boolean(env.BOT_API_SHARED_SECRET) && botSecret === env.BOT_API_SHARED_SECRET;
+  return isValidBotSecret(req.get("x-island-bot-secret"));
 }
 
 recommendationRouter.post("/what-can-we-play", async (req, res) => {

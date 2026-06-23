@@ -29,6 +29,10 @@ export function initSentry(service: "api" | "bot"): void {
     dsn,
     environment: process.env.NODE_ENV ?? "development",
     tracesSampleRate: service === "api" ? 0.05 : 0.1,
+    // Never attach request headers, cookies, body, or client IP to events. This
+    // is Sentry's default, but pin it explicitly so a future SDK default flip
+    // can't start shipping session cookies / PII to the error backend.
+    sendDefaultPii: false,
     beforeSend: scrubEvent,
     ignoreTransactions: ["/vitals", "/client-errors", "/health"],
   });
