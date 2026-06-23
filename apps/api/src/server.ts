@@ -15,7 +15,7 @@ import { installProcessFatalHandlers, log } from "./lib/structuredLog.js";
 installRedactor();
 initSentry("api");
 installProcessFatalHandlers("api");
-import { requireSession } from "./lib/auth.js";
+import { isValidBotSecret, requireSession } from "./lib/auth.js";
 import { addSubscriber, removeSubscriber, broadcast } from "./lib/eventBus.js";
 import { activityRouter } from "./routes/activity.js";
 import { aiChatRouter } from "./routes/aiChat.js";
@@ -114,11 +114,15 @@ app.post(
     limit: "16kb"
   }),
   (req, res) => {
-    try {
-      console.warn("[csp-report]", JSON.stringify(req.body).slice(0, 1000));
-    } catch {
-      // ignore malformed report bodies
-    }
+    // Log only the two diagnostic fields we act on (which directive fired, what
+    // was blocked) — never the raw report body. A CSP report is an opaque,
+    // browser-supplied blob that could carry a stray token or PII.
+    const report = (req.body?.["csp-report"] ?? req.body ?? {}) as Record<string, unknown>;
+    const directive =
+      typeof report["violated-directive"] === "string" ? report["violated-directive"] : "unknown";
+    const blockedUri =
+      typeof report["blocked-uri"] === "string" ? report["blocked-uri"] : "unknown";
+    console.warn("[csp-report]", directive, blockedUri);
     res.status(204).end();
   }
 );
@@ -189,8 +193,7 @@ app.use((req, res, next) => {
     next();
     return;
   }
-  const botSecret = req.get("x-island-bot-secret");
-  if (botSecret && env.BOT_API_SHARED_SECRET && botSecret === env.BOT_API_SHARED_SECRET) {
+  if (isValidBotSecret(req.get("x-island-bot-secret"))) {
     next();
     return;
   }

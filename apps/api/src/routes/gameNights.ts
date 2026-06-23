@@ -1,9 +1,8 @@
 import express from "express";
 import { z } from "zod";
-import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { getGuildId, getParentRoleName } from "../lib/serverSettings.js";
-import { requireSession, requireParentRole } from "../lib/auth.js";
+import { isValidBotSecret, requireSession, requireParentRole } from "../lib/auth.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { broadcast } from "../lib/eventBus.js";
 import { whatCanWePlay } from "../lib/recommend.js";
@@ -84,8 +83,7 @@ function canAccessFromSessionOrBot(req: express.Request): boolean {
   if (Boolean(req.session?.userId)) {
     return true;
   }
-  const botSecret = req.get("x-island-bot-secret");
-  return Boolean(env.BOT_API_SHARED_SECRET) && botSecret === env.BOT_API_SHARED_SECRET;
+  return isValidBotSecret(req.get("x-island-bot-secret"));
 }
 
 async function ensureUsersForDiscordIds(discordIds: string[]): Promise<void> {

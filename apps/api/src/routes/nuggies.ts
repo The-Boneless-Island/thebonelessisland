@@ -1352,7 +1352,7 @@ const grantSchema = z.object({
   reason: z.string().min(1),
 });
 
-nuggiesRouter.post("/admin/grant", requireBotOrSession, requireParentRole, async (req, res) => {
+nuggiesRouter.post("/admin/grant", requireSession, requireParentRole, async (req, res) => {
   const parsed = grantSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
@@ -1395,7 +1395,7 @@ nuggiesRouter.post("/admin/grant", requireBotOrSession, requireParentRole, async
 
 // ── POST /nuggies/admin/award-attendance/:gameNightId ─────────────────────────
 
-nuggiesRouter.post("/admin/award-attendance/:gameNightId", requireBotOrSession, requireParentRole, async (req, res) => {
+nuggiesRouter.post("/admin/award-attendance/:gameNightId", requireSession, requireParentRole, async (req, res) => {
   const gameNightId = parseInt(String(req.params.gameNightId), 10);
   if (!Number.isFinite(gameNightId)) { res.status(400).json({ error: "Invalid game night ID" }); return; }
 
@@ -1467,7 +1467,7 @@ nuggiesRouter.post("/admin/award-attendance/:gameNightId", requireBotOrSession, 
 // ── GET /nuggies/admin/transactions ───────────────────────────────────────────
 // Parent-only economy audit: recent ledger rows across all crew members.
 
-nuggiesRouter.get("/admin/transactions", requireBotOrSession, requireParentRole, async (req, res) => {
+nuggiesRouter.get("/admin/transactions", requireSession, requireParentRole, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "50"), 10) || 50, 1), 200);
   const discordUserId = req.query.discordUserId ? String(req.query.discordUserId) : null;
   const type = req.query.type ? String(req.query.type) : null;
@@ -1516,7 +1516,7 @@ nuggiesRouter.get("/admin/transactions", requireBotOrSession, requireParentRole,
 
 // ── GET /nuggies/admin/overview ───────────────────────────────────────────────
 
-nuggiesRouter.get("/admin/overview", requireBotOrSession, requireParentRole, async (_req, res) => {
+nuggiesRouter.get("/admin/overview", requireSession, requireParentRole, async (_req, res) => {
   const [supplyRow, optedOutRow, topRow] = await Promise.all([
     db.query<{ total: string }>("SELECT COALESCE(SUM(balance), 0) AS total FROM nuggies_balances"),
     db.query<{ count: string }>("SELECT COUNT(*) AS count FROM users WHERE nuggies_opted_out = TRUE"),
@@ -1570,7 +1570,7 @@ for (const p of DEPRECATED_GAME_PATHS) {
 
 // ── POST /nuggies/admin/shop-item ─────────────────────────────────────────────
 
-nuggiesRouter.post("/admin/shop-item", requireBotOrSession, requireParentRole, async (req, res) => {
+nuggiesRouter.post("/admin/shop-item", requireSession, requireParentRole, async (req, res) => {
   const parsed = shopItemSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
