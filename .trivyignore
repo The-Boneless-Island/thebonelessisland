@@ -18,6 +18,22 @@
 # REMOVE this line then (the CVE will simply stop appearing).
 CVE-2026-42504
 
+# CVE-2026-27145 — Go stdlib crypto/x509 VerifyHostname quadratic-time DoS, in
+# the same caddy:2-alpine Caddy binary (Go 1.26.3; fix is Go 1.26.4 / 1.25.11) as
+# CVE-2026-42504 above.
+#
+# Why waived: same root cause and same blocker — no Caddy image built on Go
+# 1.26.4+ is published yet (CI's fresh pull of the floating 2-alpine tag still
+# resolves to Go 1.26.3 as of 2026-06-23). DoS only (NVD CVSS 6.5, Integrity:None);
+# it bites only a TLS *client* that connects to an attacker-controlled server
+# presenting a cert with a huge DNS SAN list. Caddy here only serves static files
+# + reverse-proxies our own API behind Cloudflare, so it never makes a TLS-client
+# call to an attacker-controlled host — no reachable path.
+#
+# Revisit: clears together with CVE-2026-42504 once Caddy republishes the floating
+# 2-alpine tag on Go 1.26.4+. REMOVE both lines then.
+CVE-2026-27145
+
 # CVE-2026-12151 — undici DoS (unbounded memory) in undici 6.24.1, pulled
 # transitively by discord.js (@discordjs/rest) for the Nuggie bot. Hoists to the
 # root node_modules, so it appears in all three images' scans.
