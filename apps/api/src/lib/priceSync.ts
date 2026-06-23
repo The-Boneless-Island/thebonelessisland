@@ -84,6 +84,14 @@ async function fetchSteamPrice(appId: number): Promise<WishlistPrice | null> {
  * and how many rows were actually updated.
  */
 export async function syncWishlistPrices(): Promise<{ checked: number; updated: number }> {
+  // Privacy note: this reads the raw user_wishlists table, NOT the
+  // shareable_user_wishlists view, by deliberate exemption from the "crew-facing
+  // queries must read the shareable_* view" invariant. This is an internal
+  // catalog-maintenance job — it selects bare app_ids only (never user_id) and
+  // writes public price columns on the global `games` table, so it exposes nothing
+  // about who wishlisted what. Switching to the view would only drop price refreshes
+  // for games wishlisted solely by private/excluded members (leaving those catalog
+  // rows stale) with zero privacy benefit.
   const { rows } = await db.query<{ app_id: number }>(
     `
       SELECT DISTINCT app_id
