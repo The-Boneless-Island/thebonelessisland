@@ -8,6 +8,9 @@ import { curateUncuratedNews, forceCurateNews } from "../lib/newsCurator.js";
 export const gameNewsRouter = express.Router();
 gameNewsRouter.use(requireSession);
 
+const INGEST_COOLDOWN_MS = 60 * 60 * 1000;
+let lastGameNewsIngestAt = 0;
+
 type ScopeRow = {
   app_id: number;
   is_library: boolean;
@@ -163,14 +166,15 @@ gameNewsRouter.get("/news", async (_req, res) => {
     return;
   }
 
-  // Fire-and-forget: ingest fresh Steam news, then curate. 30 apps × Steam fetch
-  // takes ~30s — would time out the request if awaited. Page returns current
-  // rows immediately; next reload sees the fresh batch.
-  ingestNewsForApps(scope.topAppIds, { maxApps: 30 })
-    .then(() => curateUncuratedNews(scope.topAppIds))
-    .catch((err) => {
-      console.error("[gameNews] background ingest/curate error:", err);
-    });
+  // Fire-and-forget ingest — skip when a recent run already happened (cron or prior GET).
+  if (Date.now() - lastGameNewsIngestAt >= INGEST_COOLDOWN_MS) {
+    lastGameNewsIngestAt = Date.now();
+    ingestNewsForApps(scope.topAppIds, { maxApps: 30 })
+      .then(() => curateUncuratedNews(scope.topAppIds))
+      .catch((err) => {
+        console.error("[gameNews] background ingest/curate error:", err);
+      });
+  }
 
   const result = await db.query<NewsRow>(
     `

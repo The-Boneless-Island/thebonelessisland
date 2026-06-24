@@ -3,6 +3,7 @@ import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { getGuildId } from "../lib/serverSettings.js";
 import { requireBotSecret, requireSession } from "../lib/auth.js";
+import { privateCache } from "../middleware/privateCache.js";
 import { broadcast } from "../lib/eventBus.js";
 import { activityText } from "../lib/presence.js";
 
@@ -306,7 +307,7 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
 
 export const membersRouter = express.Router();
 
-membersRouter.get("/", requireSession, async (_req, res) => {
+membersRouter.get("/", requireSession, privateCache(60), async (_req, res) => {
   if (!getGuildId()) {
     res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
     return;

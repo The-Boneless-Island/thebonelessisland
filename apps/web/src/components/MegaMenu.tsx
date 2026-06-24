@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
 import { pathForPage } from "../lib/routes.js";
-import { prefetchPage } from "../lib/routePrefetch.js";
+import { prefetchPage, prefetchHandler } from "../lib/routePrefetch.js";
 import type { PageId } from "../types.js";
 
 type NavChild = {
@@ -134,7 +134,8 @@ export function MegaMenu({ page, onNavigate, isAdmin }: MegaMenuProps) {
         <Link
           to="/admin"
           style={{ ...navButtonStyle(page === "admin"), textDecoration: "none" }}
-          onMouseEnter={(e) => { if (page !== "admin") e.currentTarget.style.background = islandTheme.color.secondary; }}
+          onMouseEnter={(e) => { prefetchHandler("admin")(); if (page !== "admin") e.currentTarget.style.background = islandTheme.color.secondary; }}
+          onFocus={prefetchHandler("admin")}
           onMouseLeave={(e) => { if (page !== "admin") e.currentTarget.style.background = "transparent"; }}
         >
           Admin
@@ -185,7 +186,8 @@ function DesktopGroupItem({
       <Link
         to={pathForPage(group.defaultId)}
         style={{ ...navButtonStyle(active), textDecoration: "none" }}
-        onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = islandTheme.color.secondary; }}
+        onMouseEnter={(e) => { prefetchHandler(group.defaultId)(); if (!active) e.currentTarget.style.background = islandTheme.color.secondary; }}
+        onFocus={prefetchHandler(group.defaultId)}
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = active ? "rgba(37, 99, 235, 0.22)" : "transparent"; }}
       >
         {group.label}
@@ -217,6 +219,11 @@ function DesktopGroupItem({
                 key={child.id}
                 to={pathForPage(child.id)}
                 onClick={(e) => { if (child.badge) { e.preventDefault(); return; } setOpen(false); }}
+                onMouseEnter={(e) => {
+                  prefetchPage(child.id);
+                  if (!childActive && !child.badge) e.currentTarget.style.background = islandTheme.color.secondary;
+                }}
+                onFocus={() => prefetchPage(child.id)}
                 style={{
                   display: "block",
                   width: "100%",
@@ -230,10 +237,6 @@ function DesktopGroupItem({
                   cursor: child.badge ? "default" : "pointer",
                   font: "inherit",
                   transition: `background ${islandTheme.motion.dur.fast} ease`
-                }}
-                onMouseEnter={(e) => {
-                  prefetchPage(child.id);
-                  if (!childActive && !child.badge) e.currentTarget.style.background = islandTheme.color.secondary;
                 }}
                 onMouseLeave={(e) => { if (!childActive) e.currentTarget.style.background = "transparent"; }}
               >

@@ -1,0 +1,12 @@
+Bundle baseline — 2026-06-24 (ANALYZE=1 npm run build, apps/web)
+
+Top lazy route chunks (gzip):
+  index (main shell)     482 KB raw / 143 KB gzip  (+ TanStack Query)
+  Admin                  174 KB raw /  43 KB gzip
+  Forums (feed shell)     30 KB raw /   7 KB gzip  (was 77 KB — thread/compose split out)
+  ForumThreadPanel        17 KB raw /   5 KB gzip  (lazy)
+  ForumComposePanel       11 KB raw /   4 KB gzip  (lazy)
+  Games                   51 KB raw /  13 KB gzip
+  Home                    45 KB raw /  13 KB gzip
+
+Note: milestone badge art now uses web/ PNG paths (~KB vs 100–300 KB SVG gzip).

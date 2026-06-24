@@ -68,6 +68,7 @@ import type {
   Recommendation,
   ServerSetting
 } from "./types.js";
+import { useAppPolling, useInvalidateAppQueries } from "./hooks/useAppPolling.js";
 
 function PageLoadingFallback() {
   return (
@@ -149,6 +150,26 @@ export function App() {
   // so the Balance/Milestones surfaces refetch immediately (see NuggiesSignal).
   const [nuggiesSignal, setNuggiesSignal] = useState(0);
   const myDiscordIdRef = useRef<string | null>(null);
+  const invalidate = useInvalidateAppQueries();
+
+  useAppPolling({
+    isAuthenticated,
+    page: page ?? "home",
+    selectedNightId,
+    steamLinked: Boolean(profileData?.steamId64),
+    lastGuildMembersRef,
+    lastGameNightsRef,
+    lastSelectedNightRef,
+    setGuildMembers,
+    setGameNights,
+    setNightAttendees,
+    setCurrentUserAttendingSelectedNight,
+    setFeaturedRecommendation,
+    setActivityEvents,
+    setGameNews,
+    setGeneralNews,
+  });
+
   useEffect(() => {
     myDiscordIdRef.current = profileData?.discordUserId ?? null;
   }, [profileData?.discordUserId]);
@@ -406,12 +427,15 @@ export function App() {
       if (playReturnVideo) setLoginExiting(true);
       setIsAuthenticated(authed);
       if (authed) {
-        void Promise.all([loadGuildMembers(true), loadActivity(true)]);
+        await Promise.all([
+          loadGuildMembers(true),
+          loadFeaturedRecommendation(true),
+          loadActivity(true),
+        ]);
         const deferSecondaryLoads = () => {
           void Promise.all([
             loadCrewGames(true),
             loadCrewWishlist(true),
-            loadFeaturedRecommendation(true),
             loadAllNews(true),
             loadNewsCards(true),
           ]);
@@ -464,17 +488,13 @@ export function App() {
 
     const es = new EventSource(`${API_BASE_URL}/events`, { withCredentials: true });
     es.addEventListener("members-changed", () => {
-      void loadGuildMembers(true);
+      void invalidate.invalidateMembers();
     });
     es.addEventListener("nights-changed", () => {
-      void loadGameNights(true);
+      void invalidate.invalidateNights();
     });
     es.addEventListener("activity-changed", () => {
-      // Refetch the activity feed the instant any event is recorded server-side,
-      // so the Home feed and the achievement/milestone celebration overlay fire
-      // immediately (in step with the Discord announcement) instead of trailing
-      // the slow poll.
-      void loadActivity(true);
+      void invalidate.invalidateActivity();
     });
     es.addEventListener("nuggies-changed", (ev) => {
       // Only nudge a refetch when it's THIS member's balance that changed, so
@@ -492,30 +512,7 @@ export function App() {
     return () => {
       es.close();
     };
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (isAuthenticated !== true) return;
-
-    let cancelled = false;
-    const refresh = async () => {
-      if (cancelled || document.hidden) return;
-      await Promise.all([
-        loadFeaturedRecommendation(true),
-        loadActivity(true),
-        loadAllNews(true),
-      ]);
-    };
-
-    const intervalId = window.setInterval(() => {
-      void refresh();
-    }, 20 * 60 * 1000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, invalidate]);
 
   useEffect(() => {
     if (isAuthenticated !== true || page !== "games") return;
@@ -565,131 +562,6 @@ export function App() {
     setNightAttendees([]);
     setCurrentUserAttendingSelectedNight(false);
   }, [gameNights, selectedNightId]);
-
-  // The server now drives the actual Discord member sync on its own interval.
-  // The client refreshes the member list for the UI as a lighter polling
-  // fallback (every 180s); SSE ("members-changed") handles immediacy.
-  useEffect(() => {
-    if (isAuthenticated !== true) return;
-
-    let refreshing = false;
-    const runMembersRefresh = async () => {
-      if (refreshing || document.hidden) return;
-      refreshing = true;
-      try {
-        await loadGuildMembers(true);
-      } finally {
-        refreshing = false;
-      }
-    };
-
-    const intervalId = window.setInterval(() => {
-      void runMembersRefresh();
-    }, 180000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (isAuthenticated !== true || page !== "games") return;
-
-    let syncing = false;
-    const runNightListSync = async () => {
-      if (syncing || document.hidden) return;
-      syncing = true;
-      try {
-        await loadGameNights(true);
-      } finally {
-        syncing = false;
-      }
-    };
-
-    void runNightListSync();
-    const intervalId = window.setInterval(() => {
-      void runNightListSync();
-    }, 90000);
-
-    return () => window.clearInterval(intervalId);
-  }, [isAuthenticated, page]);
-
-  useEffect(() => {
-    if (isAuthenticated !== true || page !== "games" || !selectedNightId) return;
-
-    let syncing = false;
-    const runSelectedNightSync = async () => {
-      if (syncing || document.hidden) return;
-      syncing = true;
-      try {
-        await selectNight(selectedNightId, undefined, true);
-      } finally {
-        syncing = false;
-      }
-    };
-
-    void runSelectedNightSync();
-    const intervalId = window.setInterval(() => {
-      void runSelectedNightSync();
-    }, 15000);
-
-    return () => window.clearInterval(intervalId);
-  }, [isAuthenticated, page, selectedNightId]);
-
-  useEffect(() => {
-    if (isAuthenticated !== true || !profileData?.steamId64) return;
-
-    let syncing = false;
-    const runSteamSync = async () => {
-      if (syncing || document.hidden) return;
-      syncing = true;
-      try {
-        await syncSteamGames(true);
-      } finally {
-        syncing = false;
-      }
-    };
-
-    // Lighter recent-games sync — runs more frequently, only hits GetRecentlyPlayedGames
-    let recentSyncing = false;
-    const runRecentGamesSync = async () => {
-      if (recentSyncing || document.hidden) return;
-      recentSyncing = true;
-      try {
-        await apiFetch("/steam/sync-recent-games", { method: "POST", credentials: "include" });
-      } catch {
-        // Best-effort, ignore failures
-      } finally {
-        recentSyncing = false;
-      }
-    };
-
-    void runSteamSync();
-    void runRecentGamesSync();
-
-    const intervalId = window.setInterval(() => {
-      void runSteamSync();
-    }, 10 * 60 * 1000);
-
-    const recentIntervalId = window.setInterval(() => {
-      void runRecentGamesSync();
-    }, 5 * 60 * 1000);
-
-    const onVisibilityChange = () => {
-      if (!document.hidden) {
-        void runSteamSync();
-        void runRecentGamesSync();
-      }
-    };
-
-    document.addEventListener("visibilitychange", onVisibilityChange);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.clearInterval(recentIntervalId);
-      document.removeEventListener("visibilitychange", onVisibilityChange);
-    };
-  }, [isAuthenticated, profileData?.steamId64]);
 
   async function runRecommendation() {
     if (!selectedMemberIds.length) {
@@ -1771,7 +1643,7 @@ export function App() {
 
   return (
     <NuggiesSignalProvider signal={nuggiesSignal}>
-    <ActivityRefetchProvider refetch={() => loadActivity(true)}>
+    <ActivityRefetchProvider refetch={() => { void invalidate.invalidateActivity(); }}>
     <ToastQueueProvider queue={toastQueue}>
       <ScrollRestoration getKey={(loc) => loc.pathname} />
       <Topbar

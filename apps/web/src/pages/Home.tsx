@@ -12,6 +12,7 @@ import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
 import { GameCover, steamArt } from "../steamArt.js";
 import { useRefetchActivity } from "../system/activityContext.js";
+import { preloadRankBadgesForLifetime } from "../lib/preloadRankBadge.js";
 import type {
   ActivityActor,
   ActivityCategory,
@@ -59,6 +60,12 @@ function HomePageInner({
     }, 4950);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
   }, []);
+
+  useEffect(() => {
+    if (profile?.lifetimeEarned != null) {
+      preloadRankBadgesForLifetime(profile.lifetimeEarned);
+    }
+  }, [profile?.lifetimeEarned]);
 
   const featuredArticle = generalNews[0] ?? null;
   const trending = useCrewTrending();

@@ -1,9 +1,10 @@
 import { Router } from "express";
 import { getTaglines } from "../lib/taglineGenerator.js";
+import { privateCache } from "../middleware/privateCache.js";
 
 export const taglinesRouter = Router();
 
-taglinesRouter.get("/", async (_req, res) => {
+taglinesRouter.get("/", privateCache(60), async (_req, res) => {
   try {
     const taglines = await getTaglines();
     res.json({ taglines });

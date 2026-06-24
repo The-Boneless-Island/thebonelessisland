@@ -6,6 +6,7 @@ import { getGuildId } from "../lib/serverSettings.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
 import { whatCanWePlay } from "../lib/recommend.js";
 import { generateRecommendationBlurb } from "../lib/recommendBlurb.js";
+import { privateCache } from "../middleware/privateCache.js";
 
 const requestSchema = z.object({
   memberIds: z.array(z.string()).min(1),
@@ -88,7 +89,7 @@ async function resolveFeaturedScope(requestedScope: FeaturedScope): Promise<{
   return { memberIds: crew.rows.map((row) => row.discord_user_id), resolvedScope: "crew" };
 }
 
-recommendationRouter.get("/featured", async (req, res) => {
+recommendationRouter.get("/featured", privateCache(300), async (req, res) => {
   if (!canAccessRecommendations(req)) {
     res.status(401).json({ error: "Not authorized to access recommendations" });
     return;

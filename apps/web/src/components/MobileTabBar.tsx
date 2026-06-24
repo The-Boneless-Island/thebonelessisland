@@ -47,6 +47,7 @@ export function MobileTabBar({ page }: { page: PageId; onNavigate?: (page: PageI
               aria-current={active ? "page" : undefined}
               onTouchStart={() => prefetchPage(tab.id)}
               onMouseEnter={() => prefetchPage(tab.id)}
+              onFocus={() => prefetchPage(tab.id)}
             >
               <span aria-hidden="true" style={{ fontSize: 19, lineHeight: 1 }}>
                 {tab.icon}
