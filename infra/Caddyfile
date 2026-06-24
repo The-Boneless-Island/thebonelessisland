@@ -46,7 +46,7 @@ bonelessisland.com {
 	# Content-Security-Policy shipped Report-Only first: violations POST to the
 	# API's /csp-reports endpoint instead of being blocked. Flip the header name
 	# to `Content-Security-Policy` (enforcing) once a week of prod reports comes
-	# back clean — see SITE_MODERNIZATION_PLAN.md §9. img-src enumerates the
+	# back clean. img-src enumerates the
 	# Discord + Steam art hosts; style-src 'unsafe-inline' is required for React
 	# inline styles (script-src stays strict — Vite emits no inline scripts).
 	header {
