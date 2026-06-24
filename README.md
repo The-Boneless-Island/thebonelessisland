@@ -1,111 +1,138 @@
-# 🏝️ The Boneless Island
+# 🏝️ The Boneless Island™
 
-**Welcome to The Boneless Island!** Figure out what to play tonight, keep up with each other, race for bragging rights, and watch the news roll in all in one place.
+### a home base for the crew, just past the edge of the Discord
 
-🌐 **Live at [bonelessisland.com](https://bonelessisland.com)** · 🔐 Members-only (Discord server gated) · 🤖 Powered by **Nuggie**, the island's AI
+The Boneless Island is a companion site for the community: somewhere to actually hang out beyond the chat. Catch the gaming news, earn Nuggies and climb the ranks, hit the forums, sort out game night, see who's around. A shared space that's a direct extension of the Discord, with more going on than a text channel can hold. It is, objectively, **PEAK.** 🗿
+
+🌐 **Live at [bonelessisland.com](https://bonelessisland.com)** · 🔐 Members-only (Discord-gated) · 🤖 Powered by **Nuggie**, the island's AI
 
 ---
 
 ## The idea
 
-Discord is great for talking. It's terrible for *remembering*. Who owns what game? When's the next session? What did everyone unlock last week? What's actually worth playing across forty overlapping Steam libraries?
+A Discord server is great for talking and pretty bad at remembering. Who owns what game? What did everyone unlock last week? What's actually worth playing across a pile of overlapping Steam libraries? The island is where that stuff lives in one place, so the good parts don't scroll away forever in chat.
 
-You sign in with Discord, optionally link Steam to make the recommendations smarter, and the island does the rest: it knows who's online, what the crew owns, what's trending, and what the group should fire up tonight.
+Sign in with Discord, optionally link Steam, and the rest fills itself in: who's online, what the crew owns, what's trending, what's worth booting up tonight.
 
-It is unapologetically a **hobby project for one specific community** This is not a startup, not a product, not for sale. Built to be fun, maintainable, and a little bit ridiculous.
+It's a passion project for one specific community. Not a startup, not a product, not for sale. Built to be fun, low-maintenance, and a little bit extra.
 
 ## The vibes
 
-Our mascot, **Nuggie** is a chicken-nugget AI who curates your news, can pick your games, and generally runs the place.
+Running the place is **Nuggie**, a chicken-nugget AI who curates the news, helps pick games, hypes up rank-ups, and has more personality than some of the actual members. The island is built to feel lived-in: the news updates, ranks move, the activity feed ticks over, and there's pretty much always something new to poke at when you log in.
 
-## Signing in — Discord first, Steam optional
+## Getting in: Discord first, Steam optional
 
-- **Discord is the only way in.** No passwords, no email accounts, no separate signup. Your Discord identity *is* your island identity.
-- **Login is gated to our server.** Only members of The Boneless Island Discord server get past the door; everyone else bounces.
-- **Steam is a bonus, never a requirement.** Every feature works without it. Link Steam (via the official "Sign in through Steam" flow — we never see your password) and the island unlocks library overlap, smarter picks, wishlist pooling, and playtime-aware recommendations. Unlink anytime.
-- **Your data stays yours.** Steam is read-only, used purely to power overlap and recommendations, and there's a privacy layer (see below) that controls exactly what the crew can see.
+- **Discord is the only way in.** No passwords, no email, no "create an account." Your Discord identity is your island identity.
+- **It's gated to the crew.** Only members of the Boneless Island server get past the door. Everyone else bounces (no hard feelings, the palm trees are free to look at).
+- **Steam is a bonus, never a tax.** Everything works without it. Link Steam through the official "Sign in through Steam" flow and you unlock library overlap, smarter picks, pooled wishlists, and playtime-aware recs. Unlink whenever.
+- **Your data stays yours.** Steam is read-only and powers overlap and recs only. A real privacy layer (see below) decides exactly what the crew can and can't see.
 
 ---
 
 ## What's on the island
 
-### 🏠 Home — your daily check-in
-The landing pad. A live online-count hero, an **AI-curated Gaming News** feed (real outlets, summarized and ranked for *your* crew, with an in-app reader and spoiler gating), a **Friends Online** widget pulling live Discord presence, a Discord-style **Activity Feed** of what everyone's been up to, and the **Drift Log** — hand-curated island news cards.
+### 🏠 Home: your daily check-in
+The landing pad. A live online-count hero, an **AI-curated Gaming News** feed (real outlets, summarized and ranked for *your* crew, in-app reader, spoiler gating), a **Friends Online** widget on live Discord presence, a Discord-style **Activity Feed** of who's been up to what, and the **Drift Log**, a set of hand-curated island news cards.
 
-### 🎮 Games — what are we playing tonight?
-The heart of it. The **AI Session Composer** looks at who's around, what the crew owns, and recent playtime, then proposes a pick with a reason, a vibe (Tonight / Weekend / Quick / Cozy / Spicy), a roster, and a "send the invite" button. Plus: scheduled **game nights with RSVP**, a pooled **group wishlist** with hype bars, a **library snapshot** across everyone's Steam, a live **Patches & Updates** rolodex, and **Crew Chat** — a conversational assistant that actually knows who's in voice and what you all play.
+### 🎮 Games: what's everyone playing
+The **AI Session Composer** clocks who's around, what the crew owns, and recent playtime, then hands over a pick with a reason, a vibe (Tonight / Weekend / Quick / Cozy / Spicy), a roster, and a "send the invite" button. Plus scheduled **game nights with RSVP**, a pooled **group wishlist** with hype bars, a **library snapshot** across everyone's Steam, a live **Patches & Updates** rolodex, and **Crew Chat**, an assistant that actually knows who's in voice and what everyone plays. No more decision paralysis. Mostly.
 
-### 👥 Community — the social layer
-Crew roster, recent clips, an activity timeline, forums, clubs, upcoming events, and weekly leaderboards. The place to see the server as a *group*, not just a list of names.
+### 👥 Community: the social layer
+Crew roster, recent clips, an activity timeline, forums, clubs, upcoming events, and weekly leaderboards. The island as a group, not just a list of names.
 
-### 🏆 Achievements & the Nuggies economy
-The island runs on **Nuggies**. Earn them, climb the milestone ranks, and show off illustrated **rank coins** named after gaming legends (Counter-Strike, Dark Souls, Halo, Metal Gear, Tarkov…) right on your homepage and profile cards. Spend Nuggies in the shop on cosmetic flair. Real economy, real bragging rights.
+### 🏆 Achievements and the Nuggies economy
+The island runs on **Nuggies**. Earn them, climb the milestone ranks, and show off illustrated **rank coins** named after gaming legends (Counter-Strike, Dark Souls, Halo, Metal Gear, Tarkov) on your home and profile cards. Spend Nuggies in the shop on cosmetic drip. Real economy, real bragging rights, zero real-money nonsense.
 
-### 🛠️ Admin — the control room
-A proper admin console behind a sidebar of deep-linkable pages: member & role management, forum moderation, the game library, game nights, the recommendation engine, gaming-news and patch sources, the Drift Log, economy operations and rules, shop items, AI provider settings, Nuggie's persona, guild identity, the Discord bridge, data sync, and an audit log. Gated to the **Parent** role.
+### 🛠️ Admin: the control room
+A genuine admin console behind a sidebar of deep-linkable pages: members and roles, forum mod, the game library, game nights, the recommendation engine, gaming-news and patch sources, the Drift Log, economy ops and rules, shop items, AI provider settings, Nuggie's persona, server identity, the Discord bridge, data sync, and an audit log. Gated to the **Parent** role, naturally.
 
 ### 🌊 "Washed Ashore" onboarding
-First time in? A guided, server-tracked product tour walks new islanders through the place — and admins can re-show it to everyone with one button.
+First time in? A guided, server-tracked tour walks new islanders through the place, and admins can re-show it to everyone with one button for when someone inevitably asks how to do the thing.
 
 ---
 
 ## The Nuggie AI layer
 
-AI is woven through the island, and it's **provider-agnostic** — swap between Anthropic Claude, OpenAI, Google Gemini, or AWS Bedrock at runtime from the admin panel, no redeploy. Set it up once, change your mind whenever.
+AI runs through the whole island and it's **provider-agnostic**: swap between Anthropic Claude, OpenAI, Google Gemini, or AWS Bedrock at runtime from the admin panel. No code, no redeploy.
 
-- **Curated Gaming News** — pulls from major gaming outlets (PC Gamer, RPS, Eurogamer, Kotaku, IGN) plus live Steam game news, scores every story for relevance to *your* crew's actual libraries and playtime, dedupes coverage of the same event, labels it (For You / Crew Trending / Top Gaming News), and flags spoilers. The curation *is* the feature.
-- **Session recommendations** — island-flavored, one-sentence blurbs on the top pick, aware of who owns it and who's played it this week.
-- **Crew Chat** — ask Nuggie what to play; it answers with live context (voice channels, recent playtime, best current pick).
-- **Built to be cheap** — prompt caching, compact context formatting, in-flight de-duplication, and TTL caches keep token costs low, because this runs on a hobby budget.
+- **Curated Gaming News:** pulls from real outlets (PC Gamer, RPS, Eurogamer, Kotaku, IGN) plus live Steam news, scores every story for relevance to *your* crew's actual libraries and playtime, dedupes the same event across sources, labels it (For You / Crew Trending / Top Gaming News), and gates spoilers. The curation is the feature.
+- **Session recommendations:** island-flavored one-liners on the top pick, aware of who owns it and who's played it this week.
+- **Crew Chat:** ask Nuggie what to play; it answers with live context (voice channels, recent playtime, best current pick).
+- **Built cheap on purpose:** prompt caching, compact context, in-flight de-duplication, and TTL caches keep the token bill low, because this runs on a hobby budget.
 
 ---
 
-## On the roadmap
+## The roadmap (copium edition)
 
-The island is live and growing. Things we want to add (some partially built, some still dreaming):
+Live and growing. Some of this is half-built, some is still on the wishlist:
 
-- **Forums V2** — rich markdown posts, image uploads, full-text search, @mentions & notifications, reactions, polls, and opt-in Discord cross-posting.
-- **The Living Island** — the backdrop reacts to real presence: tiki torches lit per member online, a campfire that grows with the voice channel, a boat on the water when someone's in-game, a quiet empty shore when nobody's home.
-- **Smarter game nights** — hosts editing/cancelling their own nights, recurring nights, time-consensus voting, and a Discord ping the moment a game gets locked in.
-- **Richer achievements** — rarity tints on badges, more milestone art, deeper economy.
-- **Live streams & clips** — Twitch integration and a real clips feed.
-- **Seasonal scene moments** — string lights, a jack-o'-lantern moon, the occasional shooting star.
+- **Forums V2:** rich markdown, image uploads, full-text search, @mentions and notifications, reactions, polls, opt-in Discord cross-posting.
+- **The Living Island:** the backdrop reacts to real presence. Tiki torches lit per member online, a campfire that grows with the voice channel, a boat on the water when someone's in-game, a quiet empty shore when nobody's home. Big ambition, currently blocked on art.
+- **Smarter game nights:** hosts editing and cancelling their own nights, recurring nights, time-consensus voting, and a Discord ping the second a game gets locked in.
+- **Richer achievements:** rarity tints on badges, more milestone art, deeper economy.
+- **Live streams and clips:** Twitch integration and an actual clips feed.
+- **Seasonal scene moments:** string lights, a jack-o'-lantern moon, the occasional shooting star.
 
-Some Community surfaces (streams, clips, clubs, events, leaderboards) currently run on placeholder data and will light up as their pipelines land.
+A few Community surfaces (streams, clips, clubs, events, leaderboards) currently run on placeholder data and will light up as their pipelines land. Already on the list.
 
 ---
 
 ## Under the hood
 
-A small TypeScript monorepo:
+A small TypeScript monorepo with more engineering than a community hangout strictly needs:
 
 | Package | What it is |
 | --- | --- |
-| `apps/web` | React + Vite front end — the island, the scene, all the pages. |
-| `apps/api` | Express API — Discord OAuth, Steam sync, recommendations, AI, news. |
+| `apps/web` | React + Vite front end: the island, the scene, all the pages. |
+| `apps/api` | Express API: Discord OAuth, Steam sync, recommendations, AI, news. |
 | `apps/bot` | A thin Discord bot exposing `/whatcanweplay`. |
 | `packages/shared` | Shared TypeScript types across apps. |
 
-Hosted on a single AWS Graviton box behind Cloudflare, deployed via GitHub Actions. Day-to-day reference docs live alongside this README: [`DEPLOY.md`](DEPLOY.md) (ops), [`STYLE_GUIDE.md`](STYLE_GUIDE.md) and [`DESIGN_NOTES.md`](DESIGN_NOTES.md) (design), [`GLOSSARY.md`](GLOSSARY.md) (terms), and [`BACKLOG.md`](BACKLOG.md) (the living to-do list).
+**Spec sheet (for the real ones):** Node 26, a single AWS Graviton box behind Cloudflare, GitHub Actions CI/CD, a branch-protected `main` that will reject your spaghetti, a Content-Security-Policy with a live `report-uri`, and Trivy scanning the images. A community hangout with a real deploy pipeline. It knows how that sounds.
+
+Reference docs live next to this README: [`DEPLOY.md`](DEPLOY.md) (ops), [`STYLE_GUIDE.md`](STYLE_GUIDE.md) and [`DESIGN_NOTES.md`](DESIGN_NOTES.md) (design), [`GLOSSARY.md`](GLOSSARY.md) (terms), [`BACKLOG.md`](BACKLOG.md) (the living to-do list).
 
 ## Running it locally
 
-1. Copy `.env.example` to `.env` and fill in the Discord / Bot / Steam values. AI keys are optional — set them here or at runtime in **Admin → AI Settings**.
-2. Start Postgres: `docker compose -f infra/docker-compose.yml up -d`
-3. Install deps: `npm install`
-4. Run migrations: `npm run db:migrate -w @island/api`
-5. Start everything: `npm run dev`
+1. Copy `.env.example` to `.env` and fill in the Discord / Bot / Steam values. AI keys are optional: drop them here or set them at runtime in **Admin → AI Settings**.
+2. Postgres: `docker compose -f infra/docker-compose.yml up -d`
+3. Deps: `npm install`
+4. Migrations: `npm run db:migrate -w @island/api`
+5. Run it: `npm run dev`
 
-Web app on `http://localhost:5173`, API health on `http://localhost:3000/health`.
-
-## Privacy principles
-
-- Discord OAuth is the only sign-in; the Discord user ID is the canonical identity.
-- No passwords or email accounts are ever stored.
-- Login is restricted to members of the configured guild.
-- Steam linking is optional, removable, read-only, and runs through official Steam OpenID — we never ask for or store Steam credentials.
-- What the crew can see about your Steam data is governed by a dedicated privacy layer, not exposed by default.
+Web app on `http://localhost:5173`, API health on `http://localhost:3000/health`. If it won't boot, check the `.env` first. It's usually the `.env`.
 
 ---
 
-*Boneless Island is a labor of love for one Discord server. If you stumbled here from the outside: hi 👋 — there's nothing to sign up for, but enjoy the palm trees.*
+## FAQ
+
+**Can I sign up?**
+No. It's gated to one (1) Discord server, and you are, statistically, not in it. The palm trees are free to look at though.
+
+**Is this for sale? Is it a startup?**
+No, and please stop. It's a passion project. There is no growth team. There is Nuggie.
+
+**Why does a community need AI?**
+Why does anyone need anything. Nuggie said what's up.
+
+**Is it good?**
+It's actual cinema.
+
+**A full web app, a CSP, CI/CD, an economy... for a Discord hangout?**
+Yes. No further questions.
+
+---
+
+## Privacy principles
+
+The one section played completely straight, because trust matters:
+
+- Discord OAuth is the only sign-in, and the Discord user ID is the canonical identity.
+- No passwords or email accounts are ever stored.
+- Login is restricted to members of the configured Discord server.
+- Steam linking is optional, removable, and read-only, handled through official Steam OpenID. Steam credentials are never requested or stored.
+- What the crew can see about your Steam data is governed by a dedicated privacy layer and is not exposed by default.
+
+---
+
+*Boneless Island is a labor of love for one Discord community. If you wandered in from the outside: hi 👋, there's nothing to sign up for, but you're welcome to enjoy the palm trees.*
