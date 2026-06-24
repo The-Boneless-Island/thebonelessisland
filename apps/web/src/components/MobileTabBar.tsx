@@ -5,6 +5,7 @@
 import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
 import { pathForPage } from "../lib/routes.js";
+import { prefetchPage } from "../lib/routePrefetch.js";
 import type { PageId } from "../types.js";
 
 type Tab = {
@@ -44,6 +45,8 @@ export function MobileTabBar({ page }: { page: PageId; onNavigate?: (page: PageI
               to={pathForPage(tab.id)}
               className="bi-tabbar-btn"
               aria-current={active ? "page" : undefined}
+              onTouchStart={() => prefetchPage(tab.id)}
+              onMouseEnter={() => prefetchPage(tab.id)}
             >
               <span aria-hidden="true" style={{ fontSize: 19, lineHeight: 1 }}>
                 {tab.icon}

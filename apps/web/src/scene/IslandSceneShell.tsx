@@ -982,6 +982,10 @@ function SceneGlobalStyles() {
           0%, 100% { opacity: 0.45; }
           50% { opacity: 0.9; }
         }
+        @keyframes bi-badge-shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
 
         /* ── Ambient flourishes ── */
         .island-celestial-reflection {

@@ -16,10 +16,10 @@ export type RankTier = {
 };
 
 /** Bump when milestone badge art changes — busts browser + CDN cache on stable paths. */
-export const RANK_ART_VERSION = "badge-v2";
+export const RANK_ART_VERSION = "badge-v3";
 
 function rankArt(slug: string, locked = false): string {
-  return `/art/milestones/${slug}${locked ? "-locked" : ""}.svg?v=${RANK_ART_VERSION}`;
+  return `/art/milestones/web/${slug}${locked ? "-locked" : ""}.png?v=${RANK_ART_VERSION}`;
 }
 
 export const RANK_TIERS: RankTier[] = [

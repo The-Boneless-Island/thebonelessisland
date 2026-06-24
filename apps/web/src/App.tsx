@@ -4,8 +4,11 @@ import { SITE_BRAND_NAME } from "@island/shared";
 import { API_BASE_URL, apiFetch } from "./api/client.js";
 import { putClientState } from "./api/clientState.js";
 import { consumePendingLoginReturn, LoginScreen } from "./pages/LoginScreen.js";
+import { HomePage } from "./pages/Home.js";
 import { useLoginOverlay } from "./scene/LoginOverlayContext.js";
 import { NotFoundPage } from "./pages/NotFound.js";
+import { preloadRankBadge } from "./lib/preloadRankBadge.js";
+import { AuthBootShell } from "./components/AuthBootShell.js";
 import {
   islanderIdFromPath,
   pageFromPath,
@@ -21,7 +24,6 @@ const AdminPage = lazy(() => import("./pages/Admin.js").then((m) => ({ default: 
 const CommunityPage = lazy(() => import("./pages/Community.js").then((m) => ({ default: m.CommunityPage })));
 const GamesPage = lazy(() => import("./pages/Games.js").then((m) => ({ default: m.GamesPage })));
 const GamingNewsPage = lazy(() => import("./pages/GamingNews.js").then((m) => ({ default: m.GamingNewsPage })));
-const HomePage = lazy(() => import("./pages/Home.js").then((m) => ({ default: m.HomePage })));
 const LibraryPage = lazy(() => import("./pages/Library.js").then((m) => ({ default: m.LibraryPage })));
 const AchievementsPage = lazy(() => import("./pages/Achievements.js").then((m) => ({ default: m.AchievementsPage })));
 const MilestonesPage = lazy(() => import("./pages/Milestones.js").then((m) => ({ default: m.MilestonesPage })));
@@ -404,17 +406,21 @@ export function App() {
       if (playReturnVideo) setLoginExiting(true);
       setIsAuthenticated(authed);
       if (authed) {
-        // Fire all independent fetches in parallel. syncGuildMembers (Discord POST)
-        // is handled by the background-sync effect that triggers immediately on auth.
-        await Promise.all([
-          loadGuildMembers(true),
-          loadCrewGames(true),
-          loadCrewWishlist(true),
-          loadFeaturedRecommendation(true),
-          loadAllNews(true),
-          loadActivity(true),
-          loadNewsCards(true),
-        ]);
+        void Promise.all([loadGuildMembers(true), loadActivity(true)]);
+        const deferSecondaryLoads = () => {
+          void Promise.all([
+            loadCrewGames(true),
+            loadCrewWishlist(true),
+            loadFeaturedRecommendation(true),
+            loadAllNews(true),
+            loadNewsCards(true),
+          ]);
+        };
+        if (typeof requestIdleCallback !== "undefined") {
+          requestIdleCallback(deferSecondaryLoads, { timeout: 2000 });
+        } else {
+          setTimeout(deferSecondaryLoads, 0);
+        }
       }
     };
 
@@ -735,11 +741,12 @@ export function App() {
       setProfileData(profile);
       setIsAuthenticated(true);
       if (profile) {
+        preloadRankBadge(profile.lifetimeEarned ?? 0);
         setProfileSteamVisibility(profile.steamVisibility);
         setProfileFeatureOptIn(profile.featureOptIn);
         if (profile.steamId64) {
-          await loadOwnedGames(true);
-          await loadSteamExclusions();
+          void loadOwnedGames(true);
+          void loadSteamExclusions();
         } else {
           setOwnedGames([]);
           setExcludedOwnedGameAppIds([]);
@@ -1718,7 +1725,7 @@ export function App() {
   }, [loginExiting, handleLoginExitComplete]);
 
   if (isAuthenticated === null) {
-    return null;
+    return <AuthBootShell />;
   }
 
   if (isAuthenticated !== true || loginExiting) {

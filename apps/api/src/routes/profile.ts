@@ -3,7 +3,7 @@ import { z } from "zod";
 import { db } from "../db/client.js";
 import { getGuildId } from "../lib/serverSettings.js";
 import { requireSession } from "../lib/auth.js";
-import { getEquippedItemsByUserId } from "../lib/nuggiesLedger.js";
+import { getEquippedItemsByUserId, hasClaimedDailyToday } from "../lib/nuggiesLedger.js";
 import { composePresenceText } from "../lib/presence.js";
 import {
   ALLOWED_CLIENT_STATE_KEYS,
@@ -114,9 +114,10 @@ profileRouter.get("/me", async (req, res) => {
   }
 
   const userId = BigInt(row.user_id);
-  const [equippedItems, clientState] = await Promise.all([
+  const [equippedItems, clientState, claimedToday] = await Promise.all([
     getEquippedItemsByUserId(userId).catch(() => []),
     getClientState(userId).catch(() => ({})),
+    hasClaimedDailyToday(userId).catch(() => false),
   ]);
 
   res.json({
@@ -158,6 +159,7 @@ profileRouter.get("/me", async (req, res) => {
       nuggieBalance: parseInt(row.balance ?? "0", 10),
       lifetimeEarned: parseInt(row.lifetime_earned ?? "0", 10),
       nuggiesOptedOut: row.nuggies_opted_out,
+      claimedToday,
       equippedItems,
       guildId: getGuildId(),
       clientState,

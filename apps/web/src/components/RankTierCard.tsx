@@ -58,7 +58,7 @@ export function RankTierCard({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
         <RankBadgeSlot width={52}>
-          <RankBadgeArt tier={tier} reached={reached} width={52} glow={reached || isNext} />
+          <RankBadgeArt tier={tier} reached={reached} width={52} glow={reached || isNext} lazy={!reached && !isNext} />
         </RankBadgeSlot>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div

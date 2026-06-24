@@ -590,19 +590,8 @@ function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
 
 // â"€â"€ Nuggies Snapshot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-type DailyTx = { type: string; createdAt: string };
-
 // Daily reset boundary: midnight in America/Halifax (= 11pm ET year-round).
 const RESET_TZ = "America/Halifax";
-
-function isClaimedToday(txs: DailyTx[]): boolean {
-  const today = new Date().toLocaleDateString("en-CA", { timeZone: RESET_TZ });
-  return txs.some((tx) => {
-    if (tx.type !== "daily") return false;
-    const d = new Date(tx.createdAt).toLocaleDateString("en-CA", { timeZone: RESET_TZ });
-    return d === today;
-  });
-}
 
 function msUntilNextDailyReset(): number {
   const fmt = new Intl.DateTimeFormat("en-US", {
@@ -737,7 +726,9 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   const lifetimeEarned = profile?.lifetimeEarned ?? 0;
 
   const [balanceOverride, setBalanceOverride] = useState<number | null>(null);
-  const [claimedToday, setClaimedToday] = useState<boolean | null>(null);
+  const [claimedToday, setClaimedToday] = useState<boolean | null>(
+    typeof profile?.claimedToday === "boolean" ? profile.claimedToday : null
+  );
   const [claiming, setClaiming] = useState(false);
   const [claimFlash, setClaimFlash] = useState<{ amount: number } | null>(null);
   const [claimConfetti, setClaimConfetti] = useState(0);
@@ -746,22 +737,10 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
   const refetchActivity = useRefetchActivity();
 
   useEffect(() => {
-    if (optedOut) return;
-    let cancelled = false;
-    void apiFetch("/nuggies/me").then(async (r) => {
-      if (!r.ok || cancelled) return;
-      const d = (await r.json()) as { claimedToday?: boolean; transactions?: DailyTx[] };
-      // Server-side flag is authoritative — the transactions list is capped at
-      // 20 rows, so a busy casino day pushes the daily claim off the page and
-      // the legacy scan would wrongly re-show the button.
-      if (!cancelled) {
-        setClaimedToday(
-          typeof d.claimedToday === "boolean" ? d.claimedToday : isClaimedToday(d.transactions ?? [])
-        );
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [optedOut]);
+    if (typeof profile?.claimedToday === "boolean") {
+      setClaimedToday(profile.claimedToday);
+    }
+  }, [profile?.claimedToday]);
 
   useEffect(() => {
     if (claimedToday !== true) return;

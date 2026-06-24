@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { islandTheme } from "../theme.js";
 import { pathForPage } from "../lib/routes.js";
+import { prefetchPage } from "../lib/routePrefetch.js";
 import type { PageId } from "../types.js";
 
 type NavChild = {
@@ -167,6 +168,8 @@ function DesktopGroupItem({
 
   function handleMouseEnter() {
     clearTimers();
+    prefetchPage(group.defaultId);
+    for (const child of group.children) prefetchPage(child.id);
     openTimer.current = window.setTimeout(() => setOpen(true), 120);
   }
 
@@ -228,7 +231,10 @@ function DesktopGroupItem({
                   font: "inherit",
                   transition: `background ${islandTheme.motion.dur.fast} ease`
                 }}
-                onMouseEnter={(e) => { if (!childActive && !child.badge) e.currentTarget.style.background = islandTheme.color.secondary; }}
+                onMouseEnter={(e) => {
+                  prefetchPage(child.id);
+                  if (!childActive && !child.badge) e.currentTarget.style.background = islandTheme.color.secondary;
+                }}
                 onMouseLeave={(e) => { if (!childActive) e.currentTarget.style.background = "transparent"; }}
               >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
@@ -418,6 +424,7 @@ function MobileOverlay({
                         <button
                           key={child.id}
                           type="button"
+                          onMouseEnter={() => prefetchPage(child.id)}
                           onClick={() => !child.badge && onNavigate(child.id)}
                           style={{
                             display: "flex",

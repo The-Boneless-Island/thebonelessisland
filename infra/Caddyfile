@@ -73,7 +73,7 @@ bonelessisland.com {
 	@assets path /assets/*
 	header @assets Cache-Control "public, max-age=31536000, immutable, no-transform"
 	@milestones path /art/milestones/*
-	header @milestones Cache-Control "public, max-age=300, must-revalidate"
+	header @milestones Cache-Control "public, max-age=31536000, immutable, no-transform"
 	@notassets not path /assets/*
 	header @notassets Cache-Control "no-cache"
 }
