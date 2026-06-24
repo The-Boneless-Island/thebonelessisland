@@ -11,6 +11,7 @@ import {
 } from "../data/rankTiers.js";
 import { RankBadgeArt, RankBadgeSlot } from "../components/MilestoneRankBadge.js";
 import { RankTierCard, RANK_LADDER_GRID_COLUMNS } from "../components/RankTierCard.js";
+import { preloadAllRankBadges } from "../lib/preloadRankBadge.js";
 import { islandTheme } from "../theme.js";
 
 type EarnedAchievement = {
@@ -69,6 +70,10 @@ export function MilestonesPage() {
       setAchievements(d.achievements);
     }
     setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    preloadAllRankBadges();
   }, []);
 
   useEffect(() => {

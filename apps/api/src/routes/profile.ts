@@ -94,7 +94,9 @@ profileRouter.get("/me", async (req, res) => {
         gm.joined_at_guild,
         gm.premium_since,
         nb.balance,
-        (SELECT COALESCE(SUM(amount), 0) FROM nuggies_transactions WHERE user_id = u.id AND amount > 0) AS lifetime_earned
+        COALESCE(nb.lifetime_earned, (
+          SELECT COALESCE(SUM(amount), 0) FROM nuggies_transactions WHERE user_id = u.id AND amount > 0
+        )) AS lifetime_earned
       FROM users u
       INNER JOIN discord_profiles dp ON dp.user_id = u.id
       LEFT JOIN steam_links sl ON sl.user_id = u.id
@@ -117,7 +119,7 @@ profileRouter.get("/me", async (req, res) => {
   const [equippedItems, clientState, claimedToday] = await Promise.all([
     getEquippedItemsByUserId(userId).catch(() => []),
     getClientState(userId).catch(() => ({})),
-    hasClaimedDailyToday(userId).catch(() => false),
+    row.nuggies_opted_out ? Promise.resolve(false) : hasClaimedDailyToday(userId).catch(() => false),
   ]);
 
   res.json({
@@ -158,8 +160,8 @@ profileRouter.get("/me", async (req, res) => {
       }),
       nuggieBalance: parseInt(row.balance ?? "0", 10),
       lifetimeEarned: parseInt(row.lifetime_earned ?? "0", 10),
-      nuggiesOptedOut: row.nuggies_opted_out,
       claimedToday,
+      nuggiesOptedOut: row.nuggies_opted_out,
       equippedItems,
       guildId: getGuildId(),
       clientState,

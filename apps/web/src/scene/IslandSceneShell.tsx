@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+﻿import { useEffect, useRef, useState, type ReactNode } from "react";
 import { dayThemeVars, islandTheme, nightThemeVars } from "../theme.js";
 import { LoginOverlayProvider, useLoginOverlay } from "./LoginOverlayContext.js";
 import { DayNightProvider, useDayNight } from "./useDayNight.js";
@@ -32,7 +32,7 @@ function SceneBackdrop() {
   const src = day ? "/scene-day.mp4" : "/scene.mp4";
   const fallbackBg = day ? "#bfe0f0" : "#0a1424";
   // Scrim sits over the video to preserve topbar text legibility at the top edge.
-  // Tune these values in the review phase — they're the primary lever for "how much video shows".
+  // Tune these values in the review phase â€” they're the primary lever for "how much video shows".
   const scrim = day
     ? "linear-gradient(180deg, rgba(255,255,255,.06) 0%, transparent 22%, transparent 70%, rgba(20,40,66,.12) 100%)"
     : "linear-gradient(180deg, rgba(6,14,28,.22) 0%, rgba(6,14,28,.07) 26%, rgba(6,14,28,.14) 64%, rgba(6,14,28,.36) 100%), radial-gradient(130% 90% at 50% 36%, transparent 54%, rgba(6,12,24,.28) 100%)";
@@ -84,7 +84,7 @@ function SceneBackdrop() {
           loop
           autoPlay
           playsInline
-          preload="auto"
+          preload="metadata"
           style={{
             position: "absolute",
             inset: 0,
@@ -108,10 +108,10 @@ function SceneBackdrop() {
   );
 }
 
-// ── Celebration flourish ─────────────────────────────────────────────────────
+// â”€â”€ Celebration flourish â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // One-shot shooting star when a celebration fires anywhere in the app
 // (milestone rank-up, achievement). Listens for the "bi:scene-flourish"
-// window event dispatched by the celebration system — no prop threading.
+// window event dispatched by the celebration system â€” no prop threading.
 
 function CelebrationFlourish() {
   const [burst, setBurst] = useState(0);
@@ -152,516 +152,6 @@ function CelebrationFlourish() {
   );
 }
 
-// ── Golden hour ──────────────────────────────────────────────────────────────
-// Dawn (6–8) and sunset (17–19) wash the scene in the tropical sunset palette.
-// Deliberately NOT a third theme mode: text/contrast vars stay binary
-// day/night; this is pure scene ambience, so evenings — when the crew actually
-// plays — get the prettiest sky without a contrast audit.
-
-type GoldenPhase = "dawn" | "sunset" | null;
-
-function goldenPhaseForHour(hour: number): GoldenPhase {
-  if (hour >= 6 && hour < 8) return "dawn";
-  if (hour >= 17 && hour < 19) return "sunset";
-  return null;
-}
-
-function useGoldenPhase(): GoldenPhase {
-  const [phase, setPhase] = useState<GoldenPhase>(() => goldenPhaseForHour(new Date().getHours()));
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setPhase(goldenPhaseForHour(new Date().getHours()));
-    }, 5 * 60 * 1000);
-    return () => window.clearInterval(id);
-  }, []);
-  return phase;
-}
-
-function GoldenHourWash() {
-  const phase = useGoldenPhase();
-  const sunset = islandTheme.palette;
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        inset: 0,
-        pointerEvents: "none",
-        opacity: phase ? 1 : 0,
-        transition: "opacity 2400ms ease",
-        background:
-          phase === "dawn"
-            ? `linear-gradient(180deg, transparent 0%, ${sunset.dawn}26 34%, ${sunset.coral}1f 52%, ${sunset.dawn}14 66%, transparent 84%)`
-            : `linear-gradient(180deg, transparent 0%, ${sunset.sunset}2e 32%, ${sunset.coral}29 50%, ${sunset.sunsetDeep}1f 64%, transparent 84%)`
-      }}
-    />
-  );
-}
-
-// ── Ambient flourishes ───────────────────────────────────────────────────────
-// All of these are decoration-only: transform/opacity animations, hidden under
-// prefers-reduced-motion, zero per-frame JS.
-
-/** Shimmering column of light on the ocean directly below the sun/moon. */
-function CelestialReflection({ mode }: { mode: "day" | "night" }) {
-  const color =
-    mode === "day"
-      ? "rgba(253, 230, 138, 0.34)"
-      : "rgba(186, 230, 253, 0.22)";
-  return (
-    <div
-      aria-hidden="true"
-      className="island-celestial-reflection"
-      style={{
-        position: "absolute",
-        left: "50%",
-        top: "50%",
-        width: 110,
-        height: "22%",
-        transform: "translateX(-50%)",
-        background: `linear-gradient(180deg, ${color} 0%, transparent 90%)`,
-        maskImage: "linear-gradient(90deg, transparent 0%, black 30%, black 70%, transparent 100%)",
-        WebkitMaskImage: "linear-gradient(90deg, transparent 0%, black 30%, black 70%, transparent 100%)",
-        mixBlendMode: "screen",
-        transition: "background 1200ms ease",
-        pointerEvents: "none"
-      }}
-    />
-  );
-}
-
-/** A few slow fireflies drifting over the night beach. */
-function Fireflies({ active }: { active: boolean }) {
-  const flies = [
-    { left: "12%", bottom: "9%", dur: "11s", delay: "0s" },
-    { left: "28%", bottom: "11%", dur: "14s", delay: "-4s" },
-    { left: "64%", bottom: "10%", dur: "12s", delay: "-7s" },
-    { left: "82%", bottom: "12%", dur: "16s", delay: "-2s" }
-  ];
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        inset: 0,
-        opacity: active ? 1 : 0,
-        transition: "opacity 1500ms ease",
-        pointerEvents: "none"
-      }}
-    >
-      {flies.map((f, i) => (
-        <span
-          key={i}
-          className="island-firefly"
-          style={{
-            position: "absolute",
-            left: f.left,
-            bottom: f.bottom,
-            width: 4,
-            height: 4,
-            borderRadius: 999,
-            background: "#fde68a",
-            boxShadow: "0 0 8px 2px rgba(253, 230, 138, 0.55)",
-            animationDuration: f.dur,
-            animationDelay: f.delay
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-/** Two distant bird silhouettes crossing the day sky. */
-function Birds({ active }: { active: boolean }) {
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        inset: 0,
-        opacity: active ? 1 : 0,
-        transition: "opacity 1500ms ease",
-        pointerEvents: "none"
-      }}
-    >
-      <span className="island-bird" style={{ top: "14%", animationDuration: "70s", animationDelay: "-12s" }}>
-        <BirdGlyph size={16} />
-      </span>
-      <span className="island-bird" style={{ top: "22%", animationDuration: "95s", animationDelay: "-50s" }}>
-        <BirdGlyph size={11} />
-      </span>
-    </div>
-  );
-}
-
-function BirdGlyph({ size }: { size: number }) {
-  return (
-    <svg width={size} height={size * 0.45} viewBox="0 0 20 9" fill="none" aria-hidden="true">
-      <path d="M1 7 Q5 1 10 6 Q15 1 19 7" stroke="rgba(30, 41, 59, 0.55)" strokeWidth="1.6" strokeLinecap="round" fill="none" />
-    </svg>
-  );
-}
-
-/** Small props scattered on the beach band; selection rotates by day-of-month
- *  (same trick as the shooting star) so the shore feels lived-in but stable
- *  within a day. Night adds a faint bonfire glow. */
-function BeachProps({ mode }: { mode: "day" | "night" }) {
-  const day = new Date().getDate();
-  const props = [
-    { key: "driftwood", left: `${10 + (day % 5) * 4}%`, node: <DriftwoodGlyph /> },
-    { key: "starfish", left: `${68 + (day % 4) * 5}%`, node: <StarfishGlyph /> }
-  ];
-  return (
-    <div aria-hidden="true" style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "8%", pointerEvents: "none" }}>
-      {props.map((p) => (
-        <span
-          key={p.key}
-          style={{
-            position: "absolute",
-            left: p.left,
-            bottom: "22%",
-            opacity: mode === "day" ? 0.5 : 0.3,
-            transition: "opacity 1200ms ease"
-          }}
-        >
-          {p.node}
-        </span>
-      ))}
-      {/* Night bonfire glow near the right palm */}
-      <span
-        className="island-bonfire"
-        style={{
-          position: "absolute",
-          right: "18%",
-          bottom: "10%",
-          width: 90,
-          height: 50,
-          borderRadius: "50%",
-          background: "radial-gradient(ellipse at 50% 80%, rgba(251, 146, 60, 0.4) 0%, rgba(245, 158, 11, 0.18) 45%, transparent 75%)",
-          opacity: mode === "night" ? 1 : 0,
-          transition: "opacity 1500ms ease"
-        }}
-      />
-    </div>
-  );
-}
-
-function DriftwoodGlyph() {
-  return (
-    <svg width="44" height="12" viewBox="0 0 44 12" aria-hidden="true">
-      <path d="M2 9 Q10 4 22 6 Q34 8 42 4 L42 7 Q30 11 18 9 Q8 8 2 11 Z" fill="#5c3d24" opacity="0.85" />
-      <path d="M6 8 Q14 5 24 7" stroke="#3d2817" strokeWidth="1" fill="none" opacity="0.6" />
-    </svg>
-  );
-}
-
-function StarfishGlyph() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true">
-      <path
-        d="M10 1 L12.2 7 L18.5 7.4 L13.6 11.4 L15.4 17.6 L10 14 L4.6 17.6 L6.4 11.4 L1.5 7.4 L7.8 7 Z"
-        fill="#ef8354"
-        opacity="0.85"
-      />
-    </svg>
-  );
-}
-
-function Stars({ active }: { active: boolean }) {
-  // A tiny date-keyed flourish: a single shooting star whose horizontal start
-  // position shifts day to day, so the night sky feels a touch different each
-  // evening without any per-frame work. The CSS animation handles the motion;
-  // prefers-reduced-motion hides it via the .island-shooting-star guard.
-  const shootingLeft = `${8 + (new Date().getDate() % 10) * 8}%`;
-
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        opacity: active ? 0.85 : 0,
-        transition: "opacity 1500ms ease"
-      }}
-    >
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          animation: "islandTwinkle 4s ease-in-out infinite",
-          backgroundImage: [
-            "radial-gradient(1px 1px at 12% 18%, white, transparent)",
-            "radial-gradient(1px 1px at 22% 38%, white, transparent)",
-            "radial-gradient(1.5px 1.5px at 35% 12%, white, transparent)",
-            "radial-gradient(1px 1px at 48% 28%, white, transparent)",
-            "radial-gradient(1px 1px at 62% 8%, white, transparent)",
-            "radial-gradient(1.5px 1.5px at 75% 22%, white, transparent)",
-            "radial-gradient(1px 1px at 85% 35%, white, transparent)",
-            "radial-gradient(1px 1px at 92% 14%, white, transparent)",
-            "radial-gradient(1px 1px at 18% 48%, white, transparent)",
-            "radial-gradient(1px 1px at 55% 42%, white, transparent)",
-            "radial-gradient(1.5px 1.5px at 8% 28%, white, transparent)",
-            "radial-gradient(1px 1px at 42% 52%, white, transparent)"
-          ].join(", ")
-        }}
-      />
-      {active ? (
-        <span
-          className="island-shooting-star"
-          style={{ left: shootingLeft, top: "8%" }}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-function Clouds({ active }: { active: boolean }) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: "-10%",
-        right: "-10%",
-        top: 0,
-        height: "40%",
-        opacity: active ? 1 : 0,
-        transition: "opacity 1500ms ease",
-        pointerEvents: "none"
-      }}
-    >
-      <Cloud className="island-cloud-a" left="8%" top="15%" width={180} drift="90s" />
-      <Cloud className="island-cloud-b" left="50%" top="8%" width={240} drift="120s" delay="-40s" />
-      <Cloud className="island-cloud-c" left="75%" top="22%" width={160} drift="100s" delay="-60s" />
-    </div>
-  );
-}
-
-type CloudProps = {
-  className: string;
-  left: string;
-  top: string;
-  width: number;
-  drift: string;
-  delay?: string;
-};
-
-function Cloud({ className, left, top, width, drift, delay = "0s" }: CloudProps) {
-  return (
-    <div
-      className={className}
-      style={{
-        position: "absolute",
-        left,
-        top,
-        width,
-        height: width * 0.2,
-        background: "white",
-        borderRadius: 100,
-        filter: "blur(0.5px)",
-        opacity: 0.92,
-        animation: `islandCloudDrift ${drift} linear infinite`,
-        animationDelay: delay
-      }}
-    />
-  );
-}
-
-function Celestial({ mode }: { mode: "day" | "night" }) {
-  const { isTransitioning } = useDayNight();
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [renderMode, setRenderMode] = useState(mode);
-
-  useEffect(() => {
-    if (!ref.current) {
-      setRenderMode(mode);
-      return;
-    }
-    const el = ref.current;
-    el.style.transition = "transform 1100ms cubic-bezier(.55,0,.6,.4), opacity 700ms ease";
-    el.style.setProperty("--celestial-y", "60vh");
-    el.style.opacity = "0";
-    const flipTimer = window.setTimeout(() => {
-      setRenderMode(mode);
-      el.style.transition = "none";
-      el.style.setProperty("--celestial-y", "60vh");
-      void el.offsetWidth;
-      el.style.transition = "transform 1500ms cubic-bezier(.2,.6,.3,1), opacity 900ms ease";
-      el.style.setProperty("--celestial-y", "0px");
-      el.style.opacity = "1";
-    }, 1100);
-    return () => window.clearTimeout(flipTimer);
-  }, [mode]);
-
-  return (
-    <div
-      ref={ref}
-      aria-hidden="true"
-      style={{
-        position: "absolute",
-        left: "50%",
-        top: "7%",
-        width: 160,
-        height: 160,
-        transform: "translate(-50%, 0) translateY(var(--celestial-y, 0))",
-        opacity: isTransitioning ? undefined : 1,
-        pointerEvents: "none"
-      }}
-    >
-      {renderMode === "day" ? <SunDisc /> : <MoonDisc />}
-    </div>
-  );
-}
-
-function SunDisc() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        borderRadius: 999,
-        background:
-          "radial-gradient(circle, #fff8d4 0%, #fde68a 30%, #f59e0b 70%, transparent 78%)",
-        boxShadow: "0 0 60px rgba(253, 224, 71, 0.6), 0 0 120px rgba(251, 146, 60, 0.4)"
-      }}
-    />
-  );
-}
-
-function MoonDisc() {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        borderRadius: 999,
-        background:
-          "radial-gradient(circle at 38% 38%, #fffbe7 0%, #e2e8f0 35%, #94a3b8 70%, transparent 78%)",
-        boxShadow: "0 0 60px rgba(186, 230, 253, 0.4), 0 0 120px rgba(147, 197, 253, 0.25)"
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          width: 22,
-          height: 22,
-          left: "35%",
-          top: "28%",
-          borderRadius: 999,
-          background: "rgba(100, 116, 139, 0.25)"
-        }}
-      />
-      <span
-        style={{
-          position: "absolute",
-          width: 14,
-          height: 14,
-          left: "58%",
-          top: "55%",
-          borderRadius: 999,
-          background: "rgba(100, 116, 139, 0.25)",
-          boxShadow: "-36px 12px 0 rgba(100,116,139,0.18)"
-        }}
-      />
-    </div>
-  );
-}
-
-function OceanBand({ mode }: { mode: "day" | "night" }) {
-  return (
-    <>
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: "50%",
-          height: "30%",
-          background:
-            mode === "day"
-              ? "linear-gradient(180deg, #4a9fc4 0%, #2d7a99 60%, #1e5f7a 100%)"
-              : "linear-gradient(180deg, #0e3a52 0%, #082238 60%, #050f1c 100%)",
-          transition: "background 1200ms ease",
-          opacity: 0.92
-        }}
-      />
-      <div
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: "50%",
-          height: "8%",
-          backgroundImage: `repeating-linear-gradient(110deg,
-            rgba(255,255,255,0) 0px,
-            rgba(255,255,255,0) 28px,
-            rgba(255,255,255,0.10) 28px,
-            rgba(255,255,255,0.10) 30px,
-            rgba(255,255,255,0) 30px,
-            rgba(255,255,255,0) 60px
-          )`,
-          backgroundSize: "220px 100%",
-          mixBlendMode: "screen",
-          opacity: 0.85,
-          animation: `islandWaveDrift ${islandTheme.motion.dur.ambient} linear infinite`
-        }}
-      />
-    </>
-  );
-}
-
-function BeachBand({ mode }: { mode: "day" | "night" }) {
-  return (
-    <div
-      style={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        height: "8%",
-        background:
-          mode === "day"
-            ? "linear-gradient(180deg, #f4e4c1 0%, #e8d4a8 60%, #c39d5e 100%)"
-            : "linear-gradient(180deg, #8b7355 0%, #6b5640 60%, #3d2f22 100%)",
-        boxShadow: "inset 0 8px 14px rgba(255, 255, 255, 0.12), inset 0 -8px 14px rgba(0, 0, 0, 0.18)",
-        transition: "background 1200ms ease, filter 1200ms ease",
-        filter: mode === "day" ? "brightness(1)" : "brightness(0.55)"
-      }}
-    >
-      <div
-        aria-hidden="true"
-        style={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          top: 0,
-          height: 12,
-          backgroundImage:
-            "repeating-radial-gradient(circle at 50% 100%, rgba(255,255,255,0.85) 0 6px, transparent 6px 16px)",
-          backgroundSize: "32px 12px",
-          opacity: 0.7
-        }}
-      />
-    </div>
-  );
-}
-
-function SceneVignette({ mode }: { mode: "day" | "night" }) {
-  // --bi-scene-tint lets pages subtly recolor the scene (news leans cool,
-  // the arcade leans warm) without extra layers. App.tsx sets it per page.
-  return (
-    <div
-      style={{
-        position: "absolute",
-        inset: 0,
-        background:
-          mode === "day"
-            ? "radial-gradient(ellipse at 50% 30%, var(--bi-scene-tint, transparent) 0%, transparent 65%), radial-gradient(ellipse at 50% 35%, transparent 50%, rgba(30, 60, 90, 0.18) 100%)"
-            : "radial-gradient(ellipse at 50% 30%, var(--bi-scene-tint, transparent) 0%, transparent 65%), radial-gradient(ellipse at 50% 35%, transparent 40%, rgba(8, 16, 30, 0.55) 100%)",
-        transition: "background 1200ms ease",
-        pointerEvents: "none"
-      }}
-    />
-  );
-}
 
 function usePalmParallax(side: "left" | "right") {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -900,7 +390,7 @@ function SceneGlobalStyles() {
   return (
     <style>
       {`
-        /* ── Cross-browser reset ── */
+        /* â”€â”€ Cross-browser reset â”€â”€ */
         *, *::before, *::after { box-sizing: border-box; }
 
         :root {
@@ -913,7 +403,7 @@ function SceneGlobalStyles() {
 
         html {
           /* Reserve scrollbar lane so layout never shifts between scrollable/non-scrollable pages.
-             Windows browsers have ~17px opaque scrollbar; macOS uses overlay — this normalises them. */
+             Windows browsers have ~17px opaque scrollbar; macOS uses overlay â€” this normalises them. */
           scrollbar-gutter: stable;
         }
         html, body {
@@ -921,7 +411,7 @@ function SceneGlobalStyles() {
           background: var(--bi-app-bg);
           /* Kill rubber-band overscroll. Without this, scrolling past the top or
              bottom of the scene exposes the flat body background underneath the
-             gradient sky/water — looks like the page "changes color". */
+             gradient sky/water â€” looks like the page "changes color". */
           overscroll-behavior: none;
         }
         body {
@@ -987,7 +477,7 @@ function SceneGlobalStyles() {
           100% { background-position: -200% 0; }
         }
 
-        /* ── Ambient flourishes ── */
+        /* â”€â”€ Ambient flourishes â”€â”€ */
         .island-celestial-reflection {
           animation: islandReflectionShimmer 6s ease-in-out infinite;
         }
@@ -1031,7 +521,7 @@ function SceneGlobalStyles() {
           70% { filter: brightness(0.9); }
         }
 
-        /* ── Occasional shooting star (night flourish) ── */
+        /* â”€â”€ Occasional shooting star (night flourish) â”€â”€ */
         .island-shooting-star {
           position: absolute;
           width: 90px;
@@ -1050,7 +540,7 @@ function SceneGlobalStyles() {
           100% { opacity: 0; transform: translate(180px, 60px) rotate(18deg); }
         }
 
-        /* ── Motion primitives (StatusDot pulse, button shine, NuggieChip flip) ── */
+        /* â”€â”€ Motion primitives (StatusDot pulse, button shine, NuggieChip flip) â”€â”€ */
         @keyframes re-pulse {
           0%, 100% { box-shadow: 0 0 0 0 var(--dotc); }
           70% { box-shadow: 0 0 0 6px transparent; }
@@ -1068,12 +558,12 @@ function SceneGlobalStyles() {
           .re-flip-el  { animation: none !important; }
         }
 
-        /* ── Tabular figures — prevents counter jitter on live numbers ── */
+        /* â”€â”€ Tabular figures â€” prevents counter jitter on live numbers â”€â”€ */
         .island-tnum {
           font-variant-numeric: tabular-nums lining-nums slashed-zero;
         }
 
-        /* ── Button base states ── */
+        /* â”€â”€ Button base states â”€â”€ */
         .island-btn {
           position: relative;
           overflow: hidden;
@@ -1110,7 +600,7 @@ function SceneGlobalStyles() {
           box-shadow: none;
         }
 
-        /* ── Nuggies showcase ("trophy case") slot lift ── */
+        /* â”€â”€ Nuggies showcase ("trophy case") slot lift â”€â”€ */
         .nuggie-showcase-slot {
           transition: transform 180ms cubic-bezier(.2,.8,.2,1), filter 180ms ease;
         }
@@ -1122,14 +612,14 @@ function SceneGlobalStyles() {
           .nuggie-showcase-slot:hover { transform: none; }
         }
 
-        /* ── Input / textarea / select focus ── */
+        /* â”€â”€ Input / textarea / select focus â”€â”€ */
         input:focus, textarea:focus, select:focus {
           outline: 2px solid var(--bi-primary-glow);
           outline-offset: 0;
           border-color: var(--bi-primary-glow) !important;
         }
 
-        /* ── Universal keyboard focus ring ──
+        /* â”€â”€ Universal keyboard focus ring â”€â”€
            Most interactive elements are styled inline without the .island-btn
            class; default UA outlines are nearly invisible on glass panels.
            One rule makes every focusable element keyboard-discoverable. */
@@ -1139,7 +629,7 @@ function SceneGlobalStyles() {
           border-radius: 6px;
         }
 
-        /* ── Responsive layout utilities ── */
+        /* â”€â”€ Responsive layout utilities â”€â”€ */
 
         /* Home page top row: Nuggies | Logo | Friends Online
            Collapses to 2-col (logo hidden) at tablet, 1-col at mobile. */
@@ -1178,10 +668,10 @@ function SceneGlobalStyles() {
           border-radius: 14px;
         }
 
-        /* Topbar spacer — height tied to --bi-topbar-h so a single change keeps them in sync */
+        /* Topbar spacer â€” height tied to --bi-topbar-h so a single change keeps them in sync */
         .bi-topbar-spacer { height: var(--bi-topbar-h, 62px); }
 
-        /* Admin / settings two-column forms — stack on phones */
+        /* Admin / settings two-column forms â€” stack on phones */
         .bi-admin-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -1189,7 +679,7 @@ function SceneGlobalStyles() {
         }
         .bi-admin-grid > * { min-width: 0; }
 
-        /* Home trending row — stack art above copy on narrow screens */
+        /* Home trending row â€” stack art above copy on narrow screens */
         .bi-trending-row {
           display: grid;
           grid-template-columns: 18px 92px minmax(0, 1fr) auto;
@@ -1197,7 +687,7 @@ function SceneGlobalStyles() {
           align-items: center;
         }
 
-        /* Games stream drawer — bottom sheet on phones */
+        /* Games stream drawer â€” bottom sheet on phones */
         .bi-stream-drawer {
           position: fixed;
           right: 0;
@@ -1224,7 +714,7 @@ function SceneGlobalStyles() {
           align-items: center;
         }
 
-        /* Toast host — clear bottom tab bar on phones */
+        /* Toast host â€” clear bottom tab bar on phones */
         .bi-toast-host {
           position: fixed;
           right: 18px;
@@ -1239,9 +729,9 @@ function SceneGlobalStyles() {
           z-index: 20;
         }
 
-        /* ── Topbar narrow (≤640px) ── */
+        /* â”€â”€ Topbar narrow (â‰¤640px) â”€â”€ */
         @media (max-width: 640px) {
-          /* Tab bar carries primary nav — hide duplicate hamburger */
+          /* Tab bar carries primary nav â€” hide duplicate hamburger */
           .bi-megamenu-trigger { display: none !important; }
 
           .bi-topbar-search-label { display: none; }
@@ -1309,12 +799,12 @@ function SceneGlobalStyles() {
           .bi-brand .island-display { display: none; }
         }
 
-        /* ── Mobile (≤720px) layout collapses ── */
+        /* â”€â”€ Mobile (â‰¤720px) layout collapses â”€â”€ */
         @media (max-width: 720px) {
           /* Games page: side-by-side split stacks to one column */
           .bi-games-split { grid-template-columns: 1fr !important; }
 
-          /* Palm frames eat too much width on phones — hide them */
+          /* Palm frames eat too much width on phones â€” hide them */
           .bi-palm-frame { display: none !important; }
         }
 

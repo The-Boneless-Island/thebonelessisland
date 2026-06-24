@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
+import { privateCache } from "../middleware/privateCache.js";
 
 export const newsCardsRouter = express.Router();
 
@@ -71,7 +72,7 @@ const cardSelect = `
   LEFT JOIN guild_members creator_gm ON creator_gm.discord_user_id = creator.discord_user_id
 `;
 
-newsCardsRouter.get("/", requireSession, async (_req, res) => {
+newsCardsRouter.get("/", requireSession, privateCache(60), async (_req, res) => {
   const result = await db.query<NewsCardRow>(
     `
       ${cardSelect}

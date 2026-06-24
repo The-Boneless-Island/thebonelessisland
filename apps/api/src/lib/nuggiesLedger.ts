@@ -178,8 +178,12 @@ export async function applyTransaction(opts: {
     const newBalance = currentBalance + opts.amount;
 
     await client.query(
-      "UPDATE nuggies_balances SET balance = $1, updated_at = NOW() WHERE user_id = $2",
-      [newBalance, userId]
+      `UPDATE nuggies_balances
+       SET balance = $1,
+           lifetime_earned = lifetime_earned + GREATEST($3, 0),
+           updated_at = NOW()
+       WHERE user_id = $2`,
+      [newBalance, userId, opts.amount]
     );
 
     await client.query(

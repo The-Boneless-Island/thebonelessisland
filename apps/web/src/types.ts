@@ -116,8 +116,8 @@ export type MeProfile = {
   richPresenceText: string | null;
   nuggieBalance: number;
   lifetimeEarned: number;
-  nuggiesOptedOut: boolean;
   claimedToday?: boolean;
+  nuggiesOptedOut: boolean;
   equippedItems: EquippedItem[];
   guildId: string | null;
   clientState: Record<string, unknown>;
