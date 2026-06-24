@@ -1,8 +1,8 @@
 # 🏝️ The Boneless Island
 
-**The clubhouse for our Discord crew.** A tropical-island home base where a six-year-old gaming server figures out what to play tonight, keeps up with each other, races for bragging rights, and watches the news roll in — all without anyone having to ask "so… what are we playing?" in chat for the hundredth time.
+**Welcome to The Boneless Island!** Figure out what to play tonight, keep up with each other, race for bragging rights, and watch the news roll in all in one place.
 
-🌐 **Live at [bonelessisland.com](https://bonelessisland.com)** · 🔐 Members-only (Discord guild gated) · 🤖 Powered by **Nuggie**, the island's AI
+🌐 **Live at [bonelessisland.com](https://bonelessisland.com)** · 🔐 Members-only (Discord server gated) · 🤖 Powered by **Nuggie**, the island's AI
 
 ---
 
@@ -10,20 +10,18 @@
 
 Discord is great for talking. It's terrible for *remembering*. Who owns what game? When's the next session? What did everyone unlock last week? What's actually worth playing across forty overlapping Steam libraries?
 
-Boneless Island is the answer to all of that — a single, good-looking place that sits on top of the Discord server we already live in. You sign in with Discord (the only login), optionally link Steam to make the recommendations smarter, and the island does the rest: it knows who's online, what the crew owns, what's trending, and what the group should fire up tonight.
+You sign in with Discord, optionally link Steam to make the recommendations smarter, and the island does the rest: it knows who's online, what the crew owns, what's trending, and what the group should fire up tonight.
 
-It is unapologetically a **hobby project for one specific community** — not a startup, not a product, not for sale. Built to be fun, maintainable, and a little bit ridiculous. Made for adult gamers who've been friends for years.
+It is unapologetically a **hobby project for one specific community** This is not a startup, not a product, not for sale. Built to be fun, maintainable, and a little bit ridiculous.
 
-## The vibe
+## The vibes
 
-A full-bleed island scene lives behind everything: sky → ocean → beach, with palm trees that sway in the wind and rise as you scroll. Flip between **Day** and **Night** and the sun and moon arc across the sky on the way out and in. Stars at night, clouds by day, glassy translucent panels floating over the water.
-
-The mascot is **Nuggie** — the boneless chicken-nugget AI who curates your news, picks your games, and generally runs the place. The brand is tropical, playful, and grown-up: think beach bar, not corporate dashboard.
+Our mascot, **Nuggie** is a chicken-nugget AI who curates your news, can pick your games, and generally runs the place.
 
 ## Signing in — Discord first, Steam optional
 
 - **Discord is the only way in.** No passwords, no email accounts, no separate signup. Your Discord identity *is* your island identity.
-- **Login is gated to our guild.** Only members of the configured Discord server get past the door; everyone else bounces.
+- **Login is gated to our server.** Only members of The Boneless Island Discord server get past the door; everyone else bounces.
 - **Steam is a bonus, never a requirement.** Every feature works without it. Link Steam (via the official "Sign in through Steam" flow — we never see your password) and the island unlocks library overlap, smarter picks, wishlist pooling, and playtime-aware recommendations. Unlink anytime.
 - **Your data stays yours.** Steam is read-only, used purely to power overlap and recommendations, and there's a privacy layer (see below) that controls exactly what the crew can see.
 
