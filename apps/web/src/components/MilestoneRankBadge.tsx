@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { findCurrentTier, type RankTier } from "../data/rankTiers.js";
 import { islandTheme } from "../theme.js";
 
@@ -14,6 +15,8 @@ type RankBadgeArtProps = {
   width: number;
   alt?: string;
   glow?: boolean;
+  priority?: boolean;
+  lazy?: boolean;
 };
 
 /** Fixed-size slot for rank badge art in flex/grid rows — prevents layout bleed. */
@@ -33,6 +36,7 @@ export function RankBadgeSlot({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
+        position: "relative",
       }}
     >
       {children}
@@ -40,25 +44,56 @@ export function RankBadgeSlot({
   );
 }
 
-/** Shield badge image — art SVG includes its own frame; no circular crop. */
-export function RankBadgeArt({ tier, reached = true, width, alt, glow = true }: RankBadgeArtProps) {
+/** Shield badge image — art includes its own frame; no circular crop. */
+export function RankBadgeArt({
+  tier,
+  reached = true,
+  width,
+  alt,
+  glow = true,
+  priority = false,
+  lazy = false,
+}: RankBadgeArtProps) {
   const height = rankBadgeHeight(width);
   const src = reached ? tier.art : tier.artLocked;
+  const [loaded, setLoaded] = useState(false);
+
   return (
-    <img
-      src={src}
-      alt={alt ?? tier.label}
-      width={width}
-      height={height}
-      style={{
-        width,
-        height,
-        display: "block",
-        flexShrink: 0,
-        filter: glow && reached ? `drop-shadow(0 0 14px ${tier.reachedGlow})` : undefined,
-        opacity: reached ? 1 : 0.88,
-      }}
-    />
+    <>
+      {!loaded ? (
+        <div
+          aria-hidden
+          style={{
+            position: "absolute",
+            width,
+            height,
+            borderRadius: 8,
+            background: `linear-gradient(110deg, ${islandTheme.color.panelMutedBg} 25%, ${islandTheme.color.panelBg} 50%, ${islandTheme.color.panelMutedBg} 75%)`,
+            backgroundSize: "200% 100%",
+            animation: "bi-badge-shimmer 1.2s ease-in-out infinite",
+          }}
+        />
+      ) : null}
+      <img
+        src={src}
+        alt={alt ?? tier.label}
+        width={width}
+        height={height}
+        loading={lazy && !priority ? "lazy" : "eager"}
+        decoding="async"
+        fetchPriority={priority ? "high" : "auto"}
+        onLoad={() => setLoaded(true)}
+        style={{
+          width,
+          height,
+          display: "block",
+          flexShrink: 0,
+          filter: glow && reached ? `drop-shadow(0 0 14px ${tier.reachedGlow})` : undefined,
+          opacity: loaded ? (reached ? 1 : 0.88) : 0,
+          transition: "opacity 180ms ease",
+        }}
+      />
+    </>
   );
 }
 
@@ -88,7 +123,7 @@ export function MilestoneRankBadge({
       title={`Rank: ${tier.label}`}
     >
       <RankBadgeSlot width={badgeWidth}>
-        <RankBadgeArt tier={tier} width={badgeWidth} />
+        <RankBadgeArt tier={tier} width={badgeWidth} priority />
       </RankBadgeSlot>
       {showLabel ? (
         <div style={{ display: "grid", gap: 2, minWidth: 0 }}>

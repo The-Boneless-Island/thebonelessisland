@@ -19,6 +19,23 @@ export default defineConfig({
       ? [visualizer({ filename: "dist/bundle-stats.html", gzipSize: true, brotliSize: true })]
       : [])
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules/react-dom") || id.includes("node_modules/react/")) {
+            return "vendor-react";
+          }
+          if (id.includes("node_modules/react-router")) {
+            return "vendor-router";
+          }
+          if (id.includes("node_modules/@sentry")) {
+            return "vendor-sentry";
+          }
+        },
+      },
+    },
+  },
   envDir: "../../",
   server: {
     port: 5173,

@@ -6,14 +6,15 @@
 // Source-of-truth: drop a PNG in public/art/milestones/, point a config row at it,
 // run `node apps/web/scripts/build-milestone-coins.mjs`. Re-runnable.
 //
-// Outputs per tier: <slug>.svg/.png + <slug>-locked.svg/.png (512px raster for Discord).
+// Outputs per tier: <slug>.svg/.png + <slug>-locked.svg/.png (512px Discord) + web/<slug>.png (128px UI).
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { Resvg } from "@resvg/resvg-js";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "public", "art", "milestones");
+const WEB_DIR = join(DIR, "web");
 
 /** Classic crest shield — outer frame (viewBox 0 0 100 118). */
 const SHIELD_OUTER =
@@ -161,6 +162,8 @@ function buildBadgeSvg(t, b64, { locked = false } = {}) {
 `;
 }
 
+mkdirSync(WEB_DIR, { recursive: true });
+
 for (const t of TIERS) {
   const b64 = readFileSync(join(DIR, t.png)).toString("base64");
 
@@ -173,6 +176,11 @@ for (const t of TIERS) {
   writeFileSync(join(DIR, `${t.out}-locked.svg`), lockedSvg);
   const lockedPng = new Resvg(lockedSvg, { fitTo: { mode: "width", value: 512 } }).render().asPng();
   writeFileSync(join(DIR, `${t.out}-locked.png`), lockedPng);
+
+  const webPng = new Resvg(svg, { fitTo: { mode: "width", value: 128 } }).render().asPng();
+  writeFileSync(join(WEB_DIR, `${t.out}.png`), webPng);
+  const webLockedPng = new Resvg(lockedSvg, { fitTo: { mode: "width", value: 128 } }).render().asPng();
+  writeFileSync(join(WEB_DIR, `${t.out}-locked.png`), webLockedPng);
 
   console.log(`wrote ${t.out}.svg/.png + ${t.out}-locked.svg/.png (badge)`);
 }
