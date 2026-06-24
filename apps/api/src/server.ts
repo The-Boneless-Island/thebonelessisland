@@ -33,6 +33,8 @@ import { nuggiesRouter } from "./routes/nuggies.js";
 import { nuggiesGamesRouter } from "./routes/nuggiesGames.js";
 import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
+import { ingestNewsForApps } from "./lib/gameNewsIngestion.js";
+import { resolveCrewLibraryAppIds } from "./lib/patchAlerts.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
 import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
 import { syncWishlistPrices } from "./lib/priceSync.js";
@@ -41,6 +43,7 @@ import { buildAndStoreWeeklyDigest } from "./lib/weeklyDigest.js";
 import { getAISetting, getGuildId } from "./lib/serverSettings.js";
 import { db } from "./db/client.js";
 import { forumsRouter } from "./routes/forums.js";
+import { patchAlertsRouter } from "./routes/patchAlerts.js";
 import { FORUM_UPLOAD_DIR, sweepOrphanUploads } from "./lib/forumUploads.js";
 import { taglinesRouter } from "./routes/taglines.js";
 import { profileRouter } from "./routes/profile.js";
@@ -326,6 +329,7 @@ app.use("/admin/onboarding", defaultLimiter, adminOnboardingRouter);
 app.use("/nuggies/games", defaultLimiter, nuggiesGamesRouter);
 app.use("/nuggies", defaultLimiter, nuggiesRouter);
 app.use("/forums", defaultLimiter, forumsRouter);
+app.use("/patch-alerts", defaultLimiter, patchAlertsRouter);
 app.use("/taglines", defaultLimiter, taglinesRouter);
 app.use("/internal", internalRouter);
 
@@ -479,6 +483,32 @@ async function bootstrap() {
       console.error("[generalNews] scheduled background ingest failed:", err);
     });
   }, 4 * 60 * 60 * 1000);
+
+  // Crew-library patch alerts: poll Steam/RSS sources on a tighter cadence than
+  // the lazy page-load ingest so Discord alerts land within ~20 minutes.
+  const runPatchAlertIngest = () =>
+    resolveCrewLibraryAppIds()
+      .then((appIds) =>
+        appIds.length > 0
+          ? ingestNewsForApps(appIds, { staleAfterMs: 20 * 60 * 1000, maxApps: 25 })
+          : { ingestedApps: 0, ingestedItems: 0 }
+      )
+      .then(({ ingestedApps, ingestedItems }) => {
+        if (ingestedApps > 0 || ingestedItems > 0) {
+          console.log(`[patchAlerts] ingest: ${ingestedApps} app(s), ${ingestedItems} item(s)`);
+        }
+      });
+
+  setTimeout(() => {
+    runPatchAlertIngest().catch((err) => {
+      console.error("[patchAlerts] initial ingest failed:", err);
+    });
+  }, 90_000);
+  setInterval(() => {
+    runPatchAlertIngest().catch((err) => {
+      console.error("[patchAlerts] scheduled ingest failed:", err);
+    });
+  }, 20 * 60 * 1000);
 
   // Member sync: server is now the sole driver (the web client no longer
   // POSTs /members/sync per tab). Run shortly after boot, then every 60s.

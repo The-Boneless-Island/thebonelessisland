@@ -853,6 +853,125 @@ type TideWeeklyPayload = {
   channelId?: string;
 };
 
+type OfficialAnnouncementPayload = {
+  threadId: number;
+  title: string;
+  bodyPreview: string;
+  authorName: string;
+  threadUrl: string;
+};
+
+type OfficialAnnouncementUpdatedPayload = OfficialAnnouncementPayload & {
+  messageId: string;
+  channelId: string;
+};
+
+type GamePatchPayload = {
+  appId: number;
+  gameName: string;
+  gid: string;
+  title: string;
+  url: string;
+  bodyPreview: string | null;
+  sourceLabel: string | null;
+  roleIds: string[];
+};
+
+function buildOfficialAnnouncementEmbed(payload: Pick<OfficialAnnouncementPayload, "title" | "bodyPreview" | "authorName" | "threadUrl">) {
+  return new EmbedBuilder()
+    .setColor(0xf59e0b)
+    .setTitle(payload.title)
+    .setURL(payload.threadUrl)
+    .setDescription(payload.bodyPreview.slice(0, 1000))
+    .setFooter({ text: payload.authorName });
+}
+
+async function processOfficialAnnouncement(payload: OfficialAnnouncementPayload): Promise<void> {
+  const enabled = await getCachedSetting("official_announcements_enabled");
+  if (enabled !== "true") return;
+  const channelId = await getCachedSetting("official_announcements_channel_id");
+  if (!channelId) return;
+
+  const pingEveryone = (await getCachedSetting("official_announcements_ping_everyone")) === "true";
+  const embed = buildOfficialAnnouncementEmbed(payload);
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isSendable()) return;
+
+    const message = await channel.send({
+      content: pingEveryone ? "@everyone" : undefined,
+      embeds: [embed],
+      allowedMentions: pingEveryone ? { parse: ["everyone"] } : { parse: [] },
+    });
+
+    await internalApi("POST", "/internal/bot/official-announcements/ack", {
+      threadId: payload.threadId,
+      messageId: message.id,
+      channelId: channel.id,
+    });
+  } catch (err) {
+    console.error(`[forum] official announcement post failed for thread ${payload.threadId}`, err);
+  }
+}
+
+async function processOfficialAnnouncementUpdated(payload: OfficialAnnouncementUpdatedPayload): Promise<void> {
+  const enabled = await getCachedSetting("official_announcements_enabled");
+  if (enabled !== "true") return;
+
+  const pingEveryone = (await getCachedSetting("official_announcements_ping_everyone")) === "true";
+  const embed = buildOfficialAnnouncementEmbed(payload);
+
+  try {
+    const channel = await client.channels.fetch(payload.channelId);
+    if (!channel?.isSendable()) return;
+
+    const message = await channel.messages.fetch(payload.messageId).catch(() => null);
+    if (!message) {
+      console.error(`[forum] official announcement message not found ${payload.channelId}/${payload.messageId}`);
+      return;
+    }
+
+    await message.edit({
+      content: pingEveryone ? "@everyone" : undefined,
+      embeds: [embed],
+      allowedMentions: pingEveryone ? { parse: ["everyone"] } : { parse: [] },
+    });
+  } catch (err) {
+    console.error(`[forum] official announcement edit failed for thread ${payload.threadId}`, err);
+  }
+}
+
+async function processGamePatch(payload: GamePatchPayload): Promise<void> {
+  const enabled = await getCachedSetting("patch_alerts_enabled");
+  if (enabled !== "true") return;
+  const channelId = await getCachedSetting("patch_notes_channel_id");
+  if (!channelId) return;
+
+  const roleIds = payload.roleIds ?? [];
+  const embed = new EmbedBuilder()
+    .setAuthor({ name: payload.gameName })
+    .setTitle(payload.title)
+    .setURL(payload.url)
+    .setDescription((payload.bodyPreview ?? "").slice(0, 1000));
+  if (payload.sourceLabel) {
+    embed.setFooter({ text: payload.sourceLabel });
+  }
+
+  try {
+    const channel = await client.channels.fetch(channelId);
+    if (!channel?.isSendable()) return;
+
+    await channel.send({
+      content: roleIds.length > 0 ? roleIds.map((id) => `<@&${id}>`).join(" ") : undefined,
+      embeds: [embed],
+      allowedMentions: roleIds.length > 0 ? { roles: roleIds } : { parse: [] },
+    });
+  } catch (err) {
+    console.error(`[patches] channel post failed for ${payload.appId}/${payload.gid}`, err);
+  }
+}
+
 async function processTideWeekly(payload: TideWeeklyPayload): Promise<void> {
   // The API already built the markdown summary; post it verbatim to the
   // milestone channel (reuse milestone_channel_id like achievement/milestone
@@ -1016,6 +1135,12 @@ async function processPendingAnnouncements(): Promise<void> {
           await processAchievementUnlocked(row.payload as AchievementUnlockedPayload);
         } else if (row.kind === "tide.weekly") {
           await processTideWeekly(row.payload as TideWeeklyPayload);
+        } else if (row.kind === "forum.official_announcement") {
+          await processOfficialAnnouncement(row.payload as OfficialAnnouncementPayload);
+        } else if (row.kind === "forum.official_announcement.updated") {
+          await processOfficialAnnouncementUpdated(row.payload as OfficialAnnouncementUpdatedPayload);
+        } else if (row.kind === "game.patch") {
+          await processGamePatch(row.payload as GamePatchPayload);
         }
       } catch (err) {
         console.error(`[announcements] handler failed for row ${row.id}`, err);

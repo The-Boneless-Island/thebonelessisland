@@ -1,5 +1,6 @@
 import Parser from "rss-parser";
 import { db } from "../db/client.js";
+import { enqueuePatchAlert } from "./patchAlerts.js";
 
 type SteamNewsItem = {
   gid?: string;
@@ -128,6 +129,9 @@ async function upsertNewsItems(appId: number, items: NormalizedItem[]): Promise<
 
     const tags = Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === "string") : [];
 
+    const prior = await db.query("SELECT 1 FROM game_news WHERE app_id = $1 AND gid = $2", [appId, gid]);
+    const isNew = prior.rows.length === 0;
+
     await db.query(
       `
         INSERT INTO game_news (
@@ -181,6 +185,28 @@ async function upsertNewsItems(appId: number, items: NormalizedItem[]): Promise<
         item.sourceLabel
       ]
     );
+
+    if (isNew) {
+      const isPatchSource =
+        item.sourceKind === "rss" || item.feedname === "steam_community_announcements";
+      if (isPatchSource) {
+        const game = await db.query<{ name: string }>(
+          "SELECT name FROM games WHERE app_id = $1",
+          [appId]
+        );
+        void enqueuePatchAlert({
+          appId,
+          gameName: game.rows[0]?.name ?? `App ${appId}`,
+          gid,
+          title,
+          url,
+          bodyPreview: item.contents ? String(item.contents).slice(0, 400) : null,
+          sourceLabel: item.sourceLabel ?? item.feedlabel ?? null,
+        }).catch((err) => {
+          console.error("[gameNews] patch alert enqueue failed:", err);
+        });
+      }
+    }
   }
 }
 
