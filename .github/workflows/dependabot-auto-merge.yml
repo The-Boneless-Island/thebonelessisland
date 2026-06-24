@@ -1,0 +1,37 @@
+# Auto-approve and auto-merge low-risk Dependabot PRs.
+#
+# Minor + patch updates (including the grouped minor-and-patch PR, docker digest/
+# minor bumps, and minor action bumps) are approved and set to auto-merge. GitHub
+# then merges them only once the required `lint-build-scan` check passes, so CI is
+# still the gate. Major bumps fall through untouched and wait for a human, since
+# they can break (this is how react-router 7 -> 8 was handled by hand).
+name: Dependabot auto-merge
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    # Only act on PRs opened by Dependabot.
+    if: github.actor == 'dependabot[bot]'
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Approve and enable auto-merge for minor/patch
+        if: >-
+          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
