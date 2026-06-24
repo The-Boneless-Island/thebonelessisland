@@ -11,12 +11,6 @@ For the *why* behind shipped decisions see [`DESIGN_NOTES.md`].
 
 ---
 
-## Recently built (pending commit/deploy)
-
-- **Onboarding redesign — "Washed Ashore"** *(built 2026-06-20, typecheck + web build clean; uncommitted)* — replaces the single Steam-link modal with an 8-step server-tracked product tour (`components/OnboardingFlow.tsx`). Backend: migration 065 `user_client_state` kv table; `GET /profile/me` returns `clientState` + `currentOnboardingVersion`; `PUT /profile/client-state`; `POST /profile/onboarding/complete`; admin `POST /admin/onboarding/reset-all` (parent-gated). Five existing localStorage flags migrated to server state (`forum_intro_seen`, `steam_share_ack`, `theme_pref`, `last_unlock_seen_at`, `activity_last_seen_at`; theme keeps localStorage cache for first paint). Admin "Re-show onboarding to all members" button on Members & Roles page. Migration 065 applies automatically on next app boot. See `ONBOARDING_REDESIGN_PLAN.md`.
-
----
-
 ## Game nights
 
 - **Host self-serve edit / cancel a night** *(partial)* — PATCH/DELETE exist but are
