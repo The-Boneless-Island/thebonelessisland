@@ -82,6 +82,17 @@ function mapActivityRow(row: ActivityRow) {
   };
 }
 
+// Crew-facing feed only — admin ops stay in /activity/admin/audit.
+const USER_ACTIVITY_EXCLUDE_SQL = `
+  ae.event_type NOT LIKE 'admin.%'
+  AND ae.event_type NOT LIKE 'game_night.admin_%'
+  AND ae.event_type NOT IN (
+    'nuggies.admin_adjustment',
+    'nuggies.attendance_awarded',
+    'nuggies.shop_item_changed'
+  )
+`;
+
 const ACTIVITY_SELECT = `
   SELECT
     ae.id::text AS id,
@@ -345,6 +356,7 @@ activityRouter.get("/", async (req, res) => {
 
   const result = await db.query<ActivityRow>(
     `${ACTIVITY_SELECT}
+     WHERE ${USER_ACTIVITY_EXCLUDE_SQL}
      ORDER BY ae.created_at DESC
      LIMIT $1::int`,
     [limit]

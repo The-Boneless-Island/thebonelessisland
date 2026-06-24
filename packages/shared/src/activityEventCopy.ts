@@ -27,7 +27,7 @@ export function activityEventLabel(eventType: string): string {
     case "milestone.reached":
       return "Reached a milestone rank";
     case "forum_thread_created":
-      return "Started a forum thread";
+      return "Posted in the forums";
     case "forum_reply_created":
       return "Replied in the forums";
     case "forum.reactions_milestone":

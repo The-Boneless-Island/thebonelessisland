@@ -1306,7 +1306,7 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         metaText: ago,
         body: (
           <>
-            {actorNode} started <Target>{title}</Target> in the forums.
+            {actorNode} posted <Target>{title}</Target> in the forums.
           </>
         )
       };

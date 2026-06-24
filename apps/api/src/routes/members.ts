@@ -474,7 +474,7 @@ function summarizeEvent(eventType: string, payload: Record<string, unknown>): st
   }
   if (eventType === "forum_thread_created") {
     const title = typeof payload.title === "string" ? payload.title : null;
-    return title ? `Started "${title}"` : "Started a forum thread";
+    return title ? `Posted "${title}"` : "Posted in the forums";
   }
   if (eventType === "forum_reply_created") {
     const title = typeof payload.threadTitle === "string" ? payload.threadTitle : null;

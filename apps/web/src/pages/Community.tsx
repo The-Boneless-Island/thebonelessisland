@@ -395,9 +395,9 @@ function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
     }
     case "forum_thread_created":
       return {
-        action: "started",
-        target: typeof payload.title === "string" ? payload.title : "a new thread",
-        detail: "New forum thread"
+        action: "posted",
+        target: typeof payload.title === "string" ? payload.title : "in the forums",
+        detail: "Forum post"
       };
     case "forum_reply_created":
       return {

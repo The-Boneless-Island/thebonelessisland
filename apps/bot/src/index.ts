@@ -368,7 +368,7 @@ function activityLine(e: ActivityEvent): string {
     }
     case "forum_thread_created": {
       const title = typeof payload.title === "string" ? payload.title : "a new thread";
-      return `💬 **${actor}** started **${title}** in the forums · ${ago}`;
+      return `💬 **${actor}** posted **${title}** in the forums · ${ago}`;
     }
     case "forum_reply_created": {
       const title = typeof payload.threadTitle === "string" ? payload.threadTitle : "a thread";
