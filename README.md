@@ -2,7 +2,7 @@
 
 ### a home base for the crew, just past the edge of the Discord
 
-The Boneless Island is a companion site for the community: somewhere to actually hang out beyond the chat. Catch the gaming news, earn Nuggies and climb the ranks, hit the forums, sort out game night, see who's around. A shared space that's a direct extension of the Discord, with more going on than a text channel can hold.
+The Boneless Island is a companion site for the community: somewhere to actually hang out beyond the chat. Catch the gaming news, earn Nuggies and climb the ranks, hit the forums, sort out game night, see who's around. A shared space that's a direct extension of the Discord, with more going on than a text channel can hold. It is, objectively, **PEAK.** 🗿
 
 🌐 **Live at [bonelessisland.com](https://bonelessisland.com)** · 🔐 Members-only (Discord-gated) · 🤖 Powered by **Nuggie**, the island's AI
 
@@ -18,9 +18,7 @@ It's a passion project for one specific community. Not a startup, not a product,
 
 ## The vibes
 
-A full island scene sits behind everything: sky, ocean, beach, palm trees swaying at a smooth framerate. Flip between Day and Night and the sun and moon arc across the sky on the way out and in.
-
-Holding it all together is **Nuggie**, a chicken-nugget AI who curates the news, helps pick games, and has more personality than some of the actual members.
+Running the place is **Nuggie**, a chicken-nugget AI who curates the news, helps pick games, hypes up rank-ups, and has more personality than some of the actual members. The island is built to feel lived-in: the news updates, ranks move, the activity feed ticks over, and there's pretty much always something new to poke at when you log in.
 
 ## Getting in: Discord first, Steam optional
 
@@ -37,7 +35,7 @@ Holding it all together is **Nuggie**, a chicken-nugget AI who curates the news,
 The landing pad. A live online-count hero, an **AI-curated Gaming News** feed (real outlets, summarized and ranked for *your* crew, in-app reader, spoiler gating), a **Friends Online** widget on live Discord presence, a Discord-style **Activity Feed** of who's been up to what, and the **Drift Log**, a set of hand-curated island news cards.
 
 ### 🎮 Games: what's everyone playing
-The **AI Session Composer** clocks who's around, what the crew owns, and recent playtime, then hands over a pick with a reason, a vibe (Tonight / Weekend / Quick / Cozy / Spicy), a roster, and a "send the invite" button. Plus scheduled **game nights with RSVP**, a pooled **group wishlist** with hype bars, a **library snapshot** across everyone's Steam, a live **Patches & Updates** rolodex, and **Crew Chat**, an assistant that actually knows who's in voice and what everyone plays.
+The **AI Session Composer** clocks who's around, what the crew owns, and recent playtime, then hands over a pick with a reason, a vibe (Tonight / Weekend / Quick / Cozy / Spicy), a roster, and a "send the invite" button. Plus scheduled **game nights with RSVP**, a pooled **group wishlist** with hype bars, a **library snapshot** across everyone's Steam, a live **Patches & Updates** rolodex, and **Crew Chat**, an assistant that actually knows who's in voice and what everyone plays. No more decision paralysis. Mostly.
 
 ### 👥 Community: the social layer
 Crew roster, recent clips, an activity timeline, forums, clubs, upcoming events, and weekly leaderboards. The island as a group, not just a list of names.
@@ -64,7 +62,7 @@ AI runs through the whole island and it's **provider-agnostic**: swap between An
 
 ---
 
-## The roadmap
+## The roadmap (copium edition)
 
 Live and growing. Some of this is half-built, some is still on the wishlist:
 
@@ -90,7 +88,7 @@ A small TypeScript monorepo with more engineering than a community hangout stric
 | `apps/bot` | A thin Discord bot exposing `/whatcanweplay`. |
 | `packages/shared` | Shared TypeScript types across apps. |
 
-**Spec sheet (for the curious):** Node 26, a single AWS Graviton box behind Cloudflare, GitHub Actions CI/CD, a branch-protected `main`, a Content-Security-Policy with a live `report-uri`, and Trivy scanning the images. A community hangout with a real deploy pipeline.
+**Spec sheet (for the real ones):** Node 26, a single AWS Graviton box behind Cloudflare, GitHub Actions CI/CD, a branch-protected `main` that will reject your spaghetti, a Content-Security-Policy with a live `report-uri`, and Trivy scanning the images. A community hangout with a real deploy pipeline. It knows how that sounds.
 
 Reference docs live next to this README: [`DEPLOY.md`](DEPLOY.md) (ops), [`STYLE_GUIDE.md`](STYLE_GUIDE.md) and [`DESIGN_NOTES.md`](DESIGN_NOTES.md) (design), [`GLOSSARY.md`](GLOSSARY.md) (terms), [`BACKLOG.md`](BACKLOG.md) (the living to-do list).
 
@@ -109,16 +107,19 @@ Web app on `http://localhost:5173`, API health on `http://localhost:3000/health`
 ## FAQ
 
 **Can I sign up?**
-Nope. It's gated to the Boneless Island Discord. The palm trees are free to look at, though.
+No. It's gated to one (1) Discord server, and you are, statistically, not in it. The palm trees are free to look at though.
 
-**Is this for sale?**
-No. It's a passion project, not a product.
+**Is this for sale? Is it a startup?**
+No, and please stop. It's a passion project. There is no growth team. There is Nuggie.
 
 **Why does a community need AI?**
-It doesn't. Nuggie insisted.
+Why does anyone need anything. Nuggie said what's up.
 
-**Is it actually good?**
-Yeah, it kind of is.
+**Is it good?**
+It's actual cinema.
+
+**A full web app, a CSP, CI/CD, an economy... for a Discord hangout?**
+Yes. No further questions.
 
 ---
 
