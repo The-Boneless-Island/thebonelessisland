@@ -410,6 +410,7 @@ export type ForumCategory = {
   accentColor: string;
   position: number;
   isLocked: boolean;
+  autoDiscordBridge?: boolean;
   threadCount: number;
   lastActivity: {
     threadId: number;

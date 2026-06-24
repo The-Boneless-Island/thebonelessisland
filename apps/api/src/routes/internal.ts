@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { Router } from "express";
 import { db } from "../db/client.js";
 import { requireBotSecret } from "../lib/auth.js";
@@ -62,6 +63,39 @@ internalRouter.post(
     } catch (err) {
       console.error("[internal] POST /bot/announcements/:id/processed error:", err);
       res.status(500).json({ error: "Failed to mark processed" });
+    }
+  }
+);
+
+/**
+ * POST /internal/bot/official-announcements/ack
+ * Bot-only. Persists the Discord message id after posting an official announcement
+ * so OP edits can update the embed in place.
+ */
+internalRouter.post(
+  "/bot/official-announcements/ack",
+  requireBotSecret,
+  async (req, res) => {
+    try {
+      const body = z
+        .object({
+          threadId: z.number().int().positive(),
+          messageId: z.string().min(1),
+          channelId: z.string().min(1),
+        })
+        .parse(req.body);
+
+      await db.query(
+        `UPDATE forum_threads
+         SET discord_announcement_message_id = $1,
+             discord_announcement_channel_id = $2
+         WHERE id = $3`,
+        [body.messageId, body.channelId, body.threadId]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[internal] POST /bot/official-announcements/ack error:", err);
+      res.status(500).json({ error: "Failed to ack official announcement" });
     }
   }
 );

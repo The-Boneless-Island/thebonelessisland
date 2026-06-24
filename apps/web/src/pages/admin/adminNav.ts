@@ -229,11 +229,13 @@ export const ADMIN_PAGES: Record<AdminPageId, AdminPageMeta> = {
     label: "Discord Bridge",
     icon: "🌉",
     accent: DISCORD,
-    blurb: "Milestone announcements and tier role bindings.",
-    keywords: ["bridge", "discord", "milestone", "announcements", "channel", "tier", "roles", "rank"],
+    blurb: "Milestone announcements, official forum posts, patch alerts, and tier role bindings.",
+    keywords: ["bridge", "discord", "milestone", "announcements", "official", "patch", "channel", "tier", "roles", "rank"],
     sections: [
-      { anchor: "bridge-channel", label: "Announcement channel", keywords: ["channel", "id", "post"] },
-      { anchor: "bridge-roles", label: "Tier roles", keywords: ["roles", "tier", "rank", "assign"] }
+      { anchor: "bridge-channel", label: "Milestone channel", keywords: ["milestone", "channel", "id", "post", "tier"] },
+      { anchor: "bridge-roles", label: "Tier roles", keywords: ["roles", "tier", "rank", "assign"] },
+      { anchor: "bridge-official", label: "Official announcements", keywords: ["official", "announcements", "forum", "everyone", "ping"] },
+      { anchor: "bridge-patches", label: "Patch alerts", keywords: ["patch", "alerts", "notes", "game", "updates"] }
     ]
   },
   sync: {
@@ -281,7 +283,12 @@ const SETTING_PAGE_OVERRIDES: Record<string, { page: AdminPageId; anchor: string
   gemini_api_key: { page: "ai", anchor: "ai-keys" },
   news_general_enabled: { page: "news", anchor: "news-status" },
   newsapi_key: { page: "news", anchor: "news-keys" },
-  news_dev_cap: { page: "news", anchor: "news-dev-cap" }
+  news_dev_cap: { page: "news", anchor: "news-dev-cap" },
+  official_announcements_enabled: { page: "bridge", anchor: "bridge-official" },
+  official_announcements_channel_id: { page: "bridge", anchor: "bridge-official" },
+  official_announcements_ping_everyone: { page: "bridge", anchor: "bridge-official" },
+  patch_alerts_enabled: { page: "bridge", anchor: "bridge-patches" },
+  patch_notes_channel_id: { page: "bridge", anchor: "bridge-patches" }
 };
 
 const DOMAIN_DEFAULT_PAGE: Record<SettingMeta["domain"], AdminPageId> = {

@@ -40,7 +40,7 @@ export async function announceNewThread(input: AnnounceInput): Promise<void> {
   if (!webhook || !/^https:\/\/(discord\.com|discordapp\.com)\/api\/webhooks\//i.test(webhook)) return;
 
   const origin = webOrigin().replace(/\/+$/, "");
-  const threadUrl = origin ? `${origin}/#/forums/thread/${input.threadId}` : undefined;
+  const threadUrl = origin ? `${origin}/forums/thread/${input.threadId}` : undefined;
   const label = TYPE_LABEL[input.threadType] ?? "post";
   const color = TYPE_COLOR[input.threadType] ?? 0x38bdf8;
 

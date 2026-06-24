@@ -408,6 +408,65 @@ const RAW: SettingMeta[] = [
     dangerLevel: "low",
     domain: "system",
     type: "boolean"
+  },
+
+  // ── People · Discord bridge (official + patches) ─────────────────────────
+  {
+    key: "official_announcements_enabled",
+    label: "Official announcements",
+    description: "When ON, new threads in the Announcements forum category (and other auto-bridge categories) are pushed to the configured Discord channel.",
+    whenToChange: "After setting the official announcements channel ID and confirming the bot can post there.",
+    ifWrong: "Forum posts in bridged categories won't reach Discord until re-enabled and a channel is set.",
+    tags: ["discord", "bridge", "official", "announcements", "forum", "toggle"],
+    dangerLevel: "low",
+    domain: "people",
+    type: "boolean"
+  },
+  {
+    key: "official_announcements_channel_id",
+    label: "Official announcements channel ID",
+    description: "Discord channel ID where official forum announcement embeds are posted.",
+    whenToChange: "When you want official island news to land in a different Discord channel.",
+    example: "1234567890123456789",
+    ifWrong: "Official forum posts won't appear in Discord even when the toggle is ON.",
+    tags: ["discord", "bridge", "official", "announcements", "channel", "id"],
+    dangerLevel: "low",
+    domain: "people",
+    type: "string"
+  },
+  {
+    key: "official_announcements_ping_everyone",
+    label: "Official announcements @everyone ping",
+    description: "When ON, each official announcement includes an @everyone mention. Default OFF — members rely on Discord channel notification settings.",
+    whenToChange: "Only for rare must-see broadcasts; leave OFF for routine crew updates.",
+    ifWrong: "Crew may get ping fatigue if left ON for frequent posts.",
+    tags: ["discord", "bridge", "official", "everyone", "ping", "mention"],
+    dangerLevel: "medium",
+    domain: "people",
+    type: "boolean"
+  },
+  {
+    key: "patch_alerts_enabled",
+    label: "Patch alerts",
+    description: "When ON, new patch notes for crew-library games are posted to the patch-notes Discord channel.",
+    whenToChange: "After setting the patch notes channel ID and confirming the bot can post there.",
+    ifWrong: "Game patch notes won't reach Discord until re-enabled and a channel is set.",
+    tags: ["discord", "bridge", "patch", "alerts", "updates", "toggle"],
+    dangerLevel: "low",
+    domain: "people",
+    type: "boolean"
+  },
+  {
+    key: "patch_notes_channel_id",
+    label: "Patch alerts channel ID",
+    description: "Discord channel ID for crew-library game patch note embeds.",
+    whenToChange: "When you want patch alerts in a different Discord channel.",
+    example: "1234567890123456789",
+    ifWrong: "Patch notes won't appear in Discord even when patch alerts are enabled.",
+    tags: ["discord", "bridge", "patch", "alerts", "channel", "id"],
+    dangerLevel: "low",
+    domain: "people",
+    type: "string"
   }
 ];
 

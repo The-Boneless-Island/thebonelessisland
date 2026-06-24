@@ -1,6 +1,7 @@
 // Discord pages: Guild Identity and Discord Bridge.
 
 import { useEffect, useRef, useState } from "react";
+import { apiFetch } from "../../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import { RANK_TIERS } from "../../data/rankTiers.js";
@@ -69,7 +70,7 @@ export function GuildAdminPage({
 // outbox rows processed without posting or role-grant).
 
 // Accent comes from the nav registry — one source for sidebar, search, and page chrome.
-const ACCENT = ADMIN_PAGES["guild"].accent;
+const ACCENT = ADMIN_PAGES["bridge"].accent;
 
 export function BridgeAdminPage({
   settings,
@@ -82,6 +83,11 @@ export function BridgeAdminPage({
 
   const [enabled, setEnabled] = useState(() => getSetting("milestone_announcements_enabled") === "true");
   const [channelDraft, setChannelDraft] = useState(() => getSetting("milestone_channel_id"));
+  const [officialEnabled, setOfficialEnabled] = useState(() => getSetting("official_announcements_enabled") === "true");
+  const [officialChannelDraft, setOfficialChannelDraft] = useState(() => getSetting("official_announcements_channel_id"));
+  const [officialPingEveryone, setOfficialPingEveryone] = useState(() => getSetting("official_announcements_ping_everyone") === "true");
+  const [patchEnabled, setPatchEnabled] = useState(() => getSetting("patch_alerts_enabled") === "true");
+  const [patchChannelDraft, setPatchChannelDraft] = useState(() => getSetting("patch_notes_channel_id"));
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>(() => {
     const drafts: Record<string, string> = {};
     for (let i = 1; i <= 8; i++) {
@@ -97,6 +103,11 @@ export function BridgeAdminPage({
     if (settings && !initializedRef.current) {
       setEnabled(getSetting("milestone_announcements_enabled") === "true");
       setChannelDraft(getSetting("milestone_channel_id"));
+      setOfficialEnabled(getSetting("official_announcements_enabled") === "true");
+      setOfficialChannelDraft(getSetting("official_announcements_channel_id"));
+      setOfficialPingEveryone(getSetting("official_announcements_ping_everyone") === "true");
+      setPatchEnabled(getSetting("patch_alerts_enabled") === "true");
+      setPatchChannelDraft(getSetting("patch_notes_channel_id"));
       const drafts: Record<string, string> = {};
       for (let i = 1; i <= 8; i++) {
         const key = `milestone_role_rank_${String(i).padStart(2, "0")}`;
@@ -124,6 +135,10 @@ export function BridgeAdminPage({
 
   const channelDirty = channelDraft.trim() !== getSetting("milestone_channel_id");
   const configured = enabled && getSetting("milestone_channel_id").trim().length > 0;
+  const officialChannelDirty = officialChannelDraft.trim() !== getSetting("official_announcements_channel_id");
+  const officialConfigured = officialEnabled && getSetting("official_announcements_channel_id").trim().length > 0;
+  const patchChannelDirty = patchChannelDraft.trim() !== getSetting("patch_notes_channel_id");
+  const patchConfigured = patchEnabled && getSetting("patch_notes_channel_id").trim().length > 0;
 
   return (
     <AdminTabs
@@ -131,7 +146,7 @@ export function BridgeAdminPage({
       tabs={[
         {
           anchor: "bridge-channel",
-          label: "Channel",
+          label: "Milestones",
           content: (
             <>
               <AdminStatusBanner
@@ -283,7 +298,298 @@ export function BridgeAdminPage({
             </IslandCard>
           ),
         },
+        {
+          anchor: "bridge-official",
+          label: "Official Announcements",
+          content: (
+            <>
+              <AdminStatusBanner
+                accent={ACCENT}
+                icon="📣"
+                kicker="Official Announcements"
+                title={officialConfigured ? "Forum → Discord bridge live" : "Official announcements OFF"}
+                subtitle={
+                  officialEnabled
+                    ? getSetting("official_announcements_channel_id")
+                      ? `Posting to channel ${getSetting("official_announcements_channel_id")}`
+                      : "Toggle ON but no channel set — bot will skip posts"
+                    : "Forum posts in bridged categories won't push to Discord"
+                }
+                control={
+                  <BannerToggle
+                    on={officialEnabled}
+                    onToggle={() => {
+                      const next = !officialEnabled;
+                      setOfficialEnabled(next);
+                      save("official_announcements_enabled", next ? "true" : "false");
+                    }}
+                  />
+                }
+              />
+
+              <IslandCard style={{ padding: "16px 18px" }}>
+                <SubsectionTitle>Announcement Channel</SubsectionTitle>
+                <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                  Discord channel ID where official forum posts from the Announcements category land.
+                  Enable Developer Mode in Discord (User Settings → Advanced), then right-click the channel and choose <strong>Copy ID</strong>.
+                </p>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={officialChannelDraft}
+                    onChange={(e) => setOfficialChannelDraft(e.target.value)}
+                    placeholder="1234567890123456789"
+                    className="island-mono"
+                    style={{
+                      ...islandInputStyle,
+                      flex: "1 1 240px",
+                      maxWidth: 360,
+                      fontSize: 13,
+                    }}
+                  />
+                  <IslandButton
+                    variant="secondary"
+                    onClick={() => save("official_announcements_channel_id", officialChannelDraft.trim())}
+                    disabled={!officialChannelDirty || saved["official_announcements_channel_id"]}
+                  >
+                    {saved["official_announcements_channel_id"] ? "Saved" : "Save Channel"}
+                  </IslandButton>
+                </div>
+              </IslandCard>
+
+              <IslandCard style={{ padding: "16px 18px" }}>
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 10, cursor: "pointer", fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={officialPingEveryone}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setOfficialPingEveryone(next);
+                      save("official_announcements_ping_everyone", next ? "true" : "false");
+                    }}
+                  />
+                  <span>
+                    <strong>Optional @everyone ping</strong>
+                    <span style={{ display: "block", marginTop: 2, fontSize: 12, color: islandTheme.color.textSubtle, fontWeight: 400 }}>
+                      Off by default — crew can rely on channel notification settings instead.
+                    </span>
+                  </span>
+                </label>
+              </IslandCard>
+            </>
+          ),
+        },
+        {
+          anchor: "bridge-patches",
+          label: "Patch Alerts",
+          content: (
+            <>
+              <AdminStatusBanner
+                accent={ACCENT}
+                icon="🔗"
+                kicker="Patch Alerts"
+                title={patchConfigured ? "Patch alerts live" : "Patch alerts OFF"}
+                subtitle={
+                  patchEnabled
+                    ? getSetting("patch_notes_channel_id")
+                      ? `Posting to channel ${getSetting("patch_notes_channel_id")}`
+                      : "Toggle ON but no channel set — bot will skip posts"
+                    : "Crew-library patch notes won't push to Discord"
+                }
+                control={
+                  <BannerToggle
+                    on={patchEnabled}
+                    onToggle={() => {
+                      const next = !patchEnabled;
+                      setPatchEnabled(next);
+                      save("patch_alerts_enabled", next ? "true" : "false");
+                    }}
+                  />
+                }
+              />
+
+              <IslandCard style={{ padding: "16px 18px" }}>
+                <SubsectionTitle>Patch Notes Channel</SubsectionTitle>
+                <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                  Discord channel ID where new patch notes for crew-library games are posted.
+                  Enable Developer Mode in Discord (User Settings → Advanced), then right-click the channel and choose <strong>Copy ID</strong>.
+                </p>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={patchChannelDraft}
+                    onChange={(e) => setPatchChannelDraft(e.target.value)}
+                    placeholder="1234567890123456789"
+                    className="island-mono"
+                    style={{
+                      ...islandInputStyle,
+                      flex: "1 1 240px",
+                      maxWidth: 360,
+                      fontSize: 13,
+                    }}
+                  />
+                  <IslandButton
+                    variant="secondary"
+                    onClick={() => save("patch_notes_channel_id", patchChannelDraft.trim())}
+                    disabled={!patchChannelDirty || saved["patch_notes_channel_id"]}
+                  >
+                    {saved["patch_notes_channel_id"] ? "Saved" : "Save Channel"}
+                  </IslandButton>
+                </div>
+              </IslandCard>
+
+              <PatchAlertRolesPanel />
+            </>
+          ),
+        },
       ]}
     />
+  );
+}
+
+type PatchAlertRoleRow = {
+  appId: number;
+  discordRoleId: string;
+  gameName: string;
+};
+
+function PatchAlertRolesPanel() {
+  const [rows, setRows] = useState<PatchAlertRoleRow[] | null>(null);
+  const [appIdDraft, setAppIdDraft] = useState("");
+  const [roleDraft, setRoleDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () =>
+    apiFetch("/patch-alerts/roles")
+      .then((r) => r.json())
+      .then((d) => setRows(Array.isArray(d?.roles) ? d.roles : []))
+      .catch(() => setRows([]));
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function addMapping() {
+    const appId = parseInt(appIdDraft.trim(), 10);
+    const discordRoleId = roleDraft.trim();
+    if (!Number.isFinite(appId) || !discordRoleId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await apiFetch(`/patch-alerts/roles/${appId}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ discordRoleId }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(d?.error ?? "Save failed");
+      }
+      setAppIdDraft("");
+      setRoleDraft("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeMapping(appId: number) {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiFetch(`/patch-alerts/roles/${appId}`, { method: "DELETE" });
+      await load();
+    } catch {
+      setError("Remove failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <IslandCard style={{ padding: "16px 18px" }}>
+      <SubsectionTitle>Game Role Pings (optional)</SubsectionTitle>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+        Map a Steam <code>app_id</code> to a Discord role ID. When that game patches, Nuggie pings the role.
+        Members opt in by picking the role in Discord.
+      </p>
+      <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={appIdDraft}
+            onChange={(e) => setAppIdDraft(e.target.value)}
+            placeholder="Steam app_id"
+            className="island-mono"
+            style={{ ...islandInputStyle, flex: "1 1 120px", maxWidth: 160, fontSize: 13 }}
+          />
+          <input
+            type="text"
+            inputMode="numeric"
+            value={roleDraft}
+            onChange={(e) => setRoleDraft(e.target.value)}
+            placeholder="Discord role ID"
+            className="island-mono"
+            style={{ ...islandInputStyle, flex: "2 1 200px", maxWidth: 280, fontSize: 13 }}
+          />
+          <IslandButton variant="secondary" onClick={() => void addMapping()} disabled={busy}>
+            Add mapping
+          </IslandButton>
+        </div>
+        {error ? <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.dangerText }}>{error}</p> : null}
+      </div>
+      {rows === null ? (
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>Loading mappings…</p>
+      ) : rows.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>No role mappings yet.</p>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {rows.map((row) => (
+            <div
+              key={row.appId}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{row.gameName}</div>
+                <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+                  app {row.appId} → role {row.discordRoleId}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void removeMapping(row.appId)}
+                disabled={busy}
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${islandTheme.color.danger}`,
+                  color: islandTheme.color.dangerText,
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  font: "inherit",
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </IslandCard>
   );
 }

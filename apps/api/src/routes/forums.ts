@@ -10,6 +10,10 @@ import { recordEvent } from "../lib/activityEvents.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
 import { getOrFetchLinkPreview } from "../lib/forumLinkPreview.js";
 import { announceNewThread } from "../lib/forumAnnounce.js";
+import {
+  enqueueOfficialAnnouncementCreate,
+  enqueueOfficialAnnouncementUpdate,
+} from "../lib/officialAnnounce.js";
 import { processForumImage } from "../lib/forumUploads.js";
 
 const THREAD_TYPES = ["discussion", "memory", "recommendation", "resource"] as const;
@@ -286,11 +290,13 @@ forumsRouter.get("/categories", requireSession, async (_req, res) => {
   const r = await db.query<{
     id: string; slug: string; name: string; description: string;
     icon: string; accent_color: string; position: number; is_locked: boolean;
+    auto_discord_bridge: boolean;
     thread_count: string; last_thread_id: string | null; last_thread_title: string | null;
     last_thread_slug: string | null; last_activity_at: string | null;
     last_user_display: string | null; last_user_avatar: string | null;
   }>(
     `SELECT c.id, c.slug, c.name, c.description, c.icon, c.accent_color, c.position, c.is_locked,
+       c.auto_discord_bridge,
        (SELECT COUNT(*)::text FROM forum_threads WHERE category_id = c.id AND is_deleted = FALSE) AS thread_count,
        lt.id AS last_thread_id,
        lt.title AS last_thread_title,
@@ -322,6 +328,7 @@ forumsRouter.get("/categories", requireSession, async (_req, res) => {
       accentColor: row.accent_color,
       position: row.position,
       isLocked: row.is_locked,
+      autoDiscordBridge: row.auto_discord_bridge,
       threadCount: parseInt(row.thread_count, 10),
       lastActivity: row.last_thread_id
         ? {
@@ -476,8 +483,8 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
   if (await isBanned(userId)) { res.status(403).json({ error: "Banned from forums" }); return; }
 
-  const cat = await db.query<{ id: string; name: string; is_locked: boolean }>(
-    "SELECT id, name, is_locked FROM forum_categories WHERE slug = $1",
+  const cat = await db.query<{ id: string; name: string; is_locked: boolean; auto_discord_bridge: boolean }>(
+    "SELECT id, name, is_locked, auto_discord_bridge FROM forum_categories WHERE slug = $1",
     [String(req.params.slug)]
   );
   if (!cat.rows[0]) { res.status(404).json({ error: "Category not found" }); return; }
@@ -486,6 +493,11 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
   }
   const categoryId = parseInt(cat.rows[0].id, 10);
   const categoryName = cat.rows[0].name;
+  const autoDiscordBridge = cat.rows[0].auto_discord_bridge;
+
+  if (autoDiscordBridge && parsed.data.poll) {
+    res.status(400).json({ error: "Polls are not allowed in official announcements" }); return;
+  }
 
   const last = await db.query<{ created_at: string }>(
     `SELECT created_at FROM forum_threads
@@ -514,9 +526,22 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
   try {
     await client.query("BEGIN");
     const t = await client.query<{ id: string }>(
-      `INSERT INTO forum_threads (category_id, author_user_id, title, slug, last_reply_at, last_reply_user_id, app_id, thread_type, link_url)
-       VALUES ($1, $2, $3, $4, NOW(), $2, $5, $6, $7) RETURNING id`,
-      [categoryId, userId, title, slug, appId, threadType, linkUrl]
+      `INSERT INTO forum_threads (
+         category_id, author_user_id, title, slug, last_reply_at, last_reply_user_id,
+         app_id, thread_type, link_url, is_locked, is_pinned
+       )
+       VALUES ($1, $2, $3, $4, NOW(), $2, $5, $6, $7, $8, $9) RETURNING id`,
+      [
+        categoryId,
+        userId,
+        title,
+        slug,
+        appId,
+        autoDiscordBridge ? "discussion" : threadType,
+        autoDiscordBridge ? null : linkUrl,
+        autoDiscordBridge,
+        autoDiscordBridge,
+      ]
     );
     const threadId = parseInt(t.rows[0].id, 10);
     const op = await client.query<{ id: string }>(
@@ -562,7 +587,7 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
 
     // Announce to Discord as Nuggie — only if the author opted in for this post
     // (and a webhook is configured). Fire-and-forget; never blocks the response.
-    if (parsed.data.announce) {
+    if (parsed.data.announce && !autoDiscordBridge) {
       void (async () => {
         const a = await db.query<{ display_name: string }>(
           "SELECT COALESCE(dp.global_name, dp.username) AS display_name FROM discord_profiles dp WHERE dp.user_id = $1",
@@ -580,7 +605,22 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
       })();
     }
 
-    const reward = getSetting("forums_thread_nuggies", 5);
+    if (autoDiscordBridge) {
+      void (async () => {
+        const a = await db.query<{ display_name: string }>(
+          "SELECT COALESCE(dp.global_name, dp.username) AS display_name FROM discord_profiles dp WHERE dp.user_id = $1",
+          [userId]
+        ).catch(() => null);
+        await enqueueOfficialAnnouncementCreate({
+          threadId,
+          title,
+          bodyPreview: body,
+          authorName: a?.rows[0]?.display_name ?? "Island crew",
+        });
+      })();
+    }
+
+    const reward = autoDiscordBridge ? 0 : getSetting("forums_thread_nuggies", 5);
     if (reward > 0) {
       void applyTransaction({
         discordUserId,
@@ -838,8 +878,13 @@ forumsRouter.patch("/posts/:id", requireSession, async (req, res) => {
   const userId = await resolveInternalId(discordUserId);
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const p = await db.query<{ author_user_id: string; is_deleted: boolean }>(
-    "SELECT author_user_id, is_deleted FROM forum_posts WHERE id = $1",
+  const p = await db.query<{
+    author_user_id: string;
+    is_deleted: boolean;
+    is_op: boolean;
+    thread_id: string;
+  }>(
+    "SELECT author_user_id, is_deleted, is_op, thread_id FROM forum_posts WHERE id = $1",
     [postId]
   );
   if (!p.rows[0] || p.rows[0].is_deleted) { res.status(404).json({ error: "Post not found" }); return; }
@@ -866,6 +911,47 @@ forumsRouter.patch("/posts/:id", requireSession, async (req, res) => {
        VALUES ($1, 'edit_post', $2, $3)`,
       [userId, postId, "Edited by moderator"]
     );
+  }
+
+  if (p.rows[0].is_op) {
+    void (async () => {
+      const threadId = parseInt(p.rows[0].thread_id, 10);
+      const row = await db.query<{
+        title: string;
+        discord_announcement_message_id: string | null;
+        discord_announcement_channel_id: string | null;
+        auto_discord_bridge: boolean;
+      }>(
+        `SELECT t.title,
+                t.discord_announcement_message_id,
+                t.discord_announcement_channel_id,
+                c.auto_discord_bridge
+         FROM forum_threads t
+         INNER JOIN forum_categories c ON c.id = t.category_id
+         WHERE t.id = $1 AND t.is_deleted = FALSE`,
+        [threadId]
+      ).catch(() => null);
+      const thread = row?.rows[0];
+      if (
+        !thread?.auto_discord_bridge ||
+        !thread.discord_announcement_message_id ||
+        !thread.discord_announcement_channel_id
+      ) {
+        return;
+      }
+      const a = await db.query<{ display_name: string }>(
+        "SELECT COALESCE(dp.global_name, dp.username) AS display_name FROM discord_profiles dp WHERE dp.user_id = $1",
+        [userId]
+      ).catch(() => null);
+      await enqueueOfficialAnnouncementUpdate({
+        threadId,
+        title: thread.title,
+        bodyPreview: body,
+        authorName: a?.rows[0]?.display_name ?? "Island crew",
+        messageId: thread.discord_announcement_message_id,
+        channelId: thread.discord_announcement_channel_id,
+      });
+    })();
   }
 
   res.json({ ok: true });
@@ -1759,17 +1845,18 @@ const adminCategorySchema = z.object({
   accentColor: z.string().regex(/^#[0-9a-fA-F]{3,8}$/).optional(),
   position: z.number().int().min(0).optional(),
   isLocked: z.boolean().optional(),
+  autoDiscordBridge: z.boolean().optional(),
 });
 
 forumsRouter.post("/admin/categories", requireSession, requireParentRole, async (req, res) => {
   const parsed = adminCategorySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
-  const { slug, name, description = "", icon = "💬", accentColor = "#3b82f6", position = 999, isLocked = false } = parsed.data;
+  const { slug, name, description = "", icon = "💬", accentColor = "#3b82f6", position = 999, isLocked = false, autoDiscordBridge = false } = parsed.data;
   await db.query(
-    `INSERT INTO forum_categories (slug, name, description, icon, accent_color, position, is_locked)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-    [slug, name, description, icon, accentColor, position, isLocked]
+    `INSERT INTO forum_categories (slug, name, description, icon, accent_color, position, is_locked, auto_discord_bridge)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [slug, name, description, icon, accentColor, position, isLocked, autoDiscordBridge]
   );
   res.json({ ok: true });
 });
@@ -1790,6 +1877,7 @@ forumsRouter.patch("/admin/categories/:id", requireSession, requireParentRole, a
   if (parsed.data.accentColor !== undefined) { fields.push(`accent_color = $${i++}`); values.push(parsed.data.accentColor); }
   if (parsed.data.position !== undefined) { fields.push(`position = $${i++}`); values.push(parsed.data.position); }
   if (parsed.data.isLocked !== undefined) { fields.push(`is_locked = $${i++}`); values.push(parsed.data.isLocked); }
+  if (parsed.data.autoDiscordBridge !== undefined) { fields.push(`auto_discord_bridge = $${i++}`); values.push(parsed.data.autoDiscordBridge); }
   if (fields.length === 0) { res.json({ ok: true }); return; }
   values.push(id);
   await db.query(`UPDATE forum_categories SET ${fields.join(", ")} WHERE id = $${i}`, values);

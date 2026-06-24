@@ -126,6 +126,7 @@ export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
       {view.mode === "category" ? (
         <CategoryView
           slug={view.slug}
+          isAdmin={isAdmin}
           onBack={() => navigate({ mode: "home" })}
           onSelectThread={(threadId) => navigate({ mode: "thread", threadId })}
           onCompose={() => navigate({ mode: "compose", categorySlug: view.slug })}
@@ -147,6 +148,7 @@ export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
           categorySlug={view.categorySlug}
           initialType={view.type}
           crewGames={crewGames}
+          isAdmin={isAdmin}
           onCancel={() => navigate({ mode: "category", slug: view.categorySlug })}
           onCreated={(threadId) => navigate({ mode: "thread", threadId })}
         />
@@ -1300,11 +1302,13 @@ function RelatedThreadsCard({ related, onSelect }: { related: ForumRelatedThread
 
 function CategoryView({
   slug,
+  isAdmin,
   onBack,
   onSelectThread,
   onCompose
 }: {
   slug: string;
+  isAdmin: boolean;
   onBack: () => void;
   onSelectThread: (id: number) => void;
   onCompose: () => void;
@@ -1374,8 +1378,18 @@ function CategoryView({
             <p style={{ margin: "4px 0 0", fontSize: 13, color: islandTheme.color.textSubtle }}>
               {category.description}
             </p>
+            {category.isLocked && isAdmin ? (
+              <p style={{ margin: "6px 0 0", fontSize: 12, color: islandTheme.color.textMuted, fontStyle: "italic" }}>
+                Admin only — this category is locked for regular members.
+              </p>
+            ) : null}
           </div>
-          <IslandButton variant="primary" onClick={onCompose} disabled={category.isLocked} style={{ flexShrink: 0 }}>
+          <IslandButton
+            variant="primary"
+            onClick={onCompose}
+            disabled={category.isLocked && !isAdmin}
+            style={{ flexShrink: 0 }}
+          >
             + New Thread
           </IslandButton>
         </div>
@@ -2704,12 +2718,14 @@ function ComposeView({
   categorySlug,
   initialType,
   crewGames,
+  isAdmin,
   onCancel,
   onCreated
 }: {
   categorySlug: string;
   initialType?: ForumThreadType;
   crewGames: CrewOwnedGame[];
+  isAdmin: boolean;
   onCancel: () => void;
   onCreated: (threadId: number) => void;
 }) {
@@ -2757,14 +2773,24 @@ function ComposeView({
         setCategories(cats);
         setAnnounceAvailable(Boolean(d?.announceAvailable));
         const last = localStorage.getItem("bi:forum-last-category");
-        const valid = (slug: string) => cats.some((c) => c.slug === slug && !c.isLocked);
+        const valid = (slug: string) => cats.some((c) => c.slug === slug && (!c.isLocked || isAdmin));
         if (valid(categorySlug)) setCategory(categorySlug);
         else if (last && valid(last)) setCategory(last);
-        else { const first = cats.find((c) => !c.isLocked); if (first) setCategory(first.slug); }
+        else { const first = cats.find((c) => !c.isLocked || isAdmin); if (first) setCategory(first.slug); }
       })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [categorySlug]);
+  }, [categorySlug, isAdmin]);
+
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.slug === category),
+    [categories, category]
+  );
+  const autoDiscord = category === "announcements" || Boolean(selectedCategory?.autoDiscordBridge);
+
+  useEffect(() => {
+    if (autoDiscord && type !== "discussion") setType("discussion");
+  }, [autoDiscord, type]);
 
   const gameMatches = useMemo(() => {
     const q = gameQuery.trim().toLowerCase();
@@ -2806,7 +2832,7 @@ function ComposeView({
         body: JSON.stringify({
           title: title.trim(),
           body: body.trim(),
-          threadType: type,
+          threadType: autoDiscord ? "discussion" : type,
           ...(sendLink ? { linkUrl: sendLink } : {}),
           ...(uploads.length ? { uploadIds: uploads.map((u) => u.id) } : {}),
           ...(taggedGame ? { appId: taggedGame.appId } : {}),
@@ -2832,6 +2858,24 @@ function ComposeView({
         <h2 className="island-display" style={{ margin: 0, marginBottom: 12, fontSize: 20, fontWeight: 700 }}>
           {meta.emoji} New {meta.label.toLowerCase()}
         </h2>
+        {autoDiscord ? (
+          <IslandCard
+            style={{
+              padding: "12px 16px",
+              marginBottom: 14,
+              background: "rgba(14, 165, 233, 0.1)",
+              border: "1px solid rgba(14, 165, 233, 0.35)"
+            }}
+          >
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span>🌉</span>
+              <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.infoText, lineHeight: 1.5 }}>
+                Posts here auto-push to Discord
+              </p>
+            </div>
+          </IslandCard>
+        ) : null}
+        {!autoDiscord ? (
         <div style={{ display: "grid", gap: 6, marginBottom: 14 }}>
           <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
             What are you sharing?
@@ -2870,6 +2914,7 @@ function ComposeView({
             })}
           </div>
         </div>
+        ) : null}
         <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
           <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
             Category
@@ -2879,7 +2924,7 @@ function ComposeView({
             onChange={(e) => setCategory(e.target.value)}
             style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, cursor: "pointer" }}
           >
-            {categories.filter((c) => !c.isLocked).map((c) => (
+            {categories.filter((c) => !c.isLocked || isAdmin).map((c) => (
               <option key={c.id} value={c.slug}>{c.icon} {c.name}</option>
             ))}
           </select>
@@ -2948,6 +2993,7 @@ function ComposeView({
             </span>
           </div>
         ) : null}
+        {category !== "announcements" ? (
         <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>
           <span className="island-mono" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
             🎮 Tag a game (optional)
@@ -3021,7 +3067,9 @@ function ComposeView({
             </>
           )}
         </div>
+        ) : null}
 
+        {!autoDiscord ? (
         <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, fontWeight: 700, justifySelf: "start" }}>
             <input type="checkbox" checked={pollOn} onChange={(e) => setPollOn(e.target.checked)} />
@@ -3073,8 +3121,9 @@ function ComposeView({
             </div>
           ) : null}
         </div>
+        ) : null}
 
-        {announceAvailable ? (
+        {!autoDiscord && announceAvailable ? (
           <label style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 13 }}>
             <input type="checkbox" checked={announce} onChange={(e) => setAnnounce(e.target.checked)} />
             📣 Also announce this to the Discord
