@@ -981,6 +981,30 @@ export function App() {
     }
   }
 
+  async function resetGeneralNewsCorpus(opts: { confirm: string; ingestAfter?: boolean }) {
+    try {
+      const response = await apiFetch("/news/general/reset-corpus", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(opts)
+      });
+      const data = (await response.json().catch(() => null)) as {
+        ok: boolean;
+        deletedArticles?: number;
+        deletedFeedback?: number;
+        ingestStarted?: boolean;
+        error?: string;
+      } | null;
+      if (!response.ok && data?.ok !== true) {
+        return { ok: false, error: data?.error ?? `Request failed (${response.status})` };
+      }
+      return data ?? { ok: false, error: "No response" };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
   async function triggerGeneralNewsEmbedBackfill(
     onProgress?: (snap: {
       state: "running" | "done" | "error";
@@ -1957,6 +1981,7 @@ export function App() {
           onFetchGeneralNewsEmbedBackfillStatus={fetchGeneralNewsEmbedBackfillStatus}
           onTriggerGeneralNewsImageBackfill={triggerGeneralNewsImageBackfill}
           onFetchGeneralNewsRecurateStatus={fetchGeneralNewsRecurateStatus}
+          onResetGeneralNewsCorpus={resetGeneralNewsCorpus}
         />
       ) : null}
 

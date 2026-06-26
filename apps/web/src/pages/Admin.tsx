@@ -77,6 +77,16 @@ type AdminPageProps = {
     total: number;
     error: string | null;
   } | null>;
+  onResetGeneralNewsCorpus: (opts: {
+    confirm: string;
+    ingestAfter?: boolean;
+  }) => Promise<{
+    ok: boolean;
+    deletedArticles?: number;
+    deletedFeedback?: number;
+    ingestStarted?: boolean;
+    error?: string;
+  }>;
 };
 
 export function AdminPage(props: AdminPageProps) {
@@ -123,6 +133,7 @@ export function AdminPage(props: AdminPageProps) {
             onImageBackfill={props.onTriggerGeneralNewsImageBackfill}
             onFetchRecurateStatus={props.onFetchGeneralNewsRecurateStatus}
             onCurateGameNews={props.onTriggerNewsCuration}
+            onResetGeneralNewsCorpus={props.onResetGeneralNewsCorpus}
           />
         );
       case "patch-sources":

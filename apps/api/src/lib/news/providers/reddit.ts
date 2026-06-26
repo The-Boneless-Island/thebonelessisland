@@ -36,7 +36,9 @@ export const redditProvider: NewsProvider = {
       .map((item) => {
         const link = item.link!;
         const title = item.title!;
-        const contents = item.contentSnippet ?? item.content ?? null;
+        const rawContents = item.contentSnippet ?? item.content ?? null;
+        const contents =
+          rawContents && rawContents.trim().length >= 40 ? rawContents : title;
         const publishedAt = item.pubDate ? new Date(item.pubDate) : new Date();
         return {
           sourceType: "reddit" as const,

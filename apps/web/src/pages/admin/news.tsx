@@ -206,6 +206,16 @@ type NewsPageProps = {
     error: string | null;
   } | null>;
   onCurateGameNews: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
+  onResetGeneralNewsCorpus: (opts: {
+    confirm: string;
+    ingestAfter?: boolean;
+  }) => Promise<{
+    ok: boolean;
+    deletedArticles?: number;
+    deletedFeedback?: number;
+    ingestStarted?: boolean;
+    error?: string;
+  }>;
 };
 
 export function NewsAdminPage(props: NewsPageProps) {
@@ -387,7 +397,7 @@ export function NewsAdminPage(props: NewsPageProps) {
           anchor: "news-retention",
           label: "Archive",
           content: (
-            <NewsRetentionSettingsPanel settings={settings} onSave={onUpdate} />
+            <NewsRetentionSettingsPanel settings={settings} onSave={onUpdate} onResetCorpus={props.onResetGeneralNewsCorpus} />
           )
         },
         {
@@ -449,11 +459,22 @@ export function NewsAdminPage(props: NewsPageProps) {
 
 function NewsRetentionSettingsPanel({
   settings,
-  onSave
+  onSave,
+  onResetCorpus
 }: {
   settings: ServerSetting[];
   onSave: (key: string, value: string) => Promise<void> | void;
+  onResetCorpus: NewsPageProps["onResetGeneralNewsCorpus"];
 }) {
+  const [confirmText, setConfirmText] = useState("");
+  const [resetState, setResetState] = useState<AdminRunState>("idle");
+  const [resetMsg, setResetMsg] = useState("");
+  const [retireState, setRetireState] = useState<AdminRunState>("idle");
+  const [retireMsg, setRetireMsg] = useState("");
+  const [ingestAfterReset, setIngestAfterReset] = useState(true);
+  const confirmPhrase = "SCRUB THE ARCHIVE";
+  const confirmReady = confirmText.trim().toUpperCase() === confirmPhrase;
+
   return (
     <div style={{ display: "grid", gap: 14 }}>
       <IslandCard style={{ padding: "16px 18px" }}>
@@ -551,6 +572,195 @@ function NewsRetentionSettingsPanel({
           title=""
         />
       </IslandCard>
+
+      <IslandCard
+        style={{
+          padding: "16px 18px",
+          display: "grid",
+          gap: 12,
+          borderColor: islandTheme.color.dangerAccent + "55"
+        }}
+      >
+        <div>
+          <div
+            className="island-mono"
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: islandTheme.color.dangerAccent,
+              marginBottom: 6
+            }}
+          >
+            Scrub the archive
+          </div>
+          <p style={{ margin: "0 0 4px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+            Wipes every ingested external headline, validation failure, and curation run — a clean dock for the current
+            pipeline. Member mutes and source registry stay put. Use this when an old backlog is stuck and re-curate
+            keeps failing.
+          </p>
+        </div>
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, color: islandTheme.color.textMuted }}>
+          <input
+            type="checkbox"
+            checked={ingestAfterReset}
+            onChange={(e) => setIngestAfterReset(e.target.checked)}
+          />
+          Fetch fresh headlines right after the scrub
+        </label>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            type="text"
+            value={confirmText}
+            onChange={(e) => setConfirmText(e.target.value)}
+            placeholder={`Type ${confirmPhrase} to confirm`}
+            style={{ ...islandInputStyle, flex: "1 1 220px", maxWidth: 360 }}
+            disabled={resetState === "running"}
+          />
+          <IslandButton
+            variant="secondary"
+            onClick={async () => {
+              setResetState("running");
+              setResetMsg("Scrubbing the archive…");
+              const result = await onResetCorpus({
+                confirm: confirmPhrase,
+                ingestAfter: ingestAfterReset
+              });
+              if (result.ok) {
+                setResetState("done");
+                setConfirmText("");
+                setResetMsg(
+                  `Removed ${(result.deletedArticles ?? 0).toLocaleString()} articles` +
+                    (result.ingestStarted ? " · fresh fetch started in the background" : "") +
+                    " — hit Fetch & Curate on Triggers if the feed is still empty"
+                );
+                setTimeout(() => setResetState("idle"), 15000);
+              } else {
+                setResetState("error");
+                setResetMsg(result.error ?? "Reset failed");
+                setTimeout(() => setResetState("idle"), 20000);
+              }
+            }}
+            disabled={resetState === "running" || !confirmReady}
+            style={
+              confirmReady
+                ? { borderColor: islandTheme.color.dangerAccent, color: islandTheme.color.dangerAccent }
+                : undefined
+            }
+          >
+            {resetState === "running" ? "Scrubbing…" : "Scrub archive & start fresh"}
+          </IslandButton>
+        </div>
+        <AdminTriggerFeedback state={resetState} message={resetMsg} />
+      </IslandCard>
+
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+        <div>
+          <div
+            className="island-mono"
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: islandTheme.color.warnAccent,
+              marginBottom: 6
+            }}
+          >
+            Retire stale backlog
+          </div>
+          <p style={{ margin: "0 0 4px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+            Marks never-curated articles older than 14 days as handled — no AI cost. Use this when Discord shows a huge
+            uncurated count but Scrub feels too heavy. Then run Fetch &amp; Curate for recent headlines only.
+          </p>
+        </div>
+        <div>
+          <IslandButton
+            variant="secondary"
+            disabled={retireState === "running"}
+            onClick={async () => {
+              setRetireState("running");
+              setRetireMsg("Retiring stale rows…");
+              try {
+                const res = await apiFetch("/news/general/retire-stale-backlog", {
+                  method: "POST",
+                  credentials: "include"
+                });
+                const data = (await res.json()) as {
+                  ok: boolean;
+                  retired?: number;
+                  remainingUncurated?: number;
+                  error?: string;
+                };
+                if (data.ok) {
+                  setRetireState("done");
+                  setRetireMsg(
+                    `Retired ${(data.retired ?? 0).toLocaleString()} stale row(s) · ${(data.remainingUncurated ?? 0).toLocaleString()} still in the recent window`
+                  );
+                  setTimeout(() => setRetireState("idle"), 12000);
+                } else {
+                  setRetireState("error");
+                  setRetireMsg(data.error ?? "Retire failed");
+                  setTimeout(() => setRetireState("idle"), 15000);
+                }
+              } catch (err) {
+                setRetireState("error");
+                setRetireMsg(err instanceof Error ? err.message : "Retire failed");
+                setTimeout(() => setRetireState("idle"), 15000);
+              }
+            }}
+          >
+            {retireState === "running" ? "Retiring…" : "Retire stale backlog"}
+          </IslandButton>
+        </div>
+        <AdminTriggerFeedback state={retireState} message={retireMsg} />
+      </IslandCard>
+    </div>
+  );
+}
+
+function NewsPipelineDiagnosticsPanel() {
+  const [diag, setDiag] = useState<{
+    likelyCause: string;
+    suggestedAction: string;
+    totals: { articles: number; uncurated: number; liveCards: number };
+    uncuratedByAge: { withinCurationWindow: number; outsideCurationWindow: number };
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch("/news/general/diagnostics")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const payload = (await res.json()) as { diagnostics?: typeof diag };
+        if (!cancelled) setDiag(payload.diagnostics ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!diag || diag.totals.articles === 0) return null;
+
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        color: islandTheme.color.textSubtle,
+        lineHeight: 1.55,
+        paddingTop: 8,
+        borderTop: `1px solid ${islandTheme.color.border}`
+      }}
+    >
+      <div style={{ fontWeight: 600, color: islandTheme.color.textPrimary, marginBottom: 4 }}>Diagnostics</div>
+      <div>
+        {diag.totals.articles.toLocaleString()} total · {diag.totals.uncurated.toLocaleString()} uncurated (
+        {diag.uncuratedByAge.withinCurationWindow.toLocaleString()} within 14d ·{" "}
+        {diag.uncuratedByAge.outsideCurationWindow.toLocaleString()} outside 14d) ·{" "}
+        {diag.totals.liveCards.toLocaleString()} live cards
+      </div>
+      <div style={{ marginTop: 6, color: islandTheme.color.warnAccent }}>{diag.likelyCause}</div>
+      <div style={{ marginTop: 4 }}>{diag.suggestedAction}</div>
     </div>
   );
 }
@@ -837,7 +1047,9 @@ function ManualTriggersCard({
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
         <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Regenerate All Summaries</div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-          Reset curation on all articles and re-run AI with the updated prompt. Use after prompt changes to get longer, richer summaries. Runs in the background — safe to leave the page; progress will resume when you return.
+          Reset curation on all articles and re-run AI with the updated prompt. Only for small corpora after prompt
+          changes — if you have thousands of rows, use <strong>Archive → Scrub the archive</strong> instead (Regenerate
+          marks every row uncurated again and will stall).
         </div>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <IslandButton
@@ -1227,18 +1439,20 @@ function NewsPipelineHealthPanel() {
           )}
           {health.validationFailures > 0 && (
             <div style={{ marginTop: health.embeddingsMissing > 0 ? 6 : 0 }}>
-              Validation failures ({health.validationFailures.toLocaleString()}) — mostly older rows from before
-              ID-matching fixes. Run <strong>Regenerate All Summaries</strong> on Triggers to re-curate the corpus.
+              Validation failures ({health.validationFailures.toLocaleString()}) — check error types on this tab.
+              For large backlogs use <strong>Archive → Scrub the archive</strong>, not Regenerate All Summaries.
             </div>
           )}
           {health.uncuratedBacklog > 0 && (
             <div style={{ marginTop: 6 }}>
-              Uncurated backlog ({health.uncuratedBacklog.toLocaleString()}) — articles waiting for AI curation
-              (or absorbed as duplicates).
+              Uncurated backlog ({health.uncuratedBacklog.toLocaleString()}) — rows with no AI pass yet. Most
+              historical rows are outside the 14-day auto-curate window; use <strong>Archive → Retire stale backlog</strong>{" "}
+              or Scrub the archive.
             </div>
           )}
         </div>
       )}
+      <NewsPipelineDiagnosticsPanel />
       {health.lastBatch && (health.lastBatch.matchCounts.none ?? 0) > 0 && (
         <div style={{ fontSize: 11, color: islandTheme.color.warnAccent }}>
           Last batch: {health.lastBatch.failedCount} validation failure(s);{" "}
