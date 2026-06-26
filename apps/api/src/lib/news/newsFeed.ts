@@ -55,8 +55,11 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
           ORDER BY gn.ai_relevance_score DESC NULLS LAST, gn.published_at DESC
         ) AS rk
       FROM general_news gn
-      WHERE COALESCE(gn.ai_relevance_score, 1) > 0
+      WHERE gn.ai_curated_at IS NOT NULL
+        AND gn.ai_relevance_score > 0
         AND gn.ai_validation_failed = FALSE
+        AND gn.ai_summary IS NOT NULL
+        AND LENGTH(TRIM(gn.ai_summary)) >= 150
         AND gn.retention_tier IN ('hot', 'warm')
         ${muteClause}
     ),
