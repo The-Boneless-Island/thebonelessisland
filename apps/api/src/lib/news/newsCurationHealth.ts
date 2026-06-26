@@ -4,7 +4,7 @@ import { Sentry } from "../sentry.js";
 import { log } from "../structuredLog.js";
 import { getAISetting } from "../serverSettings.js";
 import { countMissingEmbeddings, resolveEmbeddingBackend } from "./embeddings.js";
-import { sendNewsCurationAlert } from "./newsCurationAlert.js";
+import { isNewsCurationAlertConfigured, sendNewsCurationAlert } from "./newsCurationAlert.js";
 
 export type BatchDiagnostics = {
   at: string;
@@ -123,18 +123,23 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     )
   ]);
 
+  const lr = lastRunRow.rows[0];
   let status: NewsPipelineHealth["status"] = "healthy";
   if (!newsEnabled || !aiEnabled) {
     status = "off";
   } else if (counts.validationFailures > 100 && counts.liveCards < counts.validationFailures * 0.1) {
+    // Large historical failure corpus — usually fixed by Regenerate All Summaries.
+    status = "degraded";
+  } else if (lr?.error_summary) {
     status = "critical";
   } else if (counts.validationFailures > 10) {
     status = "degraded";
-  } else if (lastRunRow.rows[0]?.curated === 0 && (lastRunRow.rows[0]?.fetched ?? 0) > 0) {
+  } else if (embeddingsMissing > 500) {
+    status = "degraded";
+  } else if (lr?.curated === 0 && (lr?.fetched ?? 0) > 0) {
     status = "degraded";
   }
 
-  const lr = lastRunRow.rows[0];
   return {
     status,
     embeddingBackend: resolveEmbeddingBackend(),
@@ -252,6 +257,17 @@ export async function reportCurationPassOutcome(input: {
     }
   }
 
+  if (input.errorSummary) {
+    void sendNewsCurationAlert({
+      title: "News curation run errored",
+      description:
+        `Run kind: \`${input.runKind}\` · Error: ${input.errorSummary}\n` +
+        `Live cards: **${counts.liveCards}** · Validation failures: **${counts.validationFailures}**`,
+      color: 0xef4444,
+      dedupeKey: `run-error:${input.errorSummary.slice(0, 120)}`
+    });
+  }
+
   if (zeroCurateWithFetch) {
     void sendNewsCurationAlert({
       title: "News curation produced zero cards",
@@ -259,7 +275,8 @@ export async function reportCurationPassOutcome(input: {
         `Fetched **${input.fetched}** new article(s) but curated **0** primary cards.\n` +
         `Validation failures in corpus: **${counts.validationFailures}** · Live cards: **${counts.liveCards}**\n` +
         `Provider: \`${provider}\` · Check Admin → News → Validation.`,
-      color: 0xef4444
+      color: 0xef4444,
+      dedupeKey: "zero-curate-ingest"
     });
   } else if (highFailureRate) {
     void sendNewsCurationAlert({
@@ -267,7 +284,65 @@ export async function reportCurationPassOutcome(input: {
       description:
         `**${counts.validationFailures}** articles failed AI validation · **${counts.liveCards}** live cards.\n` +
         `Run **Regenerate All Summaries** in Admin → News → Triggers after verifying AI settings.`,
-      color: 0xfbbf77
+      color: 0xfbbf77,
+      dedupeKey: "validation-failures-high",
+      cooldownMs: 24 * 60 * 60 * 1000
     });
   }
+}
+
+/** Periodic sweep — catches backlog drift even when ingest keeps "succeeding". */
+export async function runNewsPipelineHealthSweep(): Promise<void> {
+  const newsEnabled = getAISetting("news_general_enabled") !== "false";
+  const aiEnabled = getAISetting("ai_enabled") === "true";
+  if (!newsEnabled || !aiEnabled) return;
+
+  const health = await getNewsPipelineHealth();
+  if (health.status === "healthy" || health.status === "off") return;
+
+  if (!isNewsCurationAlertConfigured()) {
+    log.warn("generalNews", "pipeline_degraded_no_webhook", {
+      status: health.status,
+      validationFailures: health.validationFailures,
+      embeddingsMissing: health.embeddingsMissing,
+      uncuratedBacklog: health.uncuratedBacklog
+    });
+    if (process.env.SENTRY_DSN) {
+      Sentry.captureMessage("news pipeline degraded (no Discord webhook configured)", {
+        level: "warning",
+        extra: {
+          status: health.status,
+          validationFailures: health.validationFailures,
+          embeddingsMissing: health.embeddingsMissing,
+          uncuratedBacklog: health.uncuratedBacklog
+        }
+      });
+    }
+    return;
+  }
+
+  const lines: string[] = [`Status: **${health.status}**`];
+  if (health.embeddingsMissing > 500) {
+    lines.push(`Embeddings missing: **${health.embeddingsMissing.toLocaleString()}** (auto-backfill runs each ingest)`);
+  }
+  if (health.validationFailures > 50) {
+    lines.push(`Validation failures: **${health.validationFailures.toLocaleString()}**`);
+  }
+  if (health.uncuratedBacklog > 500) {
+    lines.push(`Uncurated backlog: **${health.uncuratedBacklog.toLocaleString()}**`);
+  }
+  if (health.lastRun?.curated === 0 && (health.lastRun.fetched ?? 0) > 0) {
+    lines.push(
+      `Last ingest curated **0** of **${health.lastRun.fetched}** fetched (${new Date(health.lastRun.at).toLocaleString()})`
+    );
+  }
+  lines.push("Admin → News → Validation · Triggers tab for backfill / regenerate.");
+
+  void sendNewsCurationAlert({
+    title: "News pipeline needs attention",
+    description: lines.join("\n"),
+    color: health.status === "critical" ? 0xef4444 : 0xfbbf77,
+    dedupeKey: `health-sweep:${health.status}`,
+    cooldownMs: 12 * 60 * 60 * 1000
+  });
 }

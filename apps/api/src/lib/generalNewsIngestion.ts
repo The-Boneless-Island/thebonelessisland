@@ -8,7 +8,9 @@ import {
   embedText,
   findSimilarPrimary,
   isEmbeddingColumnAvailable,
-  setEmbedding
+  setEmbedding,
+  backfillEmbeddings,
+  countMissingEmbeddings
 } from "./news/embeddings.js";
 import { reportCurationPassOutcome, setLastBatchDiagnostics } from "./news/newsCurationHealth.js";
 import { resolveHeroImage } from "./news/ogImage.js";
@@ -141,13 +143,20 @@ function sanitizeTags(tags: string[], crewNames: Set<string> = new Set()): strin
   return result;
 }
 
-// Max articles to AI-curate per curation pass. Smaller batch now that summaries
-// target completeness (hard cap 1350 words ≈ ~1800 tokens each): 6 × ~1800 ≈ 10.8k
-// worst case, under the 16384 maxTokens cap. Must stay ≥ the largest sibling cluster
-// so a full multi-source story still synthesizes inside one call.
-const CURATION_BATCH_SIZE = 6;
-// Wider candidate pool so cluster-aware batching can group siblings together.
-const CURATION_POOL_SIZE = CURATION_BATCH_SIZE * 3;
+// Bedrock tends to truncate large JSON batches — keep batches smaller there.
+function curationBatchSize(): number {
+  return (getAISetting("ai_provider") ?? "").toLowerCase() === "bedrock" ? 2 : 6;
+}
+function curationPoolSize(): number {
+  return curationBatchSize() * 3;
+}
+function curationMaxTokens(batchLen: number): number {
+  const provider = (getAISetting("ai_provider") ?? "").toLowerCase();
+  if (provider === "bedrock") {
+    return Math.min(8192, Math.max(4096, batchLen * 3500));
+  }
+  return Math.min(16384, Math.max(8192, batchLen * 2800));
+}
 // Cluster-candidate window: articles within this window are eligible for
 // content-overlap merging. AI still judges actual content overlap.
 const CLUSTER_WINDOW = "14 days";
@@ -280,7 +289,7 @@ async function assignStoryFingerprints(
   // batching benefit. Skip and let the main pass handle dedup. (Cross-pass
   // fingerprint matching still works via DB-persisted prints from earlier
   // batches in the same run.)
-  if (rows.length <= CURATION_BATCH_SIZE) return new Map();
+  if (rows.length <= curationBatchSize()) return new Map();
 
   const ai = getAIProvider();
   const payload = rows.map((r) => ({ id: r.external_id, title: r.title }));
@@ -821,7 +830,8 @@ async function curateBatchOnce(
 ): Promise<GeneralCurationResult[]> {
   const ai = getAIProvider();
 
-  const payload = items.map((it) => ({
+  const payload = items.map((it, batchIndex) => ({
+    batchIndex,
     id: it.external_id,
     source: it.source_name,
     url: it.url,
@@ -1014,7 +1024,7 @@ This batch deliberately includes articles from multiple outlets. Your primary jo
 
 # Summary guidelines
 
-The summary must contain ONLY information about the article itself — facts, details, and context drawn directly from the source excerpts. Do NOT reference community interest, crew relevance, or player perspective in the summary; that belongs exclusively in \`whyRecommended\`.
+The summary must contain ONLY information about the article itself — facts, details, and context drawn directly from the source excerpts. Do NOT reference community interest, crew relevance, or player perspective in the summary; that belongs exclusively in \`whyMatters\`.
 
 Write a cross-source synthesis covering:
 1. **What happened** — the core news fact, announcement, or event
@@ -1100,27 +1110,130 @@ Return ONLY the JSON array. No markdown fences, no preamble.`;
     (retryReminder ? `\n\nRetry directive: ${retryReminder}` : "") +
     `\n\nReturn ONLY a JSON array as specified in the system instructions. No markdown headers. No commentary. The response must start with [ and end with ].`;
 
+  const maxTokens = curationMaxTokens(items.length);
   const result = await ai.complete(
     [
       { role: "system", content: systemPrompt },
       { role: "user", content: userContent }
     ],
-    // Output budget per batch. Summaries now target completeness (hard cap 1350
-    // words ≈ ~1800 tokens). 6 articles worst-case ≈ 10.8K + merge-output headroom;
-    // the 16K cap keeps cost bounded while letting full multi-source syntheses through.
-    { maxTokens: 16384, temperature: 0.2 }
+    { maxTokens, temperature: 0.2 }
   );
 
   const raw = result.text.trim();
+  if (!raw) {
+    console.warn(
+      `[generalNews] curation AI returned empty text (batch=${items.length}, maxTokens=${maxTokens}, provider=${getAISetting("ai_provider")})`
+    );
+    return [];
+  }
   const jsonText = raw.startsWith("```")
     ? raw.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "")
     : raw;
-  const parsed = parseAiJsonArray(jsonText) as GeneralCurationResult[];
-  if (!Array.isArray(parsed)) throw new Error("AI returned non-array response");
-  // Debug: log raw tags so we can verify taxonomy compliance
-  const sample = parsed.slice(0, 3).map((r) => ({ id: r.id?.slice(-30), tags: r.tags, dup: r.duplicate }));
+  let parsedRaw: unknown;
+  try {
+    parsedRaw = parseAiJsonArray(jsonText);
+  } catch (err) {
+    console.warn(
+      `[generalNews] curation JSON parse failed (batch=${items.length}, rawLen=${raw.length}):`,
+      err instanceof Error ? err.message : err
+    );
+    throw err;
+  }
+  if (!Array.isArray(parsedRaw)) throw new Error("AI returned non-array response");
+  const parsed = parsedRaw.map(normalizeCurationEntry);
+  if (parsed.length !== items.length) {
+    console.warn(
+      `[generalNews] curation array length mismatch: expected ${items.length}, got ${parsed.length} (rawLen=${raw.length})`
+    );
+  }
+  const sample = parsed.slice(0, 3).map((r) => ({
+    id: r.id?.slice(-30),
+    tags: r.tags,
+    dup: r.duplicate,
+    hasTitle: Boolean(r.title?.trim()),
+    hasWhy: Boolean(r.whyMatters?.trim())
+  }));
   console.log("[generalNews] AI tag sample:", JSON.stringify(sample));
   return parsed;
+}
+
+function asBool(v: unknown): boolean {
+  return v === true || v === "true";
+}
+
+function pickString(obj: Record<string, unknown>, ...keys: string[]): string {
+  for (const k of keys) {
+    const v = obj[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return "";
+}
+
+/** Normalize Bedrock/Claude field-name drift (snake_case, whyRecommended, etc.). */
+function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
+  const obj = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const sourcesRaw = obj.sources ?? obj.source_urls ?? obj.sourceUrls;
+  const sources = Array.isArray(sourcesRaw)
+    ? sourcesRaw.filter((u): u is string => typeof u === "string" && u.trim().length > 0)
+    : typeof sourcesRaw === "string" && sourcesRaw.trim()
+      ? [sourcesRaw.trim()]
+      : [];
+
+  const labelRaw = pickString(obj, "label");
+  const label = (["top_news", "community", "personal"].includes(labelRaw)
+    ? labelRaw
+    : "community") as GeneralCurationResult["label"];
+
+  return {
+    id: pickString(obj, "id", "external_id", "externalId", "url"),
+    relevanceScore: Number(obj.relevanceScore ?? obj.relevance_score ?? 0) || 0,
+    label,
+    spoilerWarning: asBool(obj.spoilerWarning ?? obj.spoiler_warning),
+    title: pickString(obj, "title", "ai_title", "aiTitle"),
+    summary: pickString(obj, "summary", "ai_summary", "aiSummary"),
+    whyMatters: pickString(
+      obj,
+      "whyMatters",
+      "whyRecommended",
+      "why_recommended",
+      "why_matters",
+      "ai_why_recommended"
+    ),
+    sources,
+    subtitle: pickString(obj, "subtitle", "ai_subtitle", "aiSubtitle"),
+    tags: Array.isArray(obj.tags) ? obj.tags.filter((t): t is string => typeof t === "string") : [],
+    gameTitle: pickString(obj, "gameTitle", "game_title") || null,
+    duplicate: asBool(obj.duplicate),
+    storyFingerprint: pickString(obj, "storyFingerprint", "story_fingerprint") || undefined,
+    mergesIntoExistingId:
+      pickString(obj, "mergesIntoExistingId", "merges_into_existing_id") || null,
+    updatedTitle: pickString(obj, "updatedTitle", "updated_title") || undefined,
+    updatedSubtitle: pickString(obj, "updatedSubtitle", "updated_subtitle") || undefined,
+    updatedSummary: pickString(obj, "updatedSummary", "updated_summary") || undefined,
+    updatedWhyMatters: pickString(
+      obj,
+      "updatedWhyMatters",
+      "updated_why_matters",
+      "updatedWhyRecommended",
+      "updated_why_recommended"
+    ) || undefined,
+    updatedSources: Array.isArray(obj.updatedSources ?? obj.updated_sources)
+      ? ((obj.updatedSources ?? obj.updated_sources) as unknown[]).filter(
+          (u): u is string => typeof u === "string"
+        )
+      : undefined,
+    updatedStoryFingerprint:
+      pickString(obj, "updatedStoryFingerprint", "updated_story_fingerprint") || undefined
+  };
+}
+
+function ensurePrimarySources(
+  result: GeneralCurationResult,
+  item: RawGeneral
+): GeneralCurationResult {
+  if (result.duplicate || isMerge(result)) return result;
+  if (Array.isArray(result.sources) && result.sources.length > 0) return result;
+  return { ...result, sources: [item.url] };
 }
 
 function isMerge(res: GeneralCurationResult): boolean {
@@ -1159,6 +1272,13 @@ function resolveCurationResultForItem(
   const byNorm = parsed.find((r) => r.id && normalizeArticleId(r.id) === targetNorm);
   if (byNorm) return { result: { ...byNorm, id: item.external_id }, match: "normalized" };
 
+  if (index < parsed.length) {
+    const entry = parsed[index];
+    if (resultHasPayload(entry) || entry.duplicate || isMerge(entry)) {
+      return { result: { ...entry, id: item.external_id }, match: "ordered" };
+    }
+  }
+
   const byPartial = parsed.find(
     (r) =>
       r.id &&
@@ -1168,10 +1288,6 @@ function resolveCurationResultForItem(
         r.id.includes(item.url))
   );
   if (byPartial) return { result: { ...byPartial, id: item.external_id }, match: "partial" };
-
-  if (index < parsed.length && resultHasPayload(parsed[index])) {
-    return { result: { ...parsed[index], id: item.external_id }, match: "positional" };
-  }
 
   return { result: {} as GeneralCurationResult, match: "none" };
 }
@@ -1214,7 +1330,8 @@ async function curateBatchWithValidation(
 
   const matchCounts: Record<string, number> = {};
   const outcomes: CurationOutcome[] = items.map((item, index) => {
-    const { result, match } = resolveCurationResultForItem(item, initial, index);
+    const { result: raw, match } = resolveCurationResultForItem(item, initial, index);
+    const result = ensurePrimarySources({ ...raw, id: item.external_id }, item);
     matchCounts[match] = (matchCounts[match] ?? 0) + 1;
     return {
       item,
@@ -1251,8 +1368,9 @@ async function curateBatchWithValidation(
         retryIndex >= 0 ? retryIndex : 0
       );
       if (match !== "none") {
-        o.result = fresh;
-        o.errors = validateCuration(fresh, batchUrls);
+        const normalized = ensurePrimarySources({ ...fresh, id: o.item.external_id }, o.item);
+        o.result = normalized;
+        o.errors = validateCuration(normalized, batchUrls);
         o.attempts++;
         matchCounts[`retry_${match}`] = (matchCounts[`retry_${match}`] ?? 0) + 1;
       }
@@ -1436,11 +1554,15 @@ async function persistCurationOutcome(
  * then AI-curate any un-curated rows.
  * Safe to call fire-and-forget — all errors are caught internally.
  */
-export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetched: number; curated: number }> {
+export async function ingestAndCurateGeneralNews(
+  force = false
+): Promise<{ fetched: number; curated: number; embedded: number }> {
   const enabled = getAISetting("news_general_enabled");
-  if (enabled === "false") return { fetched: 0, curated: 0 };
-  if (ingestionInFlight) return { fetched: 0, curated: 0 };
-  if (!force && Date.now() - lastIngestedAt < INGEST_COOLDOWN_MS) return { fetched: 0, curated: 0 };
+  if (enabled === "false") return { fetched: 0, curated: 0, embedded: 0 };
+  if (ingestionInFlight) return { fetched: 0, curated: 0, embedded: 0 };
+  if (!force && Date.now() - lastIngestedAt < INGEST_COOLDOWN_MS) {
+    return { fetched: 0, curated: 0, embedded: 0 };
+  }
   ingestionInFlight = true;
   const costAtStart = getAiCostTotalUsd();
 
@@ -1490,7 +1612,7 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
         ORDER BY published_at DESC
         LIMIT $1
       `,
-      [CURATION_POOL_SIZE]
+      [curationPoolSize()]
     );
 
     if (uncurated.rows.length > 0) {
@@ -1500,7 +1622,7 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
         // pass. Ensures siblings about the same story land in the same batch
         // even when the title-regex heuristic would scatter them.
         const fingerprintMap = await assignStoryFingerprints(uncurated.rows);
-        const batches = groupAndPack(uncurated.rows, CURATION_BATCH_SIZE, fingerprintMap);
+        const batches = groupAndPack(uncurated.rows, curationBatchSize(), fingerprintMap);
         for (const batch of batches) {
           // Re-fetch per batch so later batches see primaries persisted by
           // earlier batches in this same pass (critical during re-curate of
@@ -1541,6 +1663,21 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
   } finally {
     lastIngestedAt = Date.now();
     ingestionInFlight = false;
+    // Chip away at embedding backlog each pass — avoids one-time migration gaps
+    // requiring a manual "Embed Missing" marathon.
+    try {
+      const missing = await countMissingEmbeddings();
+      if (missing > 0) {
+        const backfilled = await backfillEmbeddings(50);
+        if (backfilled > 0) {
+          console.log(
+            `[generalNews] auto embed backfill: ${backfilled} row(s), ~${Math.max(0, missing - backfilled)} remaining`
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[generalNews] auto embed backfill failed:", err);
+    }
     void reportCurationPassOutcome({
       runKind: "ingest",
       fetched: totalFetched,
@@ -1552,7 +1689,7 @@ export async function ingestAndCurateGeneralNews(force = false): Promise<{ fetch
     });
   }
 
-  return { fetched: totalFetched, curated: totalCurated };
+  return { fetched: totalFetched, curated: totalCurated, embedded: totalEmbedded };
 }
 
 /**
@@ -1625,7 +1762,7 @@ export async function curateUncuratedGeneralNews(options: { reportRun?: boolean 
       ORDER BY published_at DESC
       LIMIT $1
     `,
-    [CURATION_POOL_SIZE]
+    [curationPoolSize()]
   );
 
   // Phase 2 (tail): if no in-window candidates left, fall back to older
@@ -1639,7 +1776,7 @@ export async function curateUncuratedGeneralNews(options: { reportRun?: boolean 
         ORDER BY published_at DESC
         LIMIT $1
       `,
-      [CURATION_BATCH_SIZE]
+      [curationBatchSize()]
     );
   }
 
@@ -1651,7 +1788,7 @@ export async function curateUncuratedGeneralNews(options: { reportRun?: boolean 
   try {
     const [crewContext, crewEntityNames] = await Promise.all([buildCrewContext(), getCrewEntityNames()]);
     const fingerprintMap = await assignStoryFingerprints(uncurated.rows);
-    const batches = groupAndPack(uncurated.rows, CURATION_BATCH_SIZE, fingerprintMap);
+    const batches = groupAndPack(uncurated.rows, curationBatchSize(), fingerprintMap);
     let count = 0;
     for (const batch of batches) {
       const existingPrimaries = await fetchRecentPrimaries();

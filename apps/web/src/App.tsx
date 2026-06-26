@@ -954,7 +954,11 @@ export function App() {
     try {
       const response = await apiFetch("/news/general/ingest", { method: "POST", credentials: "include" });
       const data = (await response.json().catch(() => null)) as {
-        ok: boolean; fetched?: number; curated?: number; error?: string;
+        ok: boolean;
+        fetched?: number;
+        curated?: number;
+        embedded?: number;
+        error?: string;
       } | null;
       return data ?? { ok: false, error: "No response" };
     } catch (error) {
@@ -966,7 +970,10 @@ export function App() {
     try {
       const response = await apiFetch("/news/general/curate", { method: "POST", credentials: "include" });
       const data = (await response.json().catch(() => null)) as {
-        ok: boolean; curated?: number; error?: string;
+        ok: boolean;
+        curated?: number;
+        remaining?: number;
+        error?: string;
       } | null;
       return data ?? { ok: false, error: "No response" };
     } catch (error) {
@@ -974,20 +981,101 @@ export function App() {
     }
   }
 
-  async function triggerGeneralNewsEmbedBackfill(limit = 200) {
+  async function triggerGeneralNewsEmbedBackfill(
+    onProgress?: (snap: {
+      state: "running" | "done" | "error";
+      total: number;
+      embedded: number;
+      remaining: number;
+      batches: number;
+      error: string | null;
+    }) => void
+  ) {
+    type JobShape = {
+      state: "idle" | "running" | "done" | "error";
+      total: number;
+      embedded: number;
+      remaining: number;
+      batches: number;
+      error: string | null;
+    };
+    const snap = (job: JobShape, state: "running" | "done" | "error") => ({
+      state,
+      total: job.total,
+      embedded: job.embedded,
+      remaining: job.remaining,
+      batches: job.batches,
+      error: state === "error" ? job.error : null
+    });
     try {
-      const response = await apiFetch("/news/general/embed-backfill", {
+      const kickResp = await apiFetch("/news/general/embed-backfill/start", {
         method: "POST",
-        credentials: "include",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ limit })
+        credentials: "include"
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok: boolean; embedded?: number; remaining?: number; error?: string;
-      } | null;
+      if (!kickResp.ok && kickResp.status !== 202 && kickResp.status !== 409) {
+        const body = (await kickResp.json().catch(() => null)) as { error?: string } | null;
+        return { ok: false, error: body?.error ?? `HTTP ${kickResp.status}` };
+      }
+
+      const POLL_INTERVAL_MS = 1500;
+      const MAX_POLLS = 7200; // ~3 hours
+      for (let i = 0; i < MAX_POLLS; i++) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+        const statusResp = await apiFetch("/news/general/embed-backfill/status", { credentials: "include" });
+        if (!statusResp.ok) continue;
+        const data = (await statusResp.json().catch(() => null)) as { job?: JobShape } | null;
+        const job = data?.job;
+        if (!job) continue;
+
+        if (job.state === "running") {
+          onProgress?.(snap(job, "running"));
+          continue;
+        }
+        if (job.state === "done") {
+          onProgress?.(snap(job, "done"));
+          return { ok: true, embedded: job.embedded, remaining: job.remaining };
+        }
+        if (job.state === "error") {
+          onProgress?.(snap(job, "error"));
+          return { ok: false, error: job.error ?? "Embed backfill failed" };
+        }
+      }
+      return { ok: false, error: "Timed out waiting for embed job (still running on server — refresh to check)" };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
+  async function cancelGeneralNewsEmbedBackfill() {
+    try {
+      const response = await apiFetch("/news/general/embed-backfill/cancel", {
+        method: "POST",
+        credentials: "include"
+      });
+      const data = (await response.json().catch(() => null)) as { ok: boolean; error?: string } | null;
       return data ?? { ok: false, error: "No response" };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "Request failed" };
+    }
+  }
+
+  async function fetchGeneralNewsEmbedBackfillStatus() {
+    try {
+      const resp = await apiFetch("/news/general/embed-backfill/status", { credentials: "include" });
+      if (!resp.ok) return null;
+      const data = (await resp.json().catch(() => null)) as {
+        job?: {
+          state: "idle" | "running" | "done" | "error";
+          total: number;
+          embedded: number;
+          remaining: number;
+          batches: number;
+          error: string | null;
+        };
+      } | null;
+      return data?.job ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -1857,6 +1945,8 @@ export function App() {
           onTriggerGeneralNewsRecurate={triggerGeneralNewsRecurate}
           onCancelGeneralNewsRecurate={cancelGeneralNewsRecurate}
           onTriggerGeneralNewsEmbedBackfill={triggerGeneralNewsEmbedBackfill}
+          onCancelGeneralNewsEmbedBackfill={cancelGeneralNewsEmbedBackfill}
+          onFetchGeneralNewsEmbedBackfillStatus={fetchGeneralNewsEmbedBackfillStatus}
           onTriggerGeneralNewsImageBackfill={triggerGeneralNewsImageBackfill}
           onFetchGeneralNewsRecurateStatus={fetchGeneralNewsRecurateStatus}
         />

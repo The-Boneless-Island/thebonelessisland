@@ -221,8 +221,10 @@ const RAW: SettingMeta[] = [
   {
     key: "news_curation_alert_webhook_url",
     label: "News curation alert webhook",
-    description: "Discord webhook URL for news pipeline health alerts (zero-curate passes, validation failure spikes). Empty = off.",
-    whenToChange: "When you want Parents pinged in Discord when the AI news pipeline degrades.",
+    description:
+      "Discord webhook URL for news pipeline alerts (zero-curate ingests, validation spikes, periodic backlog sweep). Empty = off — degraded state only logs to Sentry/server logs.",
+    whenToChange:
+      "Set a Parents-only Discord channel webhook so you're pinged when curation stalls or backlogs grow. Alerts dedupe (6–12h cooldown).",
     tags: ["news", "discord", "webhook", "alert", "curation"],
     dangerLevel: "low",
     domain: "content",
