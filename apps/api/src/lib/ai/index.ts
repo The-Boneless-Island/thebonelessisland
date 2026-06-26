@@ -26,6 +26,33 @@ export const PROVIDER_DEFAULTS: Record<SupportedProvider, string> = {
 
 export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai", "gemini", "bedrock"];
 
+/** Workload-specific routing when ai_provider is bedrock. */
+export type AITask = "default" | "curation" | "chat" | "light";
+
+const BEDROCK_TASK_SETTING_KEYS: Record<Exclude<AITask, "default">, string> = {
+  curation: "bedrock_model_curation",
+  chat: "bedrock_model_chat",
+  light: "bedrock_model_light"
+};
+
+/** Sensible Bedrock defaults per task — curation gets Claude, chat/light get Nova. */
+export const BEDROCK_TASK_DEFAULTS: Record<Exclude<AITask, "default">, string> = {
+  curation: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+  chat: "global.amazon.nova-2-lite-v1:0",
+  light: "global.amazon.nova-2-lite-v1:0"
+};
+
+/** Resolve the Bedrock model id for a task. Returns undefined for default/non-Bedrock. */
+export function resolveModelForTask(task: AITask = "default"): string | undefined {
+  if (task === "default") return undefined;
+  const provider = (getAISetting("ai_provider") ?? "").toLowerCase();
+  if (provider !== "bedrock") return undefined;
+  const settingKey = BEDROCK_TASK_SETTING_KEYS[task];
+  const configured = getAISetting(settingKey)?.trim();
+  if (configured) return configured;
+  return BEDROCK_TASK_DEFAULTS[task];
+}
+
 /**
  * Returns a ready-to-use AIProvider based on the current server_settings.
  * Settings are read from the in-memory cache (populated at startup and after
@@ -112,4 +139,16 @@ export function getAIProvider(overrides?: {
     default:
       throw new AINotConfiguredError(`unknown provider "${providerName}"`);
   }
+}
+
+/** Task-aware provider — on Bedrock, curation/chat/light can use different model ids. */
+export function getAIProviderForTask(
+  task: AITask = "default",
+  overrides?: { provider?: string; model?: string; apiKey?: string }
+): AIProvider {
+  const taskModel = overrides?.model ?? resolveModelForTask(task);
+  if (taskModel) {
+    return getAIProvider({ ...overrides, model: taskModel });
+  }
+  return getAIProvider(overrides);
 }

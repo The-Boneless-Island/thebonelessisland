@@ -1,5 +1,5 @@
 import { db } from "../db/client.js";
-import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index.js";
+import { AIDisabledError, AINotConfiguredError, getAIProviderForTask, resolveModelForTask } from "./ai/index.js";
 import { getAiCostTotalUsd } from "./ai/usageTally.js";
 import { PROVIDERS } from "./news/providers/index.js";
 import type { FeedItem, NewsSourceRow } from "./news/providers/index.js";
@@ -13,7 +13,7 @@ import {
   countMissingEmbeddings
 } from "./news/embeddings.js";
 import { linkNewsToGame } from "./news/gameLinking.js";
-import { applyPreFilter } from "./news/newsPreFilter.js";
+import { applyPreFilter, looksLikeNonGamingNews } from "./news/newsPreFilter.js";
 import { isFreshCorpusMode, retireStaleUncuratedBacklog } from "./news/newsBacklog.js";
 import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
 import { getIngestMaxAgeDays } from "./news/newsPipelineDiagnostics.js";
@@ -95,8 +95,8 @@ type ValidationError =
 
 const MAX_RETRIES_PER_ARTICLE = 2;
 const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
-/** Minimum summary length — keep aligned with curator prompt (thin excerpts still need 2–3 sentences). */
-const MIN_SUMMARY_CHARS = 120;
+/** Minimum summary length — keep aligned with curator prompt (~3 sentences / 250+ chars). */
+export const MIN_SUMMARY_CHARS = 250;
 /** Default score for salvage/repair/fallback cards so they can appear in the feed. */
 const FALLBACK_RELEVANCE_SCORE = 0.55;
 
@@ -311,7 +311,7 @@ async function assignStoryFingerprints(
   // batches in the same run.)
   if (rows.length <= curationBatchSize()) return new Map();
 
-  const ai = getAIProvider();
+  const ai = getAIProviderForTask("light");
   const payload = rows.map((r) => ({ id: r.external_id, title: r.title }));
 
   const systemPrompt = `You assign a normalized story fingerprint to gaming news articles for downstream clustering.
@@ -850,7 +850,7 @@ async function curateBatchOnce(
   existingPrimaries: ExistingPrimary[] = [],
   retryReminder?: string
 ): Promise<GeneralCurationResult[]> {
-  const ai = getAIProvider();
+  const ai = getAIProviderForTask("curation");
 
   const payload = items.map((it, batchIndex) => ({
     batchIndex,
@@ -1270,6 +1270,24 @@ function buildFallbackCurationResult(item: RawGeneral): GeneralCurationResult {
   const title =
     item.title.trim().length >= 8 ? item.title.trim() : item.title.trim() || "Gaming news update";
   const body = (item.contents ?? "").trim();
+
+  if (looksLikeNonGamingNews(title, body)) {
+    return {
+      id: item.external_id,
+      relevanceScore: 0,
+      label: "community",
+      spoilerWarning: false,
+      title,
+      summary: "",
+      whyMatters: "",
+      sources: [item.url],
+      subtitle: "",
+      tags: [],
+      gameTitle: null,
+      duplicate: true
+    };
+  }
+
   let summary = [body, title].filter(Boolean).join("\n\n").trim();
   if (summary.length < MIN_SUMMARY_CHARS) {
     summary = `${title}\n\n${body || "See the linked article for full details."}`.trim();
@@ -1529,7 +1547,7 @@ async function curateBatchWithValidation(
     matchCounts,
     failedCount: failed.length,
     provider: getAISetting("ai_provider") ?? "unknown",
-    model: getAISetting("ai_model") ?? "default"
+    model: resolveModelForTask("curation") ?? getAISetting("ai_model") ?? "default"
   });
 
   return outcomes;
@@ -2063,7 +2081,7 @@ export async function curateUncuratedGeneralNews(
       matchCounts: { lock_busy: 1 },
       failedCount: 0,
       provider: getAISetting("ai_provider") ?? "unknown",
-      model: getAISetting("ai_model") ?? "default"
+      model: resolveModelForTask("curation") ?? getAISetting("ai_model") ?? "default"
     });
     console.warn("[generalNews] curation skipped — pipeline lock busy (ingest or another job running)");
     return 0;

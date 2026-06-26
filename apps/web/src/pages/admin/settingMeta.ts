@@ -174,6 +174,40 @@ const RAW: SettingMeta[] = [
     domain: "system",
     type: "string"
   },
+  {
+    key: "bedrock_model_curation",
+    label: "Bedrock curation model",
+    description:
+      "Model id for news curation (long JSON summaries). When blank and Bedrock is active, defaults to Claude Haiku — best for 300–500 word cards. Leave ai_model on Nova if you want cheap chat while curation stays on Claude.",
+    whenToChange: "When news summaries are too short or off-topic — switch curation to Claude Haiku/Sonnet even if ai_model is Nova.",
+    example: "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    tags: ["ai", "bedrock", "curation", "news", "claude", "haiku", "model"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+  {
+    key: "bedrock_model_chat",
+    label: "Bedrock chat model",
+    description: "Model id for Nuggie AI chat. When blank, falls back to ai_model, then Nova Lite.",
+    whenToChange: "When tuning chat quality vs cost separately from news curation.",
+    example: "global.amazon.nova-2-lite-v1:0",
+    tags: ["ai", "bedrock", "chat", "nuggie", "nova", "model"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+  {
+    key: "bedrock_model_light",
+    label: "Bedrock light tasks model",
+    description: "Model id for validation repair, taglines, and blurbs. When blank, defaults to Nova Lite.",
+    whenToChange: "When light repair passes fail or you want them on Haiku instead.",
+    example: "global.amazon.nova-2-lite-v1:0",
+    tags: ["ai", "bedrock", "repair", "tagline", "nova", "model"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
 
   // ── Content · News pipeline ──────────────────────────────────────────────
   {
