@@ -9,13 +9,13 @@ import { DashboardPage } from "./admin/DashboardPage.js";
 import { ForumsModPage, MembersPage } from "./admin/people.js";
 import { GameNightsAdminPage, LibraryAdminPage, RecommenderAdminPage } from "./admin/gamesAdmin.js";
 import { DriftLogAdminPage, NewsAdminPage, PatchSourcesAdminPage } from "./admin/news.js";
-import type { NewsCardInput, RecurateProgressSnap } from "./admin/news.js";
+import type { NewsCardInput, EmbedBackfillProgressSnap, RecurateProgressSnap } from "./admin/news.js";
 import { EconomyOpsPage, EconomyRulesPage, ShopAdminPage } from "./admin/economy.js";
 import { AiAdminPage, PersonaAdminPage } from "./admin/ai.js";
 import { BridgeAdminPage, GuildAdminPage } from "./admin/discord.js";
 import { AuditAdminPage, SyncAdminPage } from "./admin/system.js";
 
-export type { RecurateProgressSnap } from "./admin/news.js";
+export type { EmbedBackfillProgressSnap, RecurateProgressSnap } from "./admin/news.js";
 
 type AdminPageProps = {
   selectedMemberCount: number;
@@ -31,15 +31,35 @@ type AdminPageProps = {
   onUpdateServerSetting: (key: string, value: string) => void;
   onTestAIConnection: (opts: { provider: string; model?: string; apiKey?: string }) => Promise<{ ok: boolean; provider?: string; model?: string; error?: string }>;
   onTriggerNewsCuration: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
-  onTriggerGeneralNewsIngest: () => Promise<{ ok: boolean; fetched?: number; curated?: number; error?: string }>;
-  onTriggerGeneralNewsCurate: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
+  onTriggerGeneralNewsIngest: () => Promise<{
+    ok: boolean;
+    fetched?: number;
+    curated?: number;
+    embedded?: number;
+    error?: string;
+  }>;
+  onTriggerGeneralNewsCurate: () => Promise<{
+    ok: boolean;
+    curated?: number;
+    remaining?: number;
+    error?: string;
+  }>;
   onTriggerGeneralNewsRecurate: (
     onProgress?: (snap: RecurateProgressSnap) => void
   ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
   onCancelGeneralNewsRecurate: () => Promise<{ ok: boolean; error?: string }>;
   onTriggerGeneralNewsEmbedBackfill: (
-    limit?: number
+    onProgress?: (snap: EmbedBackfillProgressSnap) => void
   ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
+  onCancelGeneralNewsEmbedBackfill: () => Promise<{ ok: boolean; error?: string }>;
+  onFetchGeneralNewsEmbedBackfillStatus: () => Promise<{
+    state: "idle" | "running" | "done" | "error";
+    total: number;
+    embedded: number;
+    remaining: number;
+    batches: number;
+    error: string | null;
+  } | null>;
   onTriggerGeneralNewsImageBackfill: (
     limit?: number
   ) => Promise<{ ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string }>;
@@ -96,6 +116,8 @@ export function AdminPage(props: AdminPageProps) {
             onRecurate={props.onTriggerGeneralNewsRecurate}
             onCancelRecurate={props.onCancelGeneralNewsRecurate}
             onEmbedBackfill={props.onTriggerGeneralNewsEmbedBackfill}
+            onCancelEmbedBackfill={props.onCancelGeneralNewsEmbedBackfill}
+            onFetchEmbedBackfillStatus={props.onFetchGeneralNewsEmbedBackfillStatus}
             onImageBackfill={props.onTriggerGeneralNewsImageBackfill}
             onFetchRecurateStatus={props.onFetchGeneralNewsRecurateStatus}
             onCurateGameNews={props.onTriggerNewsCuration}

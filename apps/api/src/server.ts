@@ -33,6 +33,7 @@ import { nuggiesRouter } from "./routes/nuggies.js";
 import { nuggiesGamesRouter } from "./routes/nuggiesGames.js";
 import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
+import { runNewsPipelineHealthSweep } from "./lib/news/newsCurationHealth.js";
 import { ingestNewsForApps } from "./lib/gameNewsIngestion.js";
 import { resolveCrewLibraryAppIds } from "./lib/patchAlerts.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
@@ -483,6 +484,14 @@ async function bootstrap() {
       console.error("[generalNews] scheduled background ingest failed:", err);
     });
   }, 4 * 60 * 60 * 1000);
+
+  // Pipeline health sweep — Discord alert when backlog / failures drift (12h cooldown).
+  const runHealthSweep = () =>
+    runNewsPipelineHealthSweep().catch((err) => {
+      console.error("[generalNews] pipeline health sweep failed:", err);
+    });
+  setTimeout(runHealthSweep, 2 * 60 * 1000);
+  setInterval(runHealthSweep, 6 * 60 * 60 * 1000);
 
   // Crew-library patch alerts: poll Steam/RSS sources on a tighter cadence than
   // the lazy page-load ingest so Discord alerts land within ~20 minutes.

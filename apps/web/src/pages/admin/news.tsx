@@ -58,6 +58,93 @@ export type RecurateProgressSnap = {
   error: string | null;
 };
 
+export type EmbedBackfillProgressSnap = {
+  state: "running" | "done" | "error";
+  total: number;
+  embedded: number;
+  remaining: number;
+  batches: number;
+  error: string | null;
+};
+
+type AdminRunState = "idle" | "running" | "done" | "error";
+
+function adminStatusColor(state: AdminRunState): string {
+  if (state === "error") return islandTheme.color.dangerAccent;
+  if (state === "done") return islandTheme.color.successAccent;
+  return islandTheme.color.textSubtle;
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return sec > 0 ? `${min}m ${sec}s` : `${min}m`;
+}
+
+function AdminTriggerFeedback({
+  state,
+  hint,
+  message,
+  progress,
+  onCancel,
+  cancelDisabled
+}: {
+  state: AdminRunState;
+  hint?: string;
+  message?: string;
+  progress?: { value: number; max: number };
+  onCancel?: () => void;
+  cancelDisabled?: boolean;
+}) {
+  if (state === "idle" && !message) return null;
+  const pct =
+    progress && progress.max > 0
+      ? Math.min(100, Math.round((progress.value / progress.max) * 100))
+      : null;
+
+  return (
+    <div style={{ display: "grid", gap: 8, marginTop: 10, width: "100%" }}>
+      {state === "running" && hint ? (
+        <span style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.45 }}>{hint}</span>
+      ) : null}
+      {message ? (
+        <span role="status" aria-live="polite" style={{ fontSize: 12, color: adminStatusColor(state), lineHeight: 1.5 }}>
+          {message}
+        </span>
+      ) : null}
+      {state === "running" && pct !== null ? (
+        <div
+          style={{
+            height: 6,
+            borderRadius: 999,
+            background: islandTheme.color.panelMutedBg,
+            overflow: "hidden",
+            maxWidth: 420
+          }}
+        >
+          <div
+            style={{
+              width: `${pct}%`,
+              height: "100%",
+              background: islandTheme.color.primary,
+              transition: "width 400ms ease"
+            }}
+          />
+        </div>
+      ) : null}
+      {onCancel && state === "running" ? (
+        <div>
+          <IslandButton variant="ghost" size="sm" disabled={cancelDisabled} onClick={onCancel}>
+            Cancel
+          </IslandButton>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export type NewsCardInput = {
   title: string;
   body: string;
@@ -69,15 +156,30 @@ export type NewsCardInput = {
 type NewsPageProps = {
   settings: ServerSetting[] | null;
   onUpdate: (key: string, value: string) => void;
-  onIngest: () => Promise<{ ok: boolean; fetched?: number; curated?: number; error?: string }>;
-  onCurate: () => Promise<{ ok: boolean; curated?: number; error?: string }>;
+  onIngest: () => Promise<{
+    ok: boolean;
+    fetched?: number;
+    curated?: number;
+    embedded?: number;
+    error?: string;
+  }>;
+  onCurate: () => Promise<{ ok: boolean; curated?: number; remaining?: number; error?: string }>;
   onRecurate: (
     onProgress?: (snap: RecurateProgressSnap) => void
   ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
   onCancelRecurate: () => Promise<{ ok: boolean; error?: string }>;
   onEmbedBackfill: (
-    limit?: number
+    onProgress?: (snap: EmbedBackfillProgressSnap) => void
   ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
+  onCancelEmbedBackfill: () => Promise<{ ok: boolean; error?: string }>;
+  onFetchEmbedBackfillStatus: () => Promise<{
+    state: "idle" | "running" | "done" | "error";
+    total: number;
+    embedded: number;
+    remaining: number;
+    batches: number;
+    error: string | null;
+  } | null>;
   onImageBackfill: (
     limit?: number
   ) => Promise<{ ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string }>;
@@ -334,18 +436,25 @@ function ManualTriggersCard({
   onRecurate,
   onCancelRecurate,
   onEmbedBackfill,
+  onCancelEmbedBackfill,
+  onFetchEmbedBackfillStatus,
   onImageBackfill,
   onFetchRecurateStatus,
   onCurateGameNews
 }: NewsPageProps) {
-  const [ingestState, setIngestState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [ingestState, setIngestState] = useState<AdminRunState>("idle");
   const [ingestMsg, setIngestMsg] = useState("");
-  const [curateState, setCurateState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [ingestHint, setIngestHint] = useState("");
+  const [ingestStartedAt, setIngestStartedAt] = useState<number | null>(null);
+  const [curateState, setCurateState] = useState<AdminRunState>("idle");
   const [curateMsg, setCurateMsg] = useState("");
-  const [gameCurateState, setGameCurateState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [curateHint, setCurateHint] = useState("");
+  const [gameCurateState, setGameCurateState] = useState<AdminRunState>("idle");
   const [gameCurateMsg, setGameCurateMsg] = useState("");
-  const [recurateState, setRecurateState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [gameCurateHint, setGameCurateHint] = useState("");
+  const [recurateState, setRecurateState] = useState<AdminRunState>("idle");
   const [recurateMsg, setRecurateMsg] = useState("");
+  const [recurateHint, setRecurateHint] = useState("");
   const [recurateProgress, setRecurateProgress] = useState<{
     processed: number;
     curated: number;
@@ -376,6 +485,11 @@ function ManualTriggersCard({
   }
 
   function handleRecurateSnap(snap: RecurateProgressSnap) {
+    setRecurateHint(
+      snap.state === "running"
+        ? "Runs on the server — safe to leave this tab. Progress updates every few seconds."
+        : ""
+    );
     if (snap.state === "running") {
       setRecurateState("running");
       setRecurateProgress({
@@ -441,12 +555,16 @@ function ManualTriggersCard({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const statusColor = (state: "idle" | "running" | "done" | "error") =>
-    state === "error"
-      ? islandTheme.color.dangerAccent
-      : state === "done"
-        ? islandTheme.color.successAccent
-        : islandTheme.color.textSubtle;
+  useEffect(() => {
+    if (ingestState !== "running" || ingestStartedAt === null) return;
+    const timer = setInterval(() => {
+      setIngestMsg((prev) => {
+        const base = prev.split(" · elapsed")[0];
+        return `${base} · elapsed ${formatElapsed(Date.now() - ingestStartedAt)}`;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [ingestState, ingestStartedAt]);
 
   return (
     <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 14 }}>
@@ -460,61 +578,73 @@ function ManualTriggersCard({
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
           Pull from all enabled RSS feeds and GNews API, upsert new articles, then run AI curation.
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <IslandButton
             variant="secondary"
             onClick={async () => {
+              const started = Date.now();
+              setIngestStartedAt(started);
               setIngestState("running");
-              setIngestMsg("Fetching feeds and running AI curation — may take up to a minute…");
+              setIngestHint("Pulling RSS/GNews, embedding new rows, then running AI curation. Usually 30–90s.");
+              setIngestMsg("Fetching feeds and curating…");
               const result = await onIngest();
               if (result.ok) {
                 setIngestState("done");
                 setIngestMsg(
-                  `Fetched ${result.fetched ?? 0} new · curated ${result.curated ?? 0}` +
-                    (result.fetched === 0 ? " (no new articles since last run)" : "")
+                  `Fetched ${result.fetched ?? 0} new · curated ${result.curated ?? 0} cards · embedded ${result.embedded ?? 0} new · elapsed ${formatElapsed(Date.now() - started)}` +
+                    (result.fetched === 0 ? " — nothing new since last run" : "")
                 );
-                setTimeout(() => setIngestState("idle"), 8000);
+                setIngestHint("");
+                setTimeout(() => setIngestState("idle"), 12000);
               } else {
                 setIngestState("error");
                 setIngestMsg(result.error ?? "Ingestion failed");
+                setIngestHint("");
                 setTimeout(() => setIngestState("idle"), 20000);
               }
+              setIngestStartedAt(null);
             }}
             disabled={ingestState === "running"}
           >
             {ingestState === "running" ? "Fetching…" : "Fetch & Curate"}
           </IslandButton>
-          {ingestMsg && (
-            <span role="status" aria-live="polite" style={{ fontSize: 12, color: statusColor(ingestState) }}>
-              {ingestMsg}
-            </span>
-          )}
         </div>
+        <AdminTriggerFeedback state={ingestState} hint={ingestHint} message={ingestMsg} />
       </div>
 
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
         <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Curate Existing Articles</div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-          Re-run AI scoring and summaries on articles that haven't been curated yet. Processes one batch (up to 25 articles) per run.
+          AI-curate articles still waiting in the backlog (cluster-aware batches). One click processes the next pool — run again if remaining &gt; 0.
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <IslandButton
             variant="secondary"
             onClick={async () => {
               setCurateState("running");
+              setCurateHint("Scoring and writing summaries for uncurated rows. May take a few minutes on Bedrock.");
               setCurateMsg("Running AI curation pass…");
               const result = await onCurate();
               if (result.ok) {
                 setCurateState("done");
-                setCurateMsg(
-                  result.curated && result.curated > 0
-                    ? `Curated ${result.curated} article${result.curated === 1 ? "" : "s"}`
-                    : "No un-curated articles to process"
-                );
-                setTimeout(() => setCurateState("idle"), 8000);
+                const remaining = result.remaining ?? 0;
+                if ((result.curated ?? 0) > 0) {
+                  setCurateMsg(
+                    `Curated ${result.curated} new card${result.curated === 1 ? "" : "s"} · ~${remaining.toLocaleString()} still uncurated`
+                  );
+                } else if (remaining > 0) {
+                  setCurateMsg(
+                    `No new cards this pass · ~${remaining.toLocaleString()} still uncurated — check Validation tab`
+                  );
+                } else {
+                  setCurateMsg("Backlog clear — nothing left to curate");
+                }
+                setCurateHint("");
+                setTimeout(() => setCurateState("idle"), 12000);
               } else {
                 setCurateState("error");
                 setCurateMsg(result.error ?? "Curation failed");
+                setCurateHint("");
                 setTimeout(() => setCurateState("idle"), 20000);
               }
             }}
@@ -522,12 +652,8 @@ function ManualTriggersCard({
           >
             {curateState === "running" ? "Curating…" : "Curate Articles"}
           </IslandButton>
-          {curateMsg && (
-            <span role="status" aria-live="polite" style={{ fontSize: 12, color: statusColor(curateState) }}>
-              {curateMsg}
-            </span>
-          )}
         </div>
+        <AdminTriggerFeedback state={curateState} hint={curateHint} message={curateMsg} />
       </div>
 
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
@@ -535,24 +661,27 @@ function ManualTriggersCard({
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
           Re-score and summarize un-curated Steam game news using the active AI provider. Runs automatically on the next news fetch — use this to force an immediate pass.
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <IslandButton
             variant="secondary"
             onClick={async () => {
               setGameCurateState("running");
-              setGameCurateMsg("Running AI curation pass…");
+              setGameCurateHint("Steam patch/news summaries — usually under a minute.");
+              setGameCurateMsg("Curating game news…");
               const result = await onCurateGameNews();
               if (result.ok) {
                 setGameCurateState("done");
                 setGameCurateMsg(
                   result.curated && result.curated > 0
-                    ? `Curated ${result.curated} article${result.curated === 1 ? "" : "s"}`
-                    : "No un-curated articles to process"
+                    ? `Curated ${result.curated} Steam article${result.curated === 1 ? "" : "s"}`
+                    : "No un-curated Steam articles to process"
                 );
+                setGameCurateHint("");
                 setTimeout(() => setGameCurateState("idle"), 8000);
               } else {
                 setGameCurateState("error");
                 setGameCurateMsg(result.error ?? "Curation failed");
+                setGameCurateHint("");
                 setTimeout(() => setGameCurateState("idle"), 20000);
               }
             }}
@@ -560,12 +689,8 @@ function ManualTriggersCard({
           >
             {gameCurateState === "running" ? "Curating…" : "Re-curate Game News"}
           </IslandButton>
-          {gameCurateMsg && (
-            <span role="status" aria-live="polite" style={{ fontSize: 12, color: statusColor(gameCurateState) }}>
-              {gameCurateMsg}
-            </span>
-          )}
         </div>
+        <AdminTriggerFeedback state={gameCurateState} hint={gameCurateHint} message={gameCurateMsg} />
       </div>
 
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
@@ -573,17 +698,19 @@ function ManualTriggersCard({
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
           Reset curation on all articles and re-run AI with the updated prompt. Use after prompt changes to get longer, richer summaries. Runs in the background — safe to leave the page; progress will resume when you return.
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <IslandButton
             variant="danger"
             onClick={async () => {
               setRecurateState("running");
               setRecurateProgress(null);
-              setRecurateMsg("Starting…");
+              setRecurateHint("Runs on the server — safe to leave this tab. Progress updates every few seconds.");
+              setRecurateMsg("Starting full corpus re-curation…");
               const result = await onRecurate(handleRecurateSnap);
               if (!result.ok) {
                 setRecurateState("error");
                 setRecurateMsg(result.error ?? "Recurate failed");
+                setRecurateHint("");
               }
               setTimeout(() => setRecurateState("idle"), 12000);
             }}
@@ -595,57 +722,41 @@ function ManualTriggersCard({
                 : "Regenerating…"
               : "Regenerate All Summaries"}
           </IslandButton>
-          {recurateState === "running" && (
-            <IslandButton
-              variant="secondary"
-              onClick={async () => {
-                const result = await onCancelRecurate();
-                if (!result.ok) {
-                  setRecurateMsg(`Cancel failed: ${result.error ?? "unknown"}`);
-                } else {
-                  setRecurateMsg("Cancel requested — stopping after current pass…");
-                }
-              }}
-            >
-              Cancel
-            </IslandButton>
-          )}
-          {recurateMsg && (
-            <span role="status" aria-live="polite" style={{ fontSize: 12, color: statusColor(recurateState) }}>
-              {recurateMsg}
-            </span>
-          )}
         </div>
-        {recurateState === "running" && recurateProgress && recurateProgress.total > 0 && (
-          <div
-            style={{
-              marginTop: 8,
-              height: 4,
-              borderRadius: 2,
-              background: islandTheme.color.panelMutedBg,
-              overflow: "hidden",
-              maxWidth: 320
-            }}
-            aria-hidden="true"
-          >
-            <div
-              style={{
-                width: `${Math.min(100, Math.round((recurateProgress.processed / recurateProgress.total) * 100))}%`,
-                height: "100%",
-                background: islandTheme.color.dangerAccent,
-                transition: "width 400ms ease"
-              }}
-            />
-          </div>
-        )}
+        <AdminTriggerFeedback
+          state={recurateState}
+          hint={recurateHint}
+          message={recurateMsg}
+          progress={
+            recurateProgress && recurateProgress.total > 0
+              ? { value: recurateProgress.processed, max: recurateProgress.total }
+              : undefined
+          }
+          onCancel={
+            recurateState === "running"
+              ? async () => {
+                  const result = await onCancelRecurate();
+                  if (!result.ok) {
+                    setRecurateMsg(`Cancel failed: ${result.error ?? "unknown"}`);
+                  } else {
+                    setRecurateMsg("Cancel requested — stopping after current pass…");
+                  }
+                }
+              : undefined
+          }
+        />
       </div>
 
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
         <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Embedding Backfill</div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-          Generate semantic vectors for articles missing one. Uses Amazon Titan Embed on Bedrock when that is your AI provider, otherwise OpenAI. Required for cosine-similarity clustering. Processes up to 200 rows per click — re-click until "Done — 0 remaining".
+          Generate Titan/OpenAI vectors for every article missing one. One click runs until done (or you cancel) — runs on the server so it won&apos;t time out. Safe to leave the tab.
         </div>
-        <EmbedBackfillButton onEmbedBackfill={onEmbedBackfill} />
+        <EmbedBackfillButton
+          onEmbedBackfill={onEmbedBackfill}
+          onCancelEmbedBackfill={onCancelEmbedBackfill}
+          onFetchEmbedBackfillStatus={onFetchEmbedBackfillStatus}
+        />
       </div>
 
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
@@ -666,126 +777,190 @@ function ImageBackfillButton({
     limit?: number
   ) => Promise<{ ok: boolean; scanned?: number; resolved?: number; remaining?: number; error?: string }>;
 }) {
-  const [state, setState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [state, setState] = useState<AdminRunState>("idle");
   const [msg, setMsg] = useState("");
+  const [hint, setHint] = useState("");
+  const [progress, setProgress] = useState<{ value: number; max: number } | undefined>();
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+    <div>
       <IslandButton
         variant="secondary"
         disabled={state === "running"}
         onClick={async () => {
           setState("running");
+          setHint("Scraping og:image URLs — loops automatically until none remain.");
           let totalResolved = 0;
-          // Image scraping is network-bound (one fetch per article), so use a
-          // small per-request batch and loop until the server reports 0 left.
+          let estimatedTotal = 0;
           for (let i = 0; i < 80; i++) {
-            setMsg(`Scraping batch ${i + 1}… (${totalResolved} cover${totalResolved === 1 ? "" : "s"} found so far)`);
+            setMsg(`Batch ${i + 1}… ${totalResolved} cover${totalResolved === 1 ? "" : "s"} found so far`);
             const result = await onImageBackfill(20);
             if (!result.ok) {
               setState("error");
               setMsg(result.error ?? "Backfill failed");
+              setHint("");
+              setProgress(undefined);
               return;
             }
             totalResolved += result.resolved ?? 0;
             const remaining = result.remaining ?? 0;
+            if (estimatedTotal === 0 && remaining + totalResolved > 0) {
+              estimatedTotal = remaining + totalResolved;
+            }
+            if (estimatedTotal > 0) {
+              setProgress({ value: estimatedTotal - remaining, max: estimatedTotal });
+            }
             if (remaining === 0 || (result.scanned ?? 0) === 0) {
               setState("done");
-              setMsg(`Done — ${totalResolved} cover${totalResolved === 1 ? "" : "s"} scraped, ${remaining} remaining.`);
+              setMsg(`Done — ${totalResolved} cover${totalResolved === 1 ? "" : "s"} scraped · ${remaining} remaining`);
+              setHint("");
+              setProgress(undefined);
               setTimeout(() => setState("idle"), 15000);
               return;
             }
           }
           setState("done");
-          setMsg(`Stopped at iteration cap — ${totalResolved} covers scraped. Click again to continue.`);
+          setMsg(`Paused at safety cap — ${totalResolved} covers scraped. Click again to continue.`);
+          setHint("");
+          setProgress(undefined);
           setTimeout(() => setState("idle"), 15000);
         }}
       >
         {state === "running" ? "Scraping…" : "Backfill Cover Images"}
       </IslandButton>
-      {msg && (
-        <span
-          role="status"
-          aria-live="polite"
-          style={{
-            fontSize: 12,
-            color:
-              state === "error"
-                ? islandTheme.color.dangerAccent
-                : state === "done"
-                  ? islandTheme.color.successAccent
-                  : islandTheme.color.textSubtle
-          }}
-        >
-          {msg}
-        </span>
-      )}
+      <AdminTriggerFeedback state={state} hint={hint} message={msg} progress={progress} />
     </div>
   );
 }
 
+function embedProgressMsg(snap: EmbedBackfillProgressSnap): string {
+  if (snap.state === "error") return snap.error ?? "Embed backfill failed";
+  if (snap.total <= 0 && snap.state === "done") return "Nothing to embed — all rows already have vectors.";
+  const done = snap.total - snap.remaining;
+  const pct = snap.total > 0 ? Math.min(100, Math.round((done / snap.total) * 100)) : 0;
+  if (snap.state === "done") {
+    return `Done — ${snap.embedded.toLocaleString()} embedded · ${snap.remaining.toLocaleString()} remaining (${pct}% of ${snap.total.toLocaleString()} starting backlog)`;
+  }
+  return `Embedding… ${done.toLocaleString()} / ${snap.total.toLocaleString()} (${pct}%) · batch ${snap.batches} · ${snap.remaining.toLocaleString()} left`;
+}
+
 function EmbedBackfillButton({
-  onEmbedBackfill
+  onEmbedBackfill,
+  onCancelEmbedBackfill,
+  onFetchEmbedBackfillStatus
 }: {
   onEmbedBackfill: (
-    limit?: number
+    onProgress?: (snap: EmbedBackfillProgressSnap) => void
   ) => Promise<{ ok: boolean; embedded?: number; remaining?: number; error?: string }>;
+  onCancelEmbedBackfill: () => Promise<{ ok: boolean; error?: string }>;
+  onFetchEmbedBackfillStatus: () => Promise<{
+    state: "idle" | "running" | "done" | "error";
+    total: number;
+    embedded: number;
+    remaining: number;
+    batches: number;
+    error: string | null;
+  } | null>;
 }) {
-  const [state, setState] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [state, setState] = useState<AdminRunState>("idle");
   const [msg, setMsg] = useState("");
+  const [hint, setHint] = useState("");
+  const [progress, setProgress] = useState<{ value: number; max: number } | undefined>();
+  const [cancelPending, setCancelPending] = useState(false);
+
+  function applySnap(snap: EmbedBackfillProgressSnap) {
+    if (snap.state === "running") {
+      setState("running");
+      setHint("Runs on the server — safe to leave this tab. Titan embed calls take a while on large backlogs.");
+      setMsg(embedProgressMsg(snap));
+      if (snap.total > 0) {
+        setProgress({ value: snap.total - snap.remaining, max: snap.total });
+      }
+    } else if (snap.state === "done") {
+      setState("done");
+      setHint("");
+      setMsg(embedProgressMsg(snap));
+      setProgress(undefined);
+      setCancelPending(false);
+    } else {
+      setState("error");
+      setHint("");
+      setMsg(embedProgressMsg(snap));
+      setProgress(undefined);
+      setCancelPending(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const job = await onFetchEmbedBackfillStatus();
+      if (cancelled || !job || job.state !== "running") return;
+      applySnap({ ...job, state: "running" });
+      const result = await onEmbedBackfill((snap) => {
+        if (!cancelled) applySnap(snap);
+      });
+      if (cancelled) return;
+      if (!result.ok) {
+        setState("error");
+        setMsg(result.error ?? "Embed backfill failed");
+      }
+      setTimeout(() => {
+        if (!cancelled) setState("idle");
+      }, 15000);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+    <div>
       <IslandButton
         variant="secondary"
         disabled={state === "running"}
         onClick={async () => {
           setState("running");
-          let totalEmbedded = 0;
-          // Loop until the server reports 0 remaining. Server caps each call at
-          // 500 rows for HTTP-request bounding; 50 iterations covers ~25K rows
-          // which is well past anything we'll realistically hold.
-          for (let i = 0; i < 50; i++) {
-            setMsg(`Embedding batch ${i + 1}… (${totalEmbedded} embedded so far)`);
-            const result = await onEmbedBackfill(500);
-            if (!result.ok) {
-              setState("error");
-              setMsg(result.error ?? "Backfill failed");
-              return;
-            }
-            totalEmbedded += result.embedded ?? 0;
-            const remaining = result.remaining ?? 0;
-            if (remaining === 0 || (result.embedded ?? 0) === 0) {
-              setState("done");
-              setMsg(`Done — ${totalEmbedded} embedded, ${remaining} remaining.`);
-              setTimeout(() => setState("idle"), 15000);
-              return;
-            }
+          setCancelPending(false);
+          setMsg("Starting embed backfill…");
+          setHint("Queuing server job…");
+          const result = await onEmbedBackfill((snap) => applySnap(snap));
+          if (!result.ok) {
+            setState("error");
+            setMsg(result.error ?? "Embed backfill failed");
+            setHint("");
+            setProgress(undefined);
           }
-          setState("done");
-          setMsg(`Stopped at iteration cap — ${totalEmbedded} embedded. Click again to continue.`);
           setTimeout(() => setState("idle"), 15000);
         }}
       >
-        {state === "running" ? "Embedding…" : "Embed Missing Articles"}
+        {state === "running"
+          ? progress
+            ? `Embedding… ${Math.min(100, Math.round((progress.value / progress.max) * 100))}%`
+            : "Embedding…"
+          : "Embed All Missing"}
       </IslandButton>
-      {msg && (
-        <span
-          role="status"
-          aria-live="polite"
-          style={{
-            fontSize: 12,
-            color:
-              state === "error"
-                ? islandTheme.color.dangerAccent
-                : state === "done"
-                  ? islandTheme.color.successAccent
-                  : islandTheme.color.textSubtle
-          }}
-        >
-          {msg}
-        </span>
-      )}
+      <AdminTriggerFeedback
+        state={state}
+        hint={hint}
+        message={msg}
+        progress={progress}
+        cancelDisabled={cancelPending}
+        onCancel={
+          state === "running"
+            ? async () => {
+                setCancelPending(true);
+                setMsg("Cancel requested — finishing current batch…");
+                const result = await onCancelEmbedBackfill();
+                if (!result.ok) {
+                  setCancelPending(false);
+                  setMsg(`Cancel failed: ${result.error ?? "unknown"}`);
+                }
+              }
+            : undefined
+        }
+      />
     </div>
   );
 }
@@ -808,6 +983,11 @@ type NewsPipelineHealth = {
     embedded: number;
     provider: string | null;
     errorSummary: string | null;
+  } | null;
+  lastBatch?: {
+    parsedCount: number;
+    matchCounts: Record<string, number>;
+    failedCount: number;
   } | null;
 };
 
@@ -882,6 +1062,49 @@ function NewsPipelineHealthPanel() {
       <div style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.4 }}>
         Last run{lastRun ? ` (${new Date(lastRun.at).toLocaleString()})` : ""}: {lastRunLine}
       </div>
+      {(health.embeddingsMissing > 0 || health.validationFailures > 0 || health.uncuratedBacklog > 0) && (
+        <div
+          style={{
+            fontSize: 11,
+            color: islandTheme.color.textSubtle,
+            lineHeight: 1.5,
+            paddingTop: 4,
+            borderTop: `1px solid ${islandTheme.color.border}`
+          }}
+        >
+          {health.embeddingsMissing > 0 && (
+            <div>
+              Missing embeddings ({health.embeddingsMissing.toLocaleString()}) — expected after switching to
+              Bedrock Titan (vectors were reset). Run <strong>Embed Missing Articles</strong> on the Triggers tab
+              until this reaches zero.
+            </div>
+          )}
+          {health.validationFailures > 0 && (
+            <div style={{ marginTop: health.embeddingsMissing > 0 ? 6 : 0 }}>
+              Validation failures ({health.validationFailures.toLocaleString()}) — mostly older rows from before
+              ID-matching fixes. Run <strong>Regenerate All Summaries</strong> on Triggers to re-curate the corpus.
+            </div>
+          )}
+          {health.uncuratedBacklog > 0 && (
+            <div style={{ marginTop: 6 }}>
+              Uncurated backlog ({health.uncuratedBacklog.toLocaleString()}) — articles waiting for AI curation
+              (or absorbed as duplicates).
+            </div>
+          )}
+        </div>
+      )}
+      {health.lastBatch && (health.lastBatch.matchCounts.none ?? 0) > 0 && (
+        <div style={{ fontSize: 11, color: islandTheme.color.warnAccent }}>
+          Last batch: {health.lastBatch.failedCount} validation failure(s);{" "}
+          {health.lastBatch.matchCounts.none} article(s) had no AI match (parsed {health.lastBatch.parsedCount}).
+        </div>
+      )}
+      {health.status !== "healthy" && health.status !== "off" && (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.4 }}>
+          Set a Discord webhook under the <strong>API keys</strong> tab (<code>news_curation_alert_webhook_url</code>)
+          to get automatic alerts when curation stalls or backlogs grow (6–12h cooldown, no spam).
+        </div>
+      )}
     </IslandCard>
   );
 }

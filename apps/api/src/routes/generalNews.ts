@@ -2,7 +2,11 @@ import { Router } from "express";
 import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
 import { getAiCostTotalUsd } from "../lib/ai/usageTally.js";
-import { backfillEmbeddings, isEmbeddingColumnAvailable } from "../lib/news/embeddings.js";
+import {
+  backfillEmbeddings,
+  countMissingEmbeddings,
+  isEmbeddingColumnAvailable
+} from "../lib/news/embeddings.js";
 import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages } from "../lib/generalNewsIngestion.js";
 import { getNewsPipelineHealth, reportCurationPassOutcome } from "../lib/news/newsCurationHealth.js";
 
@@ -196,7 +200,11 @@ generalNewsRouter.post("/general/ingest", requireSession, requireParentRole, asy
 generalNewsRouter.post("/general/curate", requireSession, requireParentRole, async (_req, res) => {
   try {
     const curated = await curateUncuratedGeneralNews();
-    res.json({ ok: true, curated });
+    const remainingRow = await db.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
+    );
+    const remaining = parseInt(remainingRow.rows[0]?.c ?? "0", 10);
+    res.json({ ok: true, curated, remaining });
   } catch (err) {
     console.error("[generalNews] POST /news/general/curate error:", err);
     res.status(500).json({ ok: false, error: "Curation failed" });
@@ -230,6 +238,147 @@ generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentR
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
   }
 });
+
+// ── Embed backfill job (background, polled by client) ─────────────────────────
+
+type EmbedBackfillJobState = "idle" | "running" | "done" | "error";
+
+type EmbedBackfillJob = {
+  state: EmbedBackfillJobState;
+  startedAt: number | null;
+  finishedAt: number | null;
+  total: number;
+  embedded: number;
+  remaining: number;
+  batches: number;
+  error: string | null;
+};
+
+const FRESH_EMBED_JOB: EmbedBackfillJob = {
+  state: "idle",
+  startedAt: null,
+  finishedAt: null,
+  total: 0,
+  embedded: 0,
+  remaining: 0,
+  batches: 0,
+  error: null
+};
+
+let embedBackfillJob: EmbedBackfillJob = { ...FRESH_EMBED_JOB };
+let embedBackfillCancelRequested = false;
+
+const EMBED_BACKFILL_BATCH = 40;
+const EMBED_BACKFILL_MAX_PASSES = 500;
+const EMBED_BACKFILL_PAUSE_MS = 50;
+
+async function runEmbedBackfillJob(): Promise<void> {
+  embedBackfillCancelRequested = false;
+  embedBackfillJob = {
+    ...FRESH_EMBED_JOB,
+    state: "running",
+    startedAt: Date.now()
+  };
+
+  try {
+    if (!(await isEmbeddingColumnAvailable())) {
+      embedBackfillJob.state = "error";
+      embedBackfillJob.error =
+        "pgvector / embedding column not available. Install pgvector and re-run migration 040.";
+      embedBackfillJob.finishedAt = Date.now();
+      return;
+    }
+
+    const initialRemaining = await countMissingEmbeddings();
+    embedBackfillJob.total = initialRemaining;
+    embedBackfillJob.remaining = initialRemaining;
+
+    if (initialRemaining === 0) {
+      embedBackfillJob.state = "done";
+      embedBackfillJob.finishedAt = Date.now();
+      return;
+    }
+
+    for (let pass = 0; pass < EMBED_BACKFILL_MAX_PASSES; pass++) {
+      if (embedBackfillCancelRequested) {
+        console.warn(`[generalNews] embed backfill cancelled by admin at batch ${pass}`);
+        break;
+      }
+
+      const batchEmbedded = await backfillEmbeddings(EMBED_BACKFILL_BATCH);
+      embedBackfillJob.embedded += batchEmbedded;
+      embedBackfillJob.batches = pass + 1;
+      embedBackfillJob.remaining = await countMissingEmbeddings();
+
+      if (embedBackfillJob.remaining === 0 || batchEmbedded === 0) break;
+
+      if (embedBackfillCancelRequested) break;
+      await new Promise((resolve) => setTimeout(resolve, EMBED_BACKFILL_PAUSE_MS));
+    }
+
+    embedBackfillJob.state = embedBackfillJob.error ? "error" : "done";
+    embedBackfillJob.finishedAt = Date.now();
+    console.log(
+      `[generalNews] embed backfill job finished: ${embedBackfillJob.embedded} embedded, ${embedBackfillJob.remaining} remaining`
+    );
+  } catch (err) {
+    embedBackfillJob.state = "error";
+    embedBackfillJob.error = err instanceof Error ? err.message : String(err);
+    embedBackfillJob.finishedAt = Date.now();
+    console.error("[generalNews] embed backfill job failed:", err);
+  }
+}
+
+/**
+ * POST /news/general/embed-backfill/start
+ * Kicks off a background job that embeds every row missing a vector.
+ * Poll GET /news/general/embed-backfill/status for progress.
+ */
+generalNewsRouter.post(
+  "/general/embed-backfill/start",
+  requireSession,
+  requireParentRole,
+  (_req, res) => {
+    if (embedBackfillJob.state === "running") {
+      res.status(409).json({ ok: false, error: "Embed backfill already running", job: embedBackfillJob });
+      return;
+    }
+    runEmbedBackfillJob().catch((err) => {
+      console.error("[generalNews] runEmbedBackfillJob unhandled:", err);
+    });
+    res.status(202).json({ ok: true, job: embedBackfillJob });
+  }
+);
+
+/**
+ * POST /news/general/embed-backfill/cancel
+ * Stops the job after the current batch completes.
+ */
+generalNewsRouter.post(
+  "/general/embed-backfill/cancel",
+  requireSession,
+  requireParentRole,
+  (_req, res) => {
+    if (embedBackfillJob.state !== "running") {
+      res.status(409).json({ ok: false, error: "No embed backfill job running" });
+      return;
+    }
+    embedBackfillCancelRequested = true;
+    res.json({ ok: true, message: "Cancel requested — job will stop after the current batch completes" });
+  }
+);
+
+/**
+ * GET /news/general/embed-backfill/status
+ */
+generalNewsRouter.get(
+  "/general/embed-backfill/status",
+  requireSession,
+  requireParentRole,
+  (_req, res) => {
+    res.json({ ok: true, job: embedBackfillJob });
+  }
+);
 
 /**
  * POST /news/general/image-backfill
