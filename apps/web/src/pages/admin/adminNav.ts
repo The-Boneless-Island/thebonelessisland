@@ -139,6 +139,11 @@ export const ADMIN_PAGES: Record<AdminPageId, AdminPageMeta> = {
       { anchor: "news-sources", label: "Source registry", keywords: ["sources", "rss", "reddit", "youtube", "gnews", "preset"] },
       { anchor: "news-keys", label: "API keys (GNews / YouTube / alerts)", keywords: ["gnews", "youtube", "api", "key", "webhook", "alert"] },
       { anchor: "news-dev-cap", label: "Developer diversity cap", keywords: ["developer", "diversity", "cap", "valve"] },
+      {
+        anchor: "news-retention",
+        label: "Archive & feed tuning",
+        keywords: ["retention", "archive", "hot", "warm", "prune", "freshness", "stale", "ingest", "storage", "search"]
+      },
       { anchor: "news-triggers", label: "Manual triggers", keywords: ["ingest", "curate", "recurate", "regenerate", "embed", "backfill", "fetch"] },
       { anchor: "news-validation", label: "AI validation failures", keywords: ["validation", "failures", "failed", "retry", "hidden"] }
     ]
@@ -285,6 +290,13 @@ const SETTING_PAGE_OVERRIDES: Record<string, { page: AdminPageId; anchor: string
   newsapi_key: { page: "news", anchor: "news-keys" },
   news_curation_alert_webhook_url: { page: "news", anchor: "news-keys" },
   news_dev_cap: { page: "news", anchor: "news-dev-cap" },
+  news_retention_hot_days: { page: "news", anchor: "news-retention" },
+  news_retention_warm_days: { page: "news", anchor: "news-retention" },
+  news_retention_prune_validation_days: { page: "news", anchor: "news-retention" },
+  news_retention_prune_uncurated_days: { page: "news", anchor: "news-retention" },
+  news_feed_freshness_days: { page: "news", anchor: "news-retention" },
+  news_stale_ingest_hours: { page: "news", anchor: "news-retention" },
+  news_ingest_on_page_load: { page: "news", anchor: "news-retention" },
   official_announcements_enabled: { page: "bridge", anchor: "bridge-official" },
   official_announcements_channel_id: { page: "bridge", anchor: "bridge-official" },
   official_announcements_ping_everyone: { page: "bridge", anchor: "bridge-official" },
@@ -323,6 +335,31 @@ export function inlineSettingKeysFor(page: AdminPageId): string[] {
     })
     .map((m) => m.key);
 }
+
+/** Gaming News → Archive tab: what members see on the dock. */
+export const NEWS_FEED_TUNING_KEYS = [
+  "news_feed_freshness_days",
+  "news_stale_ingest_hours",
+  "news_ingest_on_page_load"
+] as const;
+
+/** Gaming News → Archive tab: hot/warm tier boundaries. */
+export const NEWS_STORAGE_TIER_KEYS = [
+  "news_retention_hot_days",
+  "news_retention_warm_days"
+] as const;
+
+/** Gaming News → Archive tab: nightly prune thresholds. */
+export const NEWS_PRUNE_KEYS = [
+  "news_retention_prune_validation_days",
+  "news_retention_prune_uncurated_days"
+] as const;
+
+export const NEWS_RETENTION_SETTING_KEYS = [
+  ...NEWS_FEED_TUNING_KEYS,
+  ...NEWS_STORAGE_TIER_KEYS,
+  ...NEWS_PRUNE_KEYS
+] as const;
 
 // ── Unified admin search ─────────────────────────────────────────────────────
 

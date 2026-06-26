@@ -207,6 +207,28 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   const [revealedSpoilers, setRevealedSpoilers] = useState<Set<string>>(new Set());
   const [activeArticle, setActiveArticle] = useState<GeneralNewsItem | null>(null);
   const [userVotes, setUserVotes] = useState<Record<number, 1 | -1 | 0>>({});
+  const [searchInput, setSearchInput] = useState("");
+  const [searchResults, setSearchResults] = useState<GeneralNewsItem[] | null>(null);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [mutedKeys, setMutedKeys] = useState<Set<string>>(new Set());
+
+  function muteKey(kind: string, value: string) {
+    return `${kind}:${value.toLowerCase()}`;
+  }
+
+  function applyMute(kind: "source" | "tag" | "game", value: string) {
+    setMutedKeys((prev) => new Set([...prev, muteKey(kind, value)]));
+  }
+
+  function isMuted(item: GeneralNewsItem): boolean {
+    if (item.sourceName && mutedKeys.has(muteKey("source", item.sourceName))) return true;
+    const game = (item.aiGameTitle ?? "").trim().toLowerCase();
+    if (game && mutedKeys.has(muteKey("game", game))) return true;
+    for (const tag of item.aiTags ?? []) {
+      if (mutedKeys.has(muteKey("tag", tag))) return true;
+    }
+    return false;
+  }
 
   function handleVote(articleId: number, dir: 1 | -1) {
     const current = userVotes[articleId] ?? 0;
@@ -228,25 +250,88 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
     setShowAll(false);
   }
 
+  async function runSearch(e?: React.FormEvent) {
+    e?.preventDefault();
+    const q = searchInput.trim();
+    if (q.length < 2) {
+      setSearchResults(null);
+      return;
+    }
+    setSearchBusy(true);
+    try {
+      const res = await apiFetch(`/news/general/search?q=${encodeURIComponent(q)}&limit=24`, {
+        credentials: "include"
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        results?: Array<{
+          id: number;
+          title: string;
+          aiTitle: string | null;
+          aiSummary: string | null;
+          aiSubtitle: string | null;
+          publishedAt: string;
+          url: string;
+          imageUrl: string | null;
+          aiRelevanceScore: number | null;
+        }>;
+      };
+      setSearchResults(
+        (data.results ?? []).map((hit) => ({
+          id: hit.id,
+          sourceType: "rss" as const,
+          sourceName: "",
+          externalId: hit.url,
+          title: hit.aiTitle ?? hit.title,
+          url: hit.url,
+          contents: hit.aiSummary,
+          author: null,
+          imageUrl: hit.imageUrl,
+          publishedAt: hit.publishedAt,
+          matchedTags: [],
+          aiRelevanceScore: hit.aiRelevanceScore,
+          aiSummary: hit.aiSummary,
+          aiSubtitle: hit.aiSubtitle,
+          aiTags: [],
+          aiWhyRecommended: null,
+          aiLabel: null,
+          aiSpoilerWarning: false,
+          aiGameTitle: null,
+          upvotes: 0,
+          downvotes: 0
+        }))
+      );
+    } finally {
+      setSearchBusy(false);
+    }
+  }
+
+  function clearSearch() {
+    setSearchInput("");
+    setSearchResults(null);
+  }
+
+  const feedSource = searchResults ?? news;
+
   const availableGenres = useMemo(() => {
     const freq: Record<string, number> = {};
-    for (const item of news) {
+    for (const item of feedSource) {
       for (const tag of item.aiTags ?? []) {
         if (KNOWN_GENRES.has(tag)) freq[tag] = (freq[tag] ?? 0) + 1;
       }
     }
     return Object.entries(freq).sort((a, b) => b[1] - a[1]).map(([t]) => t);
-  }, [news]);
+  }, [feedSource]);
 
   const availablePlatforms = useMemo(() => {
     const freq: Record<string, number> = {};
-    for (const item of news) {
+    for (const item of feedSource) {
       for (const tag of item.aiTags ?? []) {
         if (KNOWN_PLATFORMS.has(tag)) freq[tag] = (freq[tag] ?? 0) + 1;
       }
     }
     return Object.entries(freq).sort((a, b) => b[1] - a[1]).map(([t]) => t);
-  }, [news]);
+  }, [feedSource]);
 
   function resetFilters() {
     setActiveTags(new Set());
@@ -254,7 +339,8 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   }
 
   const filtered = useMemo(() => {
-    let items = tab === "all" ? news : news.filter((item) => item.aiLabel === tab);
+    let items = tab === "all" ? feedSource : feedSource.filter((item) => item.aiLabel === tab);
+    items = items.filter((item) => !isMuted(item));
     if (activeTags.size > 0) {
       items = items.filter((i) => [...activeTags].every((t) => (i.aiTags ?? []).includes(t)));
     }
@@ -266,7 +352,7 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
       });
     }
     return items;
-  }, [news, tab, activeTags, sortMode]);
+  }, [feedSource, tab, activeTags, sortMode, mutedKeys]);
 
   const hero = filtered[0] ?? null;
   const featuredSmall = filtered.slice(1, FEATURED_COUNT);
@@ -341,11 +427,71 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
         }
       `}</style>
       <section style={{ display: "grid", gap: 14 }}>
+        <form onSubmit={runSearch} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search the archive…"
+            aria-label="Search gaming news"
+            style={{
+              flex: "1 1 200px",
+              minWidth: 0,
+              padding: "8px 12px",
+              borderRadius: 10,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              background: islandTheme.color.panelMutedBg,
+              color: islandTheme.color.textPrimary,
+              font: "inherit",
+              fontSize: 13
+            }}
+          />
+          <button
+            type="submit"
+            disabled={searchBusy || searchInput.trim().length < 2}
+            style={{
+              padding: "8px 14px",
+              borderRadius: 10,
+              border: "none",
+              background: islandTheme.color.primary,
+              color: "#fff",
+              fontWeight: 600,
+              fontSize: 13,
+              cursor: searchBusy ? "wait" : "pointer",
+              font: "inherit"
+            }}
+          >
+            {searchBusy ? "Searching…" : "Search"}
+          </button>
+          {searchResults ? (
+            <button
+              type="button"
+              onClick={clearSearch}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 10,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                background: "transparent",
+                color: islandTheme.color.textMuted,
+                fontSize: 12,
+                cursor: "pointer",
+                font: "inherit"
+              }}
+            >
+              Back to feed
+            </button>
+          ) : null}
+        </form>
+        {searchResults ? (
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+            {searchResults.length} result{searchResults.length === 1 ? "" : "s"} in the archive
+          </div>
+        ) : null}
         {/* Tab bar */}
         <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
           {NEWS_TABS.map((t) => {
             const active = t.id === tab;
-            const count = t.id === "all" ? news.length : news.filter((n) => n.aiLabel === t.id).length;
+            const count = t.id === "all" ? feedSource.length : feedSource.filter((n) => n.aiLabel === t.id).length;
             return (
               <button
                 key={t.id}
@@ -576,6 +722,11 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
           userVote={userVotes[activeArticle.id] ?? 0}
           onVote={(dir) => handleVote(activeArticle.id, dir)}
           onClose={() => setActiveArticle(null)}
+          onHidden={() => {
+            setActiveArticle(null);
+          }}
+          onMute={applyMute}
+          onOpenArticle={setActiveArticle}
         />
       )}
     </>
@@ -1183,20 +1334,94 @@ function NewsArticleModal({
   item,
   userVote,
   onVote,
-  onClose
+  onClose,
+  onHidden,
+  onMute,
+  onOpenArticle
 }: {
   item: GeneralNewsItem;
   userVote: 1 | -1 | 0;
   onVote: (dir: 1 | -1) => void;
   onClose: () => void;
+  onHidden?: () => void;
+  onMute?: (kind: "source" | "tag" | "game", value: string) => void;
+  onOpenArticle?: (item: GeneralNewsItem) => void;
 }) {
   const labelColor = LABEL_COLORS[item.aiLabel ?? ""] ?? islandTheme.color.textMuted;
   const labelText = LABEL_LABELS[item.aiLabel ?? ""] ?? null;
   const ago = relativeAgo(item.publishedAt);
   const displayTags = (item.aiTags ?? []).slice(0, 3);
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
-  // Source Attribution lists every source once — primary URL + AI-collected siblings.
   const sourceUrls = Array.from(new Set([item.url, ...(item.aiSources ?? [])].filter(Boolean)));
+  const [similar, setSimilar] = useState<GeneralNewsItem[] | null>(null);
+  const [similarBusy, setSimilarBusy] = useState(false);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  const muteTopic =
+    (item.aiGameTitle ?? "").trim().toLowerCase() ||
+    (item.aiTags ?? []).find((t) => !KNOWN_GENRES.has(t) && !KNOWN_PLATFORMS.has(t))?.toLowerCase() ||
+    "";
+
+  async function postMute(kind: "source" | "tag" | "game", value: string) {
+    await apiFetch("/news/general/mutes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ kind, value: value.toLowerCase() })
+    });
+    onMute?.(kind, value);
+    setActionMsg(kind === "source" ? "Source hidden from your feed." : "Topic hidden from your feed.");
+    onHidden?.();
+  }
+
+  async function loadSimilar() {
+    if (similar || similarBusy) return;
+    setSimilarBusy(true);
+    try {
+      const res = await apiFetch(`/news/general/${item.id}/similar?limit=6`, { credentials: "include" });
+      if (!res.ok) return;
+      const data = (await res.json()) as {
+        similar?: Array<{
+          id: number;
+          title: string;
+          aiTitle: string | null;
+          aiSummary: string | null;
+          aiSubtitle: string | null;
+          publishedAt: string;
+          url: string;
+          imageUrl: string | null;
+          aiRelevanceScore: number | null;
+        }>;
+      };
+      setSimilar(
+        (data.similar ?? []).map((hit) => ({
+          id: hit.id,
+          sourceType: "rss" as const,
+          sourceName: item.sourceName,
+          externalId: hit.url,
+          title: hit.aiTitle ?? hit.title,
+          url: hit.url,
+          contents: hit.aiSummary,
+          author: null,
+          imageUrl: hit.imageUrl,
+          publishedAt: hit.publishedAt,
+          matchedTags: [],
+          aiRelevanceScore: hit.aiRelevanceScore,
+          aiSummary: hit.aiSummary,
+          aiSubtitle: hit.aiSubtitle,
+          aiTags: [],
+          aiWhyRecommended: null,
+          aiLabel: null,
+          aiSpoilerWarning: false,
+          aiGameTitle: null,
+          upvotes: 0,
+          downvotes: 0
+        }))
+      );
+    } finally {
+      setSimilarBusy(false);
+    }
+  }
 
   function handleVote(e: React.MouseEvent, dir: 1 | -1) {
     e.stopPropagation();
@@ -1336,6 +1561,93 @@ function NewsArticleModal({
             Upvote to surface this story for the crew
           </span>
         </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+          <button
+            type="button"
+            onClick={() => void loadSimilar()}
+            disabled={similarBusy}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              border: `1px solid ${islandTheme.color.cardBorder}`,
+              background: islandTheme.color.panelMutedBg,
+              color: islandTheme.color.textPrimary,
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: similarBusy ? "wait" : "pointer",
+              font: "inherit"
+            }}
+          >
+            {similarBusy ? "Finding similar…" : "More like this"}
+          </button>
+          {item.sourceName ? (
+            <button
+              type="button"
+              onClick={() => void postMute("source", item.sourceName)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                background: "transparent",
+                color: islandTheme.color.textMuted,
+                fontSize: 12,
+                cursor: "pointer",
+                font: "inherit"
+              }}
+            >
+              Hide {item.sourceName}
+            </button>
+          ) : null}
+          {muteTopic ? (
+            <button
+              type="button"
+              onClick={() => void postMute("game", muteTopic)}
+              style={{
+                padding: "6px 12px",
+                borderRadius: 8,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                background: "transparent",
+                color: islandTheme.color.textMuted,
+                fontSize: 12,
+                cursor: "pointer",
+                font: "inherit"
+              }}
+            >
+              Hide topic
+            </button>
+          ) : null}
+        </div>
+        {actionMsg ? (
+          <div style={{ fontSize: 12, color: islandTheme.color.successAccent, marginBottom: 12 }}>{actionMsg}</div>
+        ) : null}
+        {similar && similar.length > 0 ? (
+          <div style={{ marginBottom: 20, display: "grid", gap: 8 }}>
+            <div className="island-mono" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: islandTheme.color.textMuted }}>
+              Similar stories
+            </div>
+            {similar.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => onOpenArticle?.(s)}
+                style={{
+                  textAlign: "left",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  background: islandTheme.color.panelMutedBg,
+                  color: islandTheme.color.textPrimary,
+                  cursor: "pointer",
+                  font: "inherit",
+                  fontSize: 13
+                }}
+              >
+                {s.aiTitle ?? s.title}
+              </button>
+            ))}
+          </div>
+        ) : null}
 
         {item.aiSummary && (
           <div

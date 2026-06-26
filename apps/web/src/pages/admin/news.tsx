@@ -40,7 +40,13 @@ import {
   smallBtn,
   SubsectionTitle
 } from "./adminUi.js";
-import { ADMIN_PAGES, inlineSettingKeysFor } from "./adminNav.js";
+import {
+  ADMIN_PAGES,
+  inlineSettingKeysFor,
+  NEWS_FEED_TUNING_KEYS,
+  NEWS_PRUNE_KEYS,
+  NEWS_STORAGE_TIER_KEYS
+} from "./adminNav.js";
 
 // Accent comes from the nav registry — one source for sidebar, search, and page chrome.
 const ACCENT = ADMIN_PAGES["news"].accent;
@@ -378,6 +384,13 @@ export function NewsAdminPage(props: NewsPageProps) {
           )
         },
         {
+          anchor: "news-retention",
+          label: "Archive",
+          content: (
+            <NewsRetentionSettingsPanel settings={settings} onSave={onUpdate} />
+          )
+        },
+        {
           anchor: "news-dev-cap",
           label: "Dev cap",
           content: (
@@ -429,6 +442,116 @@ export function NewsAdminPage(props: NewsPageProps) {
         }
       ]}
     />
+  );
+}
+
+// ── Archive & feed tuning ───────────────────────────────────────────────────
+
+function NewsRetentionSettingsPanel({
+  settings,
+  onSave
+}: {
+  settings: ServerSetting[];
+  onSave: (key: string, value: string) => Promise<void> | void;
+}) {
+  return (
+    <div style={{ display: "grid", gap: 14 }}>
+      <IslandCard style={{ padding: "16px 18px" }}>
+        <SubsectionTitle style={{ marginBottom: 8 }}>Tide &amp; archive</SubsectionTitle>
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.6 }}>
+          The news pipeline keeps three layers. <strong style={{ color: islandTheme.color.textPrimary }}>Hot</strong>{" "}
+          stories sit on the dock — full cards, embeddings, and auto-curation.{" "}
+          <strong style={{ color: islandTheme.color.textPrimary }}>Warm</strong> stories move to the archive: still
+          searchable, but stripped of bulky RSS text to save space. Anything past warm gets swept on the{" "}
+          <strong style={{ color: islandTheme.color.textPrimary }}>nightly tide</strong> (validation junk, never-curated
+          backlog, and truly ancient rows).
+        </p>
+        <p style={{ margin: "12px 0 0", fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.55 }}>
+          Settings below are grouped by what they affect: what the crew sees on Gaming News, how long we keep each tier,
+          and what the cleanup job is allowed to delete.
+        </p>
+      </IslandCard>
+
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+        <div>
+          <div
+            className="island-mono"
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: ACCENT,
+              marginBottom: 6
+            }}
+          >
+            What the crew sees
+          </div>
+          <p style={{ margin: "0 0 4px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+            Controls the Gaming News dock and when the server fetches fresh headlines — no extra AI cost, just RSS/API
+            timing and feed window.
+          </p>
+        </div>
+        <InlineSettings
+          keys={[...NEWS_FEED_TUNING_KEYS]}
+          settings={settings}
+          onSave={onSave}
+          title=""
+        />
+      </IslandCard>
+
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+        <div>
+          <div
+            className="island-mono"
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: ACCENT,
+              marginBottom: 6
+            }}
+          >
+            Hot &amp; warm storage
+          </div>
+          <p style={{ margin: "0 0 4px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+            How long raw articles and embeddings stay before the archive strips bulk and search keeps summaries only.
+          </p>
+        </div>
+        <InlineSettings
+          keys={[...NEWS_STORAGE_TIER_KEYS]}
+          settings={settings}
+          onSave={onSave}
+          title=""
+        />
+      </IslandCard>
+
+      <IslandCard style={{ padding: "16px 18px", display: "grid", gap: 12 }}>
+        <div>
+          <div
+            className="island-mono"
+            style={{
+              fontSize: 11,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: islandTheme.color.warnAccent,
+              marginBottom: 6
+            }}
+          >
+            Nightly cleanup
+          </div>
+          <p style={{ margin: "0 0 4px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+            Rows the nightly job is allowed to delete permanently. Lower numbers clear junk faster; raise them while
+            debugging a bad curation deploy.
+          </p>
+        </div>
+        <InlineSettings
+          keys={[...NEWS_PRUNE_KEYS]}
+          settings={settings}
+          onSave={onSave}
+          title=""
+        />
+      </IslandCard>
+    </div>
   );
 }
 
@@ -1138,6 +1261,8 @@ type ValidationFailureRow = {
   id: number;
   title: string;
   sourceName: string;
+  url: string;
+  excerpt: string;
   errors: string[];
   retryCount: number;
   curatedAt: string;
@@ -1203,21 +1328,41 @@ function ValidationFailuresStats() {
         {hasFailures ? `${data.count} article${data.count === 1 ? "" : "s"} failed validation` : "All articles passed"}
       </div>
       {hasFailures && data.recent.length > 0 ? (
-        <details>
-          <summary style={{ cursor: "pointer", fontSize: 12, color: islandTheme.color.textMuted, fontWeight: 600 }}>
-            Recent failures ({data.recent.length})
-          </summary>
-          <ul style={{ margin: "8px 0 0 0", paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
-            {data.recent.map((row) => (
-              <li key={row.id}>
-                <span style={{ color: islandTheme.color.textPrimary }}>{row.title}</span>{" "}
-                <span style={{ color: islandTheme.color.textMuted }}>
-                  · {row.sourceName} · {row.errors.join(", ") || "?"} · {row.retryCount} retr{row.retryCount === 1 ? "y" : "ies"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
+        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+          {data.recent.map((row) => (
+            <div
+              key={row.id}
+              style={{
+                padding: 12,
+                borderRadius: 10,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                background: islandTheme.color.panelMutedBg
+              }}
+            >
+              <div style={{ fontSize: 13, fontWeight: 600, color: islandTheme.color.textPrimary, lineHeight: 1.4 }}>
+                {row.title}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 11, color: islandTheme.color.textMuted }}>
+                {row.sourceName} · {row.errors.join(", ") || "?"} · {row.retryCount} retr
+                {row.retryCount === 1 ? "y" : "ies"}
+              </div>
+              {row.excerpt ? (
+                <p style={{ margin: "8px 0 0", fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                  {row.excerpt}
+                  {row.excerpt.length >= 280 ? "…" : ""}
+                </p>
+              ) : null}
+              <a
+                href={row.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: "inline-block", marginTop: 8, fontSize: 11, color: islandTheme.color.primaryGlow }}
+              >
+                Open source ↗
+              </a>
+            </div>
+          ))}
+        </div>
       ) : null}
     </IslandCard>
   );
@@ -1517,6 +1662,15 @@ function NewsSourceRegistryPanel({ accent }: { accent: string }) {
                       {src.identifier}
                       {src.last_fetched_at && ` · fetched ${new Date(src.last_fetched_at).toLocaleString()}`}
                     </div>
+                    {(src.items_fetched_total ?? 0) > 0 ? (
+                      <div style={{ fontSize: 11, color: islandTheme.color.textSubtle, marginTop: 2 }}>
+                        Yield: {src.items_curated_total ?? 0}/{src.items_fetched_total} curated
+                        {(src.validation_fail_total ?? 0) > 0
+                          ? ` · ${src.validation_fail_total} validation fail`
+                          : ""}
+                        {(src.fail_streak ?? 0) > 0 ? ` · ${src.fail_streak} fail streak` : ""}
+                      </div>
+                    ) : null}
                     {preview && (
                       <div style={{ marginTop: 6, padding: 6, borderRadius: 4, background: islandTheme.color.panelBg, fontSize: 12, color: islandTheme.color.textSubtle }}>
                         {preview.error ? (

@@ -35,7 +35,8 @@ const patchSchema = z
 newsSourcesRouter.get("/", async (_req, res) => {
   const r = await db.query<NewsSourceRow>(
     `SELECT id::text, kind, slug, name, identifier, enabled, is_preset, config,
-            last_fetched_at, last_error
+            last_fetched_at, last_error, last_success_at, fail_streak,
+            items_fetched_total, items_curated_total, validation_fail_total
        FROM news_source_registry
       ORDER BY kind, name`
   );

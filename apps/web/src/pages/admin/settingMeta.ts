@@ -230,6 +230,100 @@ const RAW: SettingMeta[] = [
     domain: "content",
     type: "password"
   },
+  {
+    key: "news_retention_hot_days",
+    label: "Hot tier window (days)",
+    description:
+      "Stories younger than this live on the hot shelf: full article text, Bedrock embeddings, and eligibility for automatic AI curation. This is the active news cycle the pipeline spends tokens on.",
+    whenToChange:
+      "Raise if you want a longer auto-curate window without re-running Regenerate. Lower if storage or Bedrock cost is climbing and you are fine trimming older raw articles sooner.",
+    example: "90",
+    ifWrong: "Too low and you may strip content before a slow news week finishes curating. Too high and the database + embedding backlog stays bloated.",
+    tags: ["news", "retention", "hot", "storage", "archive"],
+    dangerLevel: "low",
+    domain: "content",
+    type: "number"
+  },
+  {
+    key: "news_retention_warm_days",
+    label: "Warm archive window (days)",
+    description:
+      "Between hot and warm age, stories move to the archive: title, AI summary, and tags stay searchable, but raw RSS body text and embeddings are stripped to save space. Anything older than warm is deleted on the nightly sweep.",
+    whenToChange:
+      "Raise if the crew uses Search the archive often and you want older headlines findable. Lower if you mostly care about fresh dock news and want a leaner database.",
+    example: "365",
+    ifWrong: "Too short and search results disappear quickly. Too long and you are storing summaries for years of headlines nobody reads.",
+    tags: ["news", "retention", "warm", "search", "archive"],
+    dangerLevel: "low",
+    domain: "content",
+    type: "number"
+  },
+  {
+    key: "news_retention_prune_validation_days",
+    label: "Delete validation failures after (days)",
+    description:
+      "Articles the AI could not format correctly (missing summary, sources, etc.) are hidden from the feed but still sit in the database until this many days pass — then the nightly job deletes them for good.",
+    whenToChange:
+      "After a bad deploy left thousands of failures, lower temporarily (e.g. 14) to clear junk faster. Raise if you are actively debugging failures and need samples to stay around.",
+    example: "45",
+    ifWrong: "Too low and you may delete rows you still wanted to inspect in the Validation tab.",
+    tags: ["news", "retention", "validation", "prune", "archive"],
+    dangerLevel: "medium",
+    domain: "content",
+    type: "number"
+  },
+  {
+    key: "news_retention_prune_uncurated_days",
+    label: "Delete never-curated rows after (days)",
+    description:
+      "RSS rows that were ingested but never became a card (stuck waiting for curation, pre-filtered, or abandoned) get deleted after this age. Stops dead-source noise from filling the database forever.",
+    whenToChange:
+      "When ingest logs show lots of fetched items but zero new cards, and the uncurated backlog is mostly old noise.",
+    example: "45",
+    ifWrong: "Too low during a long Regenerate run could delete rows before the curator reaches them — keep above your worst-case re-curate duration.",
+    tags: ["news", "retention", "uncurated", "prune", "archive"],
+    dangerLevel: "medium",
+    domain: "content",
+    type: "number"
+  },
+  {
+    key: "news_feed_freshness_days",
+    label: "Dock feed freshness (days)",
+    description:
+      "The main Gaming News page shows curated cards from this window first. Breaking stories with a very high relevance score (≥ 0.85) can still surface as evergreen picks even when they are older — so a massive launch does not vanish on day 46.",
+    whenToChange:
+      "Tighten (e.g. 30) if the dock feels stale or cluttered. Loosen if an ongoing saga (early access launch, studio drama) should stay visible longer without relying on evergreen scores alone.",
+    example: "45",
+    tags: ["news", "feed", "freshness", "dock"],
+    dangerLevel: "low",
+    domain: "content",
+    type: "number"
+  },
+  {
+    key: "news_stale_ingest_hours",
+    label: "Stale feed check (hours)",
+    description:
+      "When page-load ingest is off, a crew visit to Gaming News only triggers a background fetch if the newest live card is older than this. The 4-hour server cron still runs regardless.",
+    whenToChange:
+      "Lower (e.g. 3) if the feed should refresh sooner when people open the page. Raise if RSS/API quota is tight and the cron is enough.",
+    example: "6",
+    tags: ["news", "ingest", "stale", "fetch"],
+    dangerLevel: "low",
+    domain: "content",
+    type: "number"
+  },
+  {
+    key: "news_ingest_on_page_load",
+    label: "Fetch on every page visit",
+    description:
+      "Legacy mode: every time someone opens Gaming News, the server kicks off ingest in the background. Off is recommended — the cron + stale check above keep the dock fresh without hammering sources on every refresh.",
+    whenToChange:
+      "Turn on only if you need maximum freshness and accept higher RSS/API churn. Leave off for normal operation.",
+    tags: ["news", "ingest", "page load", "fetch"],
+    dangerLevel: "low",
+    domain: "content",
+    type: "boolean"
+  },
 
   // ── Engagement · Nuggies economy ─────────────────────────────────────────
   {

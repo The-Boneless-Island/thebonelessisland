@@ -284,6 +284,7 @@ export type GeneralNewsItem = {
   aiGameTitle: string | null;
   aiTitle?: string | null;
   aiSources?: string[] | null;
+  linkedAppId?: number | null;
   upvotes: number;
   downvotes: number;
 };

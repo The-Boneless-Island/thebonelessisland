@@ -34,6 +34,8 @@ import { nuggiesGamesRouter } from "./routes/nuggiesGames.js";
 import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { runNewsPipelineHealthSweep } from "./lib/news/newsCurationHealth.js";
+import { reconcileInterruptedPipelineJobs } from "./lib/news/newsPipelineJobs.js";
+import { runNewsRetentionSweep } from "./lib/news/newsRetention.js";
 import { ingestNewsForApps } from "./lib/gameNewsIngestion.js";
 import { resolveCrewLibraryAppIds } from "./lib/patchAlerts.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
@@ -418,11 +420,10 @@ async function bootstrap() {
 
   try {
     await seedCuratedSources();
+    await reconcileInterruptedPipelineJobs();
   } catch (err) {
     console.error("[boot] news source seed failed — starting anyway:", err);
   }
-
-  // Refresh taglines on startup if stale (> 7 days), then check daily
   try {
     if (await isTaglineStale()) {
       console.log("[boot] taglines stale — refreshing...");
@@ -492,6 +493,14 @@ async function bootstrap() {
     });
   setTimeout(runHealthSweep, 2 * 60 * 1000);
   setInterval(runHealthSweep, 6 * 60 * 60 * 1000);
+
+  // Nightly retention: tier assignment, warm-tier stripping, prune dead rows.
+  const runRetentionSweep = () =>
+    runNewsRetentionSweep().catch((err) => {
+      console.error("[news-retention] sweep failed:", err);
+    });
+  setTimeout(runRetentionSweep, 5 * 60 * 1000);
+  setInterval(runRetentionSweep, 24 * 60 * 60 * 1000);
 
   // Crew-library patch alerts: poll Steam/RSS sources on a tighter cadence than
   // the lazy page-load ingest so Discord alerts land within ~20 minutes.

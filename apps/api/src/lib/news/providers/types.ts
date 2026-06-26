@@ -16,6 +16,11 @@ export type NewsSourceRow = {
   config: Record<string, unknown>;
   last_fetched_at: string | null;
   last_error: string | null;
+  last_success_at?: string | null;
+  fail_streak?: number;
+  items_fetched_total?: number;
+  items_curated_total?: number;
+  validation_fail_total?: number;
 };
 
 /** Crew context passed to every provider for relevance tagging. */

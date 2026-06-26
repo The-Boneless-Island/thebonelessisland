@@ -7,7 +7,10 @@ import {
   countMissingEmbeddings,
   isEmbeddingColumnAvailable
 } from "../lib/news/embeddings.js";
-import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages } from "../lib/generalNewsIngestion.js";
+import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages, maybeBackgroundIngest } from "../lib/generalNewsIngestion.js";
+import { buildGeneralNewsFeedQuery } from "../lib/news/newsFeed.js";
+import { savePipelineJob, reconcileInterruptedPipelineJobs } from "../lib/news/newsPipelineJobs.js";
+import { findSimilarArticles, searchGeneralNews } from "../lib/news/newsSearch.js";
 import { getNewsPipelineHealth, reportCurationPassOutcome } from "../lib/news/newsCurationHealth.js";
 
 export const generalNewsRouter = Router();
@@ -34,6 +37,7 @@ type GeneralNewsRow = {
   ai_game_title: string | null;
   ai_title: string | null;
   ai_sources: string[] | null;
+  linked_app_id: number | null;
   upvotes: number;
   downvotes: number;
 };
@@ -43,103 +47,11 @@ type GeneralNewsRow = {
  * Returns curated general gaming news from external sources.
  * Triggers background ingestion to top-up the feed if needed.
  */
-generalNewsRouter.get("/general", async (_req, res) => {
+generalNewsRouter.get("/general", async (req, res) => {
   try {
-    // Display-time fingerprint collapse — defensive layer beneath curation-time
-    // merge. Collapses cards into a single primary along TWO axes:
-    //  1. Exact-fingerprint match (within any date).
-    //  2. Same fingerprint ENTITY (left of the ":") within the same calendar
-    //     week. Handles the common failure mode where AI emits drifting
-    //     event-topic handles for the same news cycle ("cadence-shift" vs
-    //     "update-cadence" vs "six-month-cadence" — all entity=arc-raiders).
-    // Rows without a fingerprint partition by their unique external_id so
-    // they never accidentally merge with anything.
-    //
-    // Cluster_key construction:
-    //   if fp present: lower(entity) || '::' || week_bucket  →  group by entity/week
-    //   else:          external_id                            →  always rk=1
-    const result = await db.query<GeneralNewsRow>(
-      `
-        WITH ranked AS (
-          SELECT
-            gn.*,
-            CASE
-              WHEN gn.ai_story_fingerprint IS NOT NULL
-                AND gn.ai_story_fingerprint <> ''
-                AND POSITION(':' IN gn.ai_story_fingerprint) > 1
-                THEN LOWER(split_part(gn.ai_story_fingerprint, ':', 1))
-                  || '::'
-                  || to_char(DATE_TRUNC('week', gn.published_at), 'YYYY-MM-DD')
-              ELSE gn.external_id
-            END AS cluster_key,
-            ROW_NUMBER() OVER (
-              PARTITION BY
-                CASE
-                  WHEN gn.ai_story_fingerprint IS NOT NULL AND gn.ai_story_fingerprint <> ''
-                    THEN LOWER(split_part(gn.ai_story_fingerprint, ':', 1))
-                      || '::'
-                      || to_char(DATE_TRUNC('week', gn.published_at), 'YYYY-MM-DD')
-                  ELSE gn.external_id
-                END
-              ORDER BY gn.ai_relevance_score DESC NULLS LAST, gn.published_at DESC
-            ) AS rk
-          FROM general_news gn
-          WHERE COALESCE(gn.ai_relevance_score, 1) > 0
-            AND gn.ai_validation_failed = FALSE
-        ),
-        cluster_urls AS (
-          SELECT
-            cluster_key,
-            array_agg(DISTINCT url) AS sibling_urls
-          FROM ranked
-          WHERE ai_story_fingerprint IS NOT NULL AND ai_story_fingerprint <> ''
-          GROUP BY cluster_key
-          HAVING COUNT(*) > 1
-        )
-        SELECT
-          r.id,
-          r.source_type,
-          r.source_name,
-          r.external_id,
-          r.title,
-          r.url,
-          r.contents,
-          r.author,
-          r.image_url,
-          r.published_at,
-          r.matched_tags,
-          r.ai_relevance_score,
-          r.ai_summary,
-          r.ai_subtitle,
-          r.ai_tags,
-          r.ai_why_recommended,
-          r.ai_label,
-          r.ai_spoiler_warning,
-          r.ai_game_title,
-          r.ai_title,
-          CASE
-            WHEN cu.sibling_urls IS NOT NULL THEN (
-              SELECT array_agg(DISTINCT u)
-              FROM unnest(COALESCE(r.ai_sources, '{}'::text[]) || cu.sibling_urls) AS u
-            )
-            ELSE r.ai_sources
-          END AS ai_sources,
-          fb.upvotes,
-          fb.downvotes
-        FROM ranked r
-        LEFT JOIN cluster_urls cu ON cu.cluster_key = r.cluster_key
-        LEFT JOIN LATERAL (
-          SELECT
-            COUNT(*) FILTER (WHERE rating = 1)::int  AS upvotes,
-            COUNT(*) FILTER (WHERE rating = -1)::int AS downvotes
-          FROM general_news_feedback
-          WHERE news_id = r.id
-        ) fb ON true
-        WHERE r.rk = 1
-        ORDER BY (COALESCE(r.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes) * 0.2) DESC, r.published_at DESC
-        LIMIT 50
-      `
-    );
+    const userId = req.session?.userId as string | undefined;
+    const { sql, params } = buildGeneralNewsFeedQuery(userId);
+    const result = await db.query<GeneralNewsRow>(sql, params);
 
     const news = result.rows.map((row) => ({
       id: row.id,
@@ -163,19 +75,141 @@ generalNewsRouter.get("/general", async (_req, res) => {
       aiGameTitle: row.ai_game_title,
       aiTitle: row.ai_title,
       aiSources: row.ai_sources,
+      linkedAppId: row.linked_app_id,
       upvotes: row.upvotes,
       downvotes: row.downvotes
     }));
 
     res.json({ news });
 
-    // Background: top-up the feed without blocking the response
-    ingestAndCurateGeneralNews().catch((err) => {
+    maybeBackgroundIngest().catch((err) => {
       console.error("[generalNews] Background ingestion error:", err);
     });
   } catch (err) {
     console.error("[generalNews] GET /news/general error:", err);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+/**
+ * GET /news/general/search?q=
+ * Hybrid keyword + embedding search over hot/warm primaries.
+ */
+generalNewsRouter.get("/general/search", requireSession, async (req, res) => {
+  try {
+    const q = String(req.query.q ?? "").trim();
+    if (q.length < 2) {
+      res.status(400).json({ error: "Query must be at least 2 characters" });
+      return;
+    }
+    const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit ?? "20"), 10) || 20));
+    const hits = await searchGeneralNews(q, limit);
+    res.json({ ok: true, query: q, results: hits });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/search error:", err);
+    res.status(500).json({ ok: false, error: "Search failed" });
+  }
+});
+
+/**
+ * GET /news/general/:id/similar
+ * Embedding neighbors for "More like this".
+ */
+generalNewsRouter.get("/general/:id/similar", requireSession, async (req, res) => {
+  try {
+    const newsId = parseInt(req.params.id as string, 10);
+    if (!Number.isFinite(newsId)) {
+      res.status(400).json({ error: "Invalid article ID" });
+      return;
+    }
+    const limit = Math.min(12, Math.max(1, parseInt(String(req.query.limit ?? "6"), 10) || 6));
+    const similar = await findSimilarArticles(newsId, limit);
+    res.json({ ok: true, similar });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/:id/similar error:", err);
+    res.status(500).json({ ok: false, error: "Similar lookup failed" });
+  }
+});
+
+/**
+ * GET /news/general/mutes — list current member's feed mutes.
+ */
+generalNewsRouter.get("/general/mutes", requireSession, async (_req, res) => {
+  try {
+    const discordUserId = res.locals.userId as string;
+    const r = await db.query<{ kind: string; value: string }>(
+      `SELECT gnm.kind, gnm.value
+         FROM general_news_mutes gnm
+         INNER JOIN users u ON u.id = gnm.user_id
+        WHERE u.discord_user_id = $1
+        ORDER BY gnm.created_at DESC`,
+      [discordUserId]
+    );
+    res.json({ ok: true, mutes: r.rows });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/mutes error:", err);
+    res.status(500).json({ ok: false, error: "Failed to load mutes" });
+  }
+});
+
+/**
+ * POST /news/general/mutes — hide a source, tag, or game from the feed.
+ */
+generalNewsRouter.post("/general/mutes", requireSession, async (req, res) => {
+  try {
+    const discordUserId = res.locals.userId as string;
+    const { kind, value } = req.body as { kind?: string; value?: string };
+    if (kind !== "source" && kind !== "tag" && kind !== "game") {
+      res.status(400).json({ error: "kind must be source, tag, or game" });
+      return;
+    }
+    const normalized = (value ?? "").trim().toLowerCase();
+    if (normalized.length < 1 || normalized.length > 120) {
+      res.status(400).json({ error: "value required (1–120 chars)" });
+      return;
+    }
+    await db.query(
+      `INSERT INTO general_news_mutes (user_id, kind, value)
+       SELECT u.id, $2, $3 FROM users u WHERE u.discord_user_id = $1
+       ON CONFLICT (user_id, kind, value) DO NOTHING`,
+      [discordUserId, kind, normalized]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[generalNews] POST /news/general/mutes error:", err);
+    res.status(500).json({ ok: false, error: "Failed to save mute" });
+  }
+});
+
+/**
+ * DELETE /news/general/mutes — clear one mute or all mutes.
+ */
+generalNewsRouter.delete("/general/mutes", requireSession, async (req, res) => {
+  try {
+    const discordUserId = res.locals.userId as string;
+    const { kind, value } = (req.body ?? {}) as { kind?: string; value?: string };
+    if (kind && value) {
+      await db.query(
+        `DELETE FROM general_news_mutes gnm
+          USING users u
+         WHERE u.id = gnm.user_id
+           AND u.discord_user_id = $1
+           AND gnm.kind = $2
+           AND gnm.value = $3`,
+        [discordUserId, kind, value.trim().toLowerCase()]
+      );
+    } else {
+      await db.query(
+        `DELETE FROM general_news_mutes gnm
+          USING users u
+         WHERE u.id = gnm.user_id AND u.discord_user_id = $1`,
+        [discordUserId]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[generalNews] DELETE /news/general/mutes error:", err);
+    res.status(500).json({ ok: false, error: "Failed to remove mute" });
   }
 });
 
@@ -281,6 +315,7 @@ async function runEmbedBackfillJob(): Promise<void> {
     state: "running",
     startedAt: Date.now()
   };
+  await savePipelineJob("embed_backfill", "running", { ...embedBackfillJob }, { startedAt: new Date(), finishedAt: null, error: null });
 
   try {
     if (!(await isEmbeddingColumnAvailable())) {
@@ -316,6 +351,8 @@ async function runEmbedBackfillJob(): Promise<void> {
       const handled = batch.embedded + batch.skipped;
       if (embedBackfillJob.remaining === 0 || handled === 0) break;
 
+      await savePipelineJob("embed_backfill", "running", { ...embedBackfillJob });
+
       if (embedBackfillCancelRequested) break;
       await new Promise((resolve) => setTimeout(resolve, EMBED_BACKFILL_PAUSE_MS));
     }
@@ -331,6 +368,10 @@ async function runEmbedBackfillJob(): Promise<void> {
     embedBackfillJob.finishedAt = Date.now();
     console.error("[generalNews] embed backfill job failed:", err);
   }
+  await savePipelineJob("embed_backfill", embedBackfillJob.state, { ...embedBackfillJob }, {
+    error: embedBackfillJob.error,
+    finishedAt: embedBackfillJob.finishedAt ? new Date(embedBackfillJob.finishedAt) : new Date()
+  });
 }
 
 /**
@@ -495,6 +536,7 @@ async function runRecurateJob(): Promise<void> {
     state: "running",
     startedAt: Date.now()
   };
+  await savePipelineJob("recurate", "running", { ...recurateJob }, { startedAt: new Date(), finishedAt: null, error: null });
   try {
     const reset = await resetAllCuration();
     recurateJob.reset = reset;
@@ -525,6 +567,8 @@ async function runRecurateJob(): Promise<void> {
       recurateJob.duplicates = breakdown.duplicates;
       recurateJob.failed = breakdown.failed;
       recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
+
+      await savePipelineJob("recurate", "running", { ...recurateJob });
 
       if (recurateCancelRequested) {
         console.warn("[generalNews] recurate cancelled by admin after pass");
@@ -577,6 +621,10 @@ async function runRecurateJob(): Promise<void> {
       costUsdStart: costAtStart
     });
   }
+  await savePipelineJob("recurate", recurateJob.state, { ...recurateJob }, {
+    error: recurateJob.error,
+    finishedAt: recurateJob.finishedAt ? new Date(recurateJob.finishedAt) : new Date()
+  });
 }
 
 /**
@@ -645,16 +693,20 @@ generalNewsRouter.get("/general/validation-failures", requireSession, requirePar
     id: number;
     title: string;
     source_name: string;
+    url: string;
+    contents: string | null;
     ai_last_validation_errors: string[] | null;
     ai_retry_count: number;
     ai_curated_at: string;
+    pre_filter_reason: string | null;
   }>(
     `
-      SELECT id, title, source_name, ai_last_validation_errors, ai_retry_count, ai_curated_at
+      SELECT id, title, source_name, url, contents,
+             ai_last_validation_errors, ai_retry_count, ai_curated_at, pre_filter_reason
       FROM general_news
       WHERE ai_validation_failed = TRUE
       ORDER BY ai_curated_at DESC NULLS LAST
-      LIMIT 20
+      LIMIT 50
     `
   );
   res.json({
@@ -663,9 +715,12 @@ generalNewsRouter.get("/general/validation-failures", requireSession, requirePar
       id: r.id,
       title: r.title,
       sourceName: r.source_name,
+      url: r.url,
+      excerpt: (r.contents ?? "").slice(0, 280),
       errors: r.ai_last_validation_errors ?? [],
       retryCount: r.ai_retry_count,
-      curatedAt: r.ai_curated_at
+      curatedAt: r.ai_curated_at,
+      preFilterReason: r.pre_filter_reason
     }))
   });
 });

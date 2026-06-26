@@ -12,8 +12,19 @@ import {
   backfillEmbeddings,
   countMissingEmbeddings
 } from "./news/embeddings.js";
+import { linkNewsToGame } from "./news/gameLinking.js";
+import { applyPreFilter } from "./news/newsPreFilter.js";
+import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
+import { shouldTriggerBackgroundIngest } from "./news/newsRetention.js";
 import { reportCurationPassOutcome, setLastBatchDiagnostics } from "./news/newsCurationHealth.js";
 import { resolveHeroImage } from "./news/ogImage.js";
+import {
+  recordSourceCurated,
+  recordSourceFetchError,
+  recordSourceFetchSuccess,
+  recordSourceValidationFail
+} from "./news/sourceQuality.js";
+import { isRepairableValidation, tryValidationRepair } from "./news/validationRepair.js";
 import { getAISetting } from "./serverSettings.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -161,7 +172,6 @@ function curationMaxTokens(batchLen: number): number {
 // content-overlap merging. AI still judges actual content overlap.
 const CLUSTER_WINDOW = "14 days";
 
-let ingestionInFlight = false;
 let lastIngestedAt = 0;
 const INGEST_COOLDOWN_MS = 60 * 60 * 1000;
 
@@ -439,22 +449,12 @@ function groupAndPack(
 // Per-source status (last_fetched_at, last_error) is persisted so the admin UI
 // can surface dead/misconfigured sources.
 
-async function markSourceFetched(id: string): Promise<void> {
-  await db.query(
-    `UPDATE news_source_registry
-       SET last_fetched_at = NOW(), last_error = NULL, updated_at = NOW()
-     WHERE id = $1`,
-    [id]
-  );
+async function markSourceFetched(id: string, itemCount: number): Promise<void> {
+  await recordSourceFetchSuccess(id, itemCount);
 }
 
 async function markSourceError(id: string, error: string): Promise<void> {
-  await db.query(
-    `UPDATE news_source_registry
-       SET last_error = $2, updated_at = NOW()
-     WHERE id = $1`,
-    [id, error.slice(0, 500)]
-  );
+  await recordSourceFetchError(id, error);
 }
 
 async function fetchFromRegistry(crewTags: string[], gameNames: string[]): Promise<FeedItem[]> {
@@ -480,7 +480,7 @@ async function fetchFromRegistry(crewTags: string[], gameNames: string[]): Promi
     }
     try {
       const items = await provider.fetch(s, { crewTags, gameNames });
-      await markSourceFetched(s.id);
+      await markSourceFetched(s.id, items.length);
       console.log(`[generalNews] fetched ${items.length} from ${s.kind}/${s.slug}`);
       return items;
     } catch (err) {
@@ -1377,6 +1377,40 @@ async function curateBatchWithValidation(
     }
   }
 
+  for (const o of outcomes) {
+    if (o.errors.length === 0 || !isRepairableValidation(o.errors)) continue;
+    const repair = await tryValidationRepair({
+      externalId: o.item.external_id,
+      title: o.item.title,
+      url: o.item.url,
+      excerpt: (o.item.contents ?? o.item.title).slice(0, 1500),
+      partial: {
+        id: o.item.external_id,
+        title: o.result.title,
+        summary: o.result.summary,
+        whyMatters: o.result.whyMatters,
+        sources: o.result.sources
+      },
+      errors: o.errors,
+      batchUrls
+    });
+    if (!repair) continue;
+    const patched = ensurePrimarySources(
+      {
+        ...o.result,
+        id: o.item.external_id,
+        title: repair.title?.trim() || o.result.title,
+        summary: repair.summary?.trim() || o.result.summary,
+        whyMatters: repair.whyMatters?.trim() || o.result.whyMatters,
+        sources: Array.isArray(repair.sources) && repair.sources.length > 0 ? repair.sources : o.result.sources
+      },
+      o.item
+    );
+    o.result = patched;
+    o.errors = validateCuration(patched, batchUrls);
+    o.attempts++;
+  }
+
   const failed = outcomes.filter((o) => o.errors.length > 0);
   setLastBatchDiagnostics({
     batchSize: items.length,
@@ -1521,9 +1555,13 @@ async function persistCurationOutcome(
   );
 
   if (validationFailed) {
+    await recordSourceValidationFail(item.source_name);
     console.warn(
       `[generalNews] validation failed after ${attempts} attempts for ${item.external_id}: ${errors.join(",")}`
     );
+  } else if (!result.duplicate && !isMerge(result)) {
+    await recordSourceCurated(item.source_name);
+    void linkNewsToGame(item.id, result.gameTitle ?? null);
   }
 
   // Embed the newly-curated primary so future ingests can match against the
@@ -1554,16 +1592,22 @@ async function persistCurationOutcome(
  * then AI-curate any un-curated rows.
  * Safe to call fire-and-forget — all errors are caught internally.
  */
+/** Fire-and-forget ingest when the public feed is stale (or legacy page-load mode). */
+export async function maybeBackgroundIngest(): Promise<void> {
+  if (!(await shouldTriggerBackgroundIngest())) return;
+  void ingestAndCurateGeneralNews(false);
+}
+
 export async function ingestAndCurateGeneralNews(
   force = false
 ): Promise<{ fetched: number; curated: number; embedded: number }> {
   const enabled = getAISetting("news_general_enabled");
   if (enabled === "false") return { fetched: 0, curated: 0, embedded: 0 };
-  if (ingestionInFlight) return { fetched: 0, curated: 0, embedded: 0 };
   if (!force && Date.now() - lastIngestedAt < INGEST_COOLDOWN_MS) {
     return { fetched: 0, curated: 0, embedded: 0 };
   }
-  ingestionInFlight = true;
+
+  const locked = await withNewsPipelineLock(async () => {
   const costAtStart = getAiCostTotalUsd();
 
   let totalFetched = 0;
@@ -1615,14 +1659,16 @@ export async function ingestAndCurateGeneralNews(
       [curationPoolSize()]
     );
 
-    if (uncurated.rows.length > 0) {
+    const filteredRows = await applyPreFilter(uncurated.rows);
+
+    if (filteredRows.length > 0) {
       try {
         const crewContext = await buildCrewContext();
         // Pre-cluster every uncurated article with a cheap AI fingerprint
         // pass. Ensures siblings about the same story land in the same batch
         // even when the title-regex heuristic would scatter them.
-        const fingerprintMap = await assignStoryFingerprints(uncurated.rows);
-        const batches = groupAndPack(uncurated.rows, curationBatchSize(), fingerprintMap);
+        const fingerprintMap = await assignStoryFingerprints(filteredRows);
+        const batches = groupAndPack(filteredRows, curationBatchSize(), fingerprintMap);
         for (const batch of batches) {
           // Re-fetch per batch so later batches see primaries persisted by
           // earlier batches in this same pass (critical during re-curate of
@@ -1662,7 +1708,6 @@ export async function ingestAndCurateGeneralNews(
     console.error("[generalNews] Ingestion error:", err);
   } finally {
     lastIngestedAt = Date.now();
-    ingestionInFlight = false;
     // Chip away at embedding backlog each pass — avoids one-time migration gaps
     // requiring a manual "Embed Missing" marathon.
     try {
@@ -1690,6 +1735,10 @@ export async function ingestAndCurateGeneralNews(
   }
 
   return { fetched: totalFetched, curated: totalCurated, embedded: totalEmbedded };
+  });
+
+  if (!locked.ran) return { fetched: 0, curated: 0, embedded: 0 };
+  return locked.result;
 }
 
 /**
@@ -1785,30 +1834,22 @@ export async function curateUncuratedGeneralNews(
       [poolLimit]
     );
 
-    // Phase 2 (tail): if no in-window candidates left, fall back to older articles.
-    if (uncurated.rows.length === 0) {
-      uncurated = await db.query<RawGeneral>(
-        `
-          SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
-          FROM general_news
-          WHERE ai_curated_at IS NULL
-          ORDER BY published_at DESC
-          LIMIT $1
-        `,
-        [curationBatchSize()]
-      );
-    }
+    // Phase 2 removed — auto-curation stays within CLUSTER_WINDOW to control Bedrock cost.
+    // Use admin bulk re-curate for older backlog.
   }
 
   if (uncurated.rows.length === 0) return 0;
 
+  const locked = await withNewsPipelineLock(async () => {
   const costAtStart = getAiCostTotalUsd();
   let batchFailed = 0;
 
   try {
     const [crewContext, crewEntityNames] = await Promise.all([buildCrewContext(), getCrewEntityNames()]);
-    const fingerprintMap = await assignStoryFingerprints(uncurated.rows);
-    const batches = groupAndPack(uncurated.rows, curationBatchSize(), fingerprintMap);
+    const filteredRows = await applyPreFilter(uncurated.rows);
+    if (filteredRows.length === 0) return 0;
+    const fingerprintMap = await assignStoryFingerprints(filteredRows);
+    const batches = groupAndPack(filteredRows, curationBatchSize(), fingerprintMap);
     let count = 0;
     for (const batch of batches) {
       const existingPrimaries = await fetchRecentPrimaries();
@@ -1857,4 +1898,8 @@ export async function curateUncuratedGeneralNews(
     }
     return 0;
   }
+  });
+
+  if (!locked.ran) return 0;
+  return locked.result;
 }
