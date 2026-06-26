@@ -18,7 +18,11 @@ import { isFreshCorpusMode, retireStaleUncuratedBacklog } from "./news/newsBackl
 import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
 import { getIngestMaxAgeDays } from "./news/newsPipelineDiagnostics.js";
 import { shouldTriggerBackgroundIngest } from "./news/newsRetention.js";
-import { reportCurationPassOutcome, setLastBatchDiagnostics } from "./news/newsCurationHealth.js";
+import {
+  getLastBatchDiagnostics,
+  reportCurationPassOutcome,
+  setLastBatchDiagnostics
+} from "./news/newsCurationHealth.js";
 import { resolveHeroImage } from "./news/ogImage.js";
 import {
   recordSourceCurated,
@@ -93,6 +97,8 @@ const MAX_RETRIES_PER_ARTICLE = 2;
 const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
 /** Minimum summary length — keep aligned with curator prompt (thin excerpts still need 2–3 sentences). */
 const MIN_SUMMARY_CHARS = 120;
+/** Default score for salvage/repair/fallback cards so they can appear in the feed. */
+const FALLBACK_RELEVANCE_SCORE = 0.55;
 
 // ── Outlet name blocklist ──────────────────────────────────────────────────
 // Populated dynamically from news_source_registry at the start of every
@@ -1253,6 +1259,41 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
   };
 }
 
+function applyDefaultRelevanceScore(result: GeneralCurationResult): GeneralCurationResult {
+  if ((result.relevanceScore ?? 0) > 0) return result;
+  if (result.duplicate || isMerge(result)) return result;
+  return { ...result, relevanceScore: FALLBACK_RELEVANCE_SCORE };
+}
+
+/** Deterministic card when Bedrock returns empty or unmatched output. */
+function buildFallbackCurationResult(item: RawGeneral): GeneralCurationResult {
+  const title =
+    item.title.trim().length >= 8 ? item.title.trim() : item.title.trim() || "Gaming news update";
+  const body = (item.contents ?? "").trim();
+  let summary = [body, title].filter(Boolean).join("\n\n").trim();
+  if (summary.length < MIN_SUMMARY_CHARS) {
+    summary = `${title}\n\n${body || "See the linked article for full details."}`.trim();
+  }
+  while (summary.length < MIN_SUMMARY_CHARS) {
+    summary += " More coverage may follow as the story develops.";
+  }
+  const whyMatters =
+    `Worth a look for the crew — this ${item.source_name} story may affect games on your shelf or tonight's picks.`;
+  return {
+    id: item.external_id,
+    relevanceScore: FALLBACK_RELEVANCE_SCORE,
+    label: "community",
+    spoilerWarning: false,
+    title,
+    summary: summary.slice(0, 4000),
+    whyMatters,
+    sources: [item.url],
+    subtitle: "",
+    tags: (item.matched_tags ?? []).slice(0, 3),
+    gameTitle: null
+  };
+}
+
 function ensurePrimarySources(
   result: GeneralCurationResult,
   item: RawGeneral
@@ -1369,6 +1410,7 @@ type CurationOutcome = {
   item: RawGeneral;
   errors: ValidationError[];
   attempts: number;
+  aiMatch: string;
 };
 
 async function curateBatchWithValidation(
@@ -1388,7 +1430,8 @@ async function curateBatchWithValidation(
       item,
       result,
       errors: validateCuration(result, batchUrls),
-      attempts: 1
+      attempts: 1,
+      aiMatch: match
     };
   });
 
@@ -1460,6 +1503,23 @@ async function curateBatchWithValidation(
     o.result = patched;
     o.errors = validateCuration(patched, batchUrls);
     o.attempts++;
+  }
+
+  const aiEmpty = initial.length === 0;
+  for (const o of outcomes) {
+    if (o.errors.length === 0) {
+      o.result = applyDefaultRelevanceScore(o.result);
+      continue;
+    }
+    if (!aiEmpty && o.aiMatch !== "none") continue;
+    const fallback = ensurePrimarySources(buildFallbackCurationResult(o.item), o.item);
+    const fallbackErrors = validateCuration(fallback, batchUrls);
+    if (fallbackErrors.length === 0) {
+      o.result = fallback;
+      o.errors = [];
+      matchCounts.fallback = (matchCounts.fallback ?? 0) + 1;
+      console.log(`[generalNews] fallback card for ${o.item.external_id} (AI empty=${aiEmpty})`);
+    }
   }
 
   const failed = outcomes.filter((o) => o.errors.length > 0);
@@ -1564,10 +1624,11 @@ async function persistCurationOutcome(
   }
 
   const validationFailed = errors.length > 0;
-  const tags = sanitizeTags(result.tags ?? [], crewEntityNames);
+  const publishResult = validationFailed ? result : applyDefaultRelevanceScore(result);
+  const tags = sanitizeTags(publishResult.tags ?? [], crewEntityNames);
   const finalRetryCount = (item.ai_retry_count ?? 0) + attempts - 1;
 
-  const fingerprint = (result.storyFingerprint ?? "").trim();
+  const fingerprint = (publishResult.storyFingerprint ?? "").trim();
   await db.query(
     `UPDATE general_news
        SET ai_relevance_score        = $1,
@@ -1587,16 +1648,16 @@ async function persistCurationOutcome(
            ai_curated_at             = NOW()
      WHERE id = $15`,
     [
-      result.relevanceScore ?? 0,
-      result.summary || null,
-      result.label || null,
-      result.spoilerWarning ?? false,
-      result.subtitle || null,
+      publishResult.relevanceScore ?? 0,
+      publishResult.summary || null,
+      publishResult.label || null,
+      publishResult.spoilerWarning ?? false,
+      publishResult.subtitle || null,
       tags,
-      result.whyMatters || null,
-      result.gameTitle || null,
-      result.title || null,
-      Array.isArray(result.sources) ? result.sources : null,
+      publishResult.whyMatters || null,
+      publishResult.gameTitle || null,
+      publishResult.title || null,
+      Array.isArray(publishResult.sources) ? publishResult.sources : null,
       finalRetryCount,
       validationFailed,
       validationFailed ? errors : null,
@@ -1610,9 +1671,9 @@ async function persistCurationOutcome(
     console.warn(
       `[generalNews] validation failed after ${attempts} attempts for ${item.external_id}: ${errors.join(",")}`
     );
-  } else if (!result.duplicate && !isMerge(result)) {
+  } else if (!publishResult.duplicate && !isMerge(publishResult)) {
     await recordSourceCurated(item.source_name);
-    void linkNewsToGame(item.id, result.gameTitle ?? null);
+    void linkNewsToGame(item.id, publishResult.gameTitle ?? null);
   }
 
   // Embed the newly-curated primary so future ingests can match against the
@@ -1620,9 +1681,9 @@ async function persistCurationOutcome(
   // silently when pgvector / embedding backend isn't configured.
   if (!validationFailed && (await isEmbeddingColumnAvailable())) {
     try {
-      const text = result.summary
-        ? `${result.title}\n\n${result.summary}`
-        : `${result.title}\n\n${(item.contents ?? "").slice(0, 1500)}`;
+      const text = publishResult.summary
+        ? `${publishResult.title}\n\n${publishResult.summary}`
+        : `${publishResult.title}\n\n${(item.contents ?? "").slice(0, 1500)}`;
       const vec = await embedText(text);
       if (vec) await setEmbedding(item.id, vec);
     } catch (err) {
@@ -1874,17 +1935,25 @@ export async function curateUncuratedGeneralNews(
   const bulk = options.bulk === true;
   const poolLimit = bulk ? 24 : curationPoolSize();
 
-  // Re-queue recent validation failures so a fix deploy can re-curate them.
-  await db.query(
-    `
-      UPDATE general_news
-         SET ai_curated_at = NULL,
-             ai_validation_failed = FALSE,
-             ai_last_validation_errors = NULL
-       WHERE ai_validation_failed = TRUE
-         AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
-    `
-  );
+  const lastBatch = getLastBatchDiagnostics();
+  const skipRequeue = lastBatch?.parsedCount === 0 && (lastBatch?.batchSize ?? 0) > 0;
+  if (skipRequeue) {
+    console.warn(
+      "[generalNews] skipping validation-failure re-queue — last batch had empty AI response (fix provider first)"
+    );
+  } else {
+    // Re-queue recent validation failures so a fix deploy can re-curate them.
+    await db.query(
+      `
+        UPDATE general_news
+           SET ai_curated_at = NULL,
+               ai_validation_failed = FALSE,
+               ai_last_validation_errors = NULL
+         WHERE ai_validation_failed = TRUE
+           AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
+      `
+    );
+  }
 
   let uncurated: { rows: RawGeneral[] };
   if (bulk) {
@@ -1987,6 +2056,17 @@ export async function curateUncuratedGeneralNews(
   }
   });
 
-  if (!locked.ran) return 0;
+  if (!locked.ran) {
+    setLastBatchDiagnostics({
+      batchSize: 0,
+      parsedCount: 0,
+      matchCounts: { lock_busy: 1 },
+      failedCount: 0,
+      provider: getAISetting("ai_provider") ?? "unknown",
+      model: getAISetting("ai_model") ?? "default"
+    });
+    console.warn("[generalNews] curation skipped — pipeline lock busy (ingest or another job running)");
+    return 0;
+  }
   return locked.result;
 }

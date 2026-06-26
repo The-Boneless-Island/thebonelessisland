@@ -7,7 +7,7 @@ import {
   countMissingEmbeddings,
   isEmbeddingColumnAvailable
 } from "../lib/news/embeddings.js";
-import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages, maybeBackgroundIngest } from "../lib/generalNewsIngestion.js";
+import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages, maybeBackgroundIngest, debugCurateOne } from "../lib/generalNewsIngestion.js";
 import { buildGeneralNewsFeedQuery } from "../lib/news/newsFeed.js";
 import { savePipelineJob, reconcileInterruptedPipelineJobs } from "../lib/news/newsPipelineJobs.js";
 import { findSimilarArticles, searchGeneralNews } from "../lib/news/newsSearch.js";
@@ -18,6 +18,7 @@ import {
 } from "../lib/news/newsCorpusReset.js";
 import { retireStaleUncuratedBacklog } from "../lib/news/newsBacklog.js";
 import { getNewsPipelineDiagnostics } from "../lib/news/newsPipelineDiagnostics.js";
+import { getAutopilotStatus, runNewsAutopilot } from "../lib/news/newsAutopilot.js";
 import { withNewsPipelineLock } from "../lib/news/newsPipelineLock.js";
 
 export const generalNewsRouter = Router();
@@ -550,7 +551,8 @@ async function snapshotBreakdown(): Promise<{
   };
 }
 
-async function runRecurateJob(): Promise<void> {
+async function runRecurateJob(opts: { resetFirst?: boolean } = {}): Promise<void> {
+  const resetFirst = opts.resetFirst === true;
   const costAtStart = getAiCostTotalUsd();
   recurateCancelRequested = false;
   recurateJob = {
@@ -562,7 +564,7 @@ async function runRecurateJob(): Promise<void> {
   try {
     const totalRow = await db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM general_news`);
     const total = parseInt(totalRow.rows[0]?.c ?? "0", 10);
-    if (total > 1500) {
+    if (resetFirst && total > 1500) {
       recurateJob.error =
         `Corpus has ${total.toLocaleString()} articles — use Archive → Scrub the archive instead of Regenerate All Summaries on a large backlog.`;
       recurateJob.state = "error";
@@ -574,13 +576,17 @@ async function runRecurateJob(): Promise<void> {
       return;
     }
 
-    const reset = await resetAllCuration();
-    recurateJob.reset = reset;
-    recurateJob.total = reset;
-
-    recurateJob.reset = reset;
-    recurateJob.total = reset;
-    recurateJob.remaining = reset;
+    if (resetFirst) {
+      const reset = await resetAllCuration();
+      recurateJob.reset = reset;
+      recurateJob.total = reset;
+      recurateJob.remaining = reset;
+    } else {
+      const remaining = await countUncurated();
+      recurateJob.reset = 0;
+      recurateJob.total = remaining;
+      recurateJob.remaining = remaining;
+    }
 
     let noProgressStreak = 0;
     while (true) {
@@ -639,6 +645,7 @@ async function runRecurateJob(): Promise<void> {
       duplicates: recurateJob.duplicates,
       failed: recurateJob.failed,
       embedded: 0,
+      errorSummary: recurateJob.error ?? null,
       costUsdStart: costAtStart
     });
   } catch (err) {
@@ -668,16 +675,17 @@ async function runRecurateJob(): Promise<void> {
  * Admin endpoint — kicks off background re-curation. Returns 202 immediately.
  * Poll /news/general/recurate/status for progress.
  */
-generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, (_req, res) => {
+generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, (req, res) => {
   if (recurateJob.state === "running") {
     res.status(409).json({ ok: false, error: "Recurate already running", job: recurateJob });
     return;
   }
+  const resetFirst = req.body?.reset === true;
   // Fire and forget — runner updates module-level job state
-  runRecurateJob().catch((err) => {
+  runRecurateJob({ resetFirst }).catch((err) => {
     console.error("[generalNews] runRecurateJob unhandled:", err);
   });
-  res.status(202).json({ ok: true, job: recurateJob });
+  res.status(202).json({ ok: true, resetFirst, job: recurateJob });
 });
 
 /**
@@ -806,6 +814,52 @@ generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireP
   } catch (err) {
     console.error("[generalNews] POST /news/general/retire-stale-backlog error:", err);
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Retire failed" });
+  }
+});
+
+/**
+ * GET /news/general/debug-curate-one
+ * Admin — run AI curation on the newest article without writing to DB (diagnostics).
+ */
+generalNewsRouter.get("/general/debug-curate-one", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    const debug = await debugCurateOne();
+    res.json({ ok: true, debug });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/debug-curate-one error:", err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Debug curate failed" });
+  }
+});
+
+/**
+ * GET /news/general/autopilot/status
+ * Admin — last autopilot pass + tuning caps.
+ */
+generalNewsRouter.get("/general/autopilot/status", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    const status = await getAutopilotStatus();
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/autopilot/status error:", err);
+    res.status(500).json({ ok: false, error: "Autopilot status failed" });
+  }
+});
+
+/**
+ * POST /news/general/autopilot/run
+ * Admin — manual bounded recovery pass (same as the 6h sweep).
+ */
+generalNewsRouter.post("/general/autopilot/run", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    if (isGeneralNewsBackgroundJobRunning()) {
+      res.status(409).json({ ok: false, error: "Cancel running embed/recurate jobs first" });
+      return;
+    }
+    const result = await runNewsAutopilot({ force: true });
+    res.json({ ok: true, result });
+  } catch (err) {
+    console.error("[generalNews] POST /news/general/autopilot/run error:", err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Autopilot failed" });
   }
 });
 

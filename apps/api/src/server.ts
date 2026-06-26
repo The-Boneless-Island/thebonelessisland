@@ -486,7 +486,7 @@ async function bootstrap() {
     });
   }, 4 * 60 * 60 * 1000);
 
-  // Pipeline health sweep — Discord alert when backlog / failures drift (12h cooldown).
+  // Pipeline health sweep — bounded autopilot recovery, then Discord if still degraded.
   const runHealthSweep = () =>
     runNewsPipelineHealthSweep().catch((err) => {
       console.error("[generalNews] pipeline health sweep failed:", err);

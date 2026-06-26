@@ -54,6 +54,10 @@ export function setLastBatchDiagnostics(diag: Omit<BatchDiagnostics, "at">): voi
   lastBatchDiagnostics = { at: new Date().toISOString(), ...diag };
 }
 
+export function getLastBatchDiagnostics(): BatchDiagnostics | null {
+  return lastBatchDiagnostics;
+}
+
 export async function snapshotPipelineCounts(): Promise<{
   liveCards: number;
   validationFailures: number;
@@ -127,6 +131,14 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
   let status: NewsPipelineHealth["status"] = "healthy";
   if (!newsEnabled || !aiEnabled) {
     status = "off";
+  } else if (counts.liveCards === 0 && counts.uncuratedBacklog > 50) {
+    status = "critical";
+  } else if (
+    counts.liveCards === 0 &&
+    counts.uncuratedBacklog > 0 &&
+    (lr?.run_kind === "recurate" || lastBatchDiagnostics?.parsedCount === 0)
+  ) {
+    status = "critical";
   } else if (counts.validationFailures > 100 && counts.liveCards < counts.validationFailures * 0.1) {
     // Large historical failure corpus — usually fixed by Regenerate All Summaries.
     status = "degraded";
@@ -291,14 +303,31 @@ export async function reportCurationPassOutcome(input: {
   }
 }
 
-/** Periodic sweep — catches backlog drift even when ingest keeps "succeeding". */
+/** Periodic sweep — runs bounded autopilot recovery, then alerts if still degraded. */
 export async function runNewsPipelineHealthSweep(): Promise<void> {
   const newsEnabled = getAISetting("news_general_enabled") !== "false";
   const aiEnabled = getAISetting("ai_enabled") === "true";
   if (!newsEnabled || !aiEnabled) return;
 
+  const healthBefore = await getNewsPipelineHealth();
+  if (healthBefore.status === "healthy" || healthBefore.status === "off") return;
+
+  let autopilotEscalated = false;
+  let autopilotSkipped: string | undefined;
+  try {
+    const { runNewsAutopilot } = await import("./newsAutopilot.js");
+    const autopilot = await runNewsAutopilot();
+    autopilotEscalated = autopilot.escalated;
+    autopilotSkipped = autopilot.skippedReason;
+  } catch (err) {
+    log.error("generalNews", "autopilot_sweep_failed", {
+      err: err instanceof Error ? err.message : String(err)
+    });
+  }
+
   const health = await getNewsPipelineHealth();
   if (health.status === "healthy" || health.status === "off") return;
+  if (autopilotEscalated) return;
 
   if (!isNewsCurationAlertConfigured()) {
     log.warn("generalNews", "pipeline_degraded_no_webhook", {
@@ -336,7 +365,12 @@ export async function runNewsPipelineHealthSweep(): Promise<void> {
       `Last ingest curated **0** of **${health.lastRun.fetched}** fetched (${new Date(health.lastRun.at).toLocaleString()})`
     );
   }
-  lines.push("Admin → News → Archive (Scrub / Retire stale) · Triggers → Fetch & Curate.");
+  if (autopilotSkipped) {
+    lines.push(`Autopilot skipped: **${autopilotSkipped}**`);
+  } else {
+    lines.push("Autopilot ran but the feed is still degraded — check Validation tab for last pass details.");
+  }
+  lines.push("Admin → News → Archive (Retire stale) · Triggers → Fetch & Curate · Scrub only as last resort.");
 
   void sendNewsCurationAlert({
     title: "News pipeline needs attention",

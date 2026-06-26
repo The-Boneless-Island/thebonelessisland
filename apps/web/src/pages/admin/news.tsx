@@ -445,6 +445,8 @@ export function NewsAdminPage(props: NewsPageProps) {
             <>
               <SectionLabel title="Pipeline health" />
               <NewsPipelineHealthPanel />
+              <SectionLabel title="Autopilot" />
+              <NewsAutopilotPanel />
               <SectionLabel title="AI Validation Failures" />
               <ValidationFailuresStats />
             </>
@@ -801,6 +803,9 @@ function ManualTriggersCard({
     costUsd: number;
     total: number;
   } | null>(null);
+  const [regenerateConfirm, setRegenerateConfirm] = useState("");
+  const regeneratePhrase = "REGENERATE ALL";
+  const regenerateReady = regenerateConfirm.trim().toUpperCase() === regeneratePhrase;
 
   function progressMsg(processed: number, total: number, remaining: number, costUsd: number): string {
     const costStr = costUsd > 0 ? ` · est. $${costUsd.toFixed(3)} spent` : "";
@@ -1048,13 +1053,30 @@ function ManualTriggersCard({
         <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Regenerate All Summaries</div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
           Reset curation on all articles and re-run AI with the updated prompt. Only for small corpora after prompt
-          changes — if you have thousands of rows, use <strong>Archive → Scrub the archive</strong> instead (Regenerate
-          marks every row uncurated again and will stall).
+          changes — this wipes every live card first. Type <strong>{regeneratePhrase}</strong> to confirm.
         </div>
+        <input
+          type="text"
+          value={regenerateConfirm}
+          onChange={(e) => setRegenerateConfirm(e.target.value)}
+          placeholder={regeneratePhrase}
+          style={{
+            width: "100%",
+            maxWidth: 280,
+            marginBottom: 8,
+            padding: "6px 10px",
+            borderRadius: 8,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            background: "var(--bi-panel-bg)",
+            color: islandTheme.color.textPrimary,
+            fontSize: 12
+          }}
+        />
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           <IslandButton
             variant="danger"
             onClick={async () => {
+              if (!regenerateReady) return;
               setRecurateState("running");
               setRecurateProgress(null);
               setRecurateHint("Runs on the server — safe to leave this tab. Progress updates every few seconds.");
@@ -1065,9 +1087,10 @@ function ManualTriggersCard({
                 setRecurateMsg(result.error ?? "Recurate failed");
                 setRecurateHint("");
               }
+              setRegenerateConfirm("");
               setTimeout(() => setRecurateState("idle"), 12000);
             }}
-            disabled={recurateState === "running"}
+            disabled={recurateState === "running" || !regenerateReady}
           >
             {recurateState === "running"
               ? recurateProgress && recurateProgress.total > 0
@@ -1343,6 +1366,7 @@ type NewsPipelineHealth = {
     errorSummary: string | null;
   } | null;
   lastBatch?: {
+    batchSize: number;
     parsedCount: number;
     matchCounts: Record<string, number>;
     failedCount: number;
@@ -1453,16 +1477,254 @@ function NewsPipelineHealthPanel() {
         </div>
       )}
       <NewsPipelineDiagnosticsPanel />
-      {health.lastBatch && (health.lastBatch.matchCounts.none ?? 0) > 0 && (
+      {health.lastBatch && health.lastBatch.parsedCount === 0 && health.lastBatch.batchSize > 0 && (
+        <div style={{ fontSize: 11, color: islandTheme.color.dangerText, lineHeight: 1.4 }}>
+          Last batch: Bedrock returned empty curation JSON (parsed 0). Fallback cards will apply on the next pass
+          after deploy — also verify Admin → Nuggie AI model/region, or use Debug AI below.
+        </div>
+      )}
+      {health.lastBatch && (health.lastBatch.matchCounts.lock_busy ?? 0) > 0 && (
+        <div style={{ fontSize: 11, color: islandTheme.color.warnAccent, lineHeight: 1.4 }}>
+          Last pass skipped — pipeline lock busy (ingest or another job was running). Retry Fetch &amp; Curate in a
+          minute.
+        </div>
+      )}
+      {health.lastBatch &&
+        health.lastBatch.parsedCount > 0 &&
+        (health.lastBatch.matchCounts.none ?? 0) > 0 && (
         <div style={{ fontSize: 11, color: islandTheme.color.warnAccent }}>
           Last batch: {health.lastBatch.failedCount} validation failure(s);{" "}
           {health.lastBatch.matchCounts.none} article(s) had no AI match (parsed {health.lastBatch.parsedCount}).
         </div>
       )}
+      {health.lastBatch && (health.lastBatch.matchCounts.fallback ?? 0) > 0 && (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+          Last batch used fallback cards for {health.lastBatch.matchCounts.fallback} article(s) (AI empty or
+          unmatched).
+        </div>
+      )}
+      <NewsDebugCuratePanel />
       {health.status !== "healthy" && health.status !== "off" && (
         <div style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.4 }}>
           Set a Discord webhook under the <strong>API keys</strong> tab (<code>news_curation_alert_webhook_url</code>)
           to get automatic alerts when curation stalls or backlogs grow (6–12h cooldown, no spam).
+        </div>
+      )}
+    </IslandCard>
+  );
+}
+
+function NewsDebugCuratePanel() {
+  const [state, setState] = useState<AdminRunState>("idle");
+  const [output, setOutput] = useState<string>("");
+
+  const runDebug = async () => {
+    setState("running");
+    setOutput("");
+    try {
+      const res = await apiFetch("/news/general/debug-curate-one");
+      const payload = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        debug?: {
+          article?: { title?: string; url?: string; source_name?: string } | null;
+          rawAiResult?: Record<string, unknown> | null;
+          error?: string;
+        };
+      };
+      if (!res.ok || !payload.ok) {
+        throw new Error(payload.error ?? `HTTP ${res.status}`);
+      }
+      const d = payload.debug;
+      if (d?.error) {
+        setOutput(`AI error: ${d.error}`);
+      } else if (!d?.rawAiResult) {
+        setOutput(
+          d?.article
+            ? `Empty AI response for "${d.article.title}" (${d.article.source_name}). Check Bedrock model + region.`
+            : "No articles in corpus to test."
+        );
+      } else {
+        setOutput(JSON.stringify({ article: d.article, rawAiResult: d.rawAiResult }, null, 2));
+      }
+      setState("done");
+    } catch (err) {
+      setOutput(err instanceof Error ? err.message : "Debug failed");
+      setState("error");
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${islandTheme.color.border}` }}>
+      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Debug AI (newest article, no DB write)</div>
+      <IslandButton variant="secondary" className="island-btn--sm" disabled={state === "running"} onClick={() => void runDebug()}>
+        {state === "running" ? "Calling Bedrock…" : "Test curation on newest article"}
+      </IslandButton>
+      {output && (
+        <pre
+          style={{
+            marginTop: 8,
+            fontSize: 10,
+            maxHeight: 160,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            color: state === "error" ? islandTheme.color.dangerText : islandTheme.color.textMuted
+          }}
+        >
+          {output}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+type AutopilotStatusPayload = {
+  enabled: boolean;
+  job: { state: string; progress: Record<string, unknown>; error: string | null } | null;
+  settings: { maxCurateBatches: number; maxEmbedRows: number; retireThreshold: number };
+};
+
+function NewsAutopilotPanel() {
+  const [status, setStatus] = useState<AutopilotStatusPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [runState, setRunState] = useState<AdminRunState>("idle");
+  const [runMsg, setRunMsg] = useState("");
+
+  const load = () => {
+    apiFetch("/news/general/autopilot/status")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return (await res.json()) as AutopilotStatusPayload & { ok?: boolean };
+      })
+      .then((payload) => {
+        setStatus({
+          enabled: payload.enabled,
+          job: payload.job,
+          settings: payload.settings
+        });
+        setError(null);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Failed to load");
+      });
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const runAutopilot = async () => {
+    setRunState("running");
+    setRunMsg("");
+    try {
+      const res = await apiFetch("/news/general/autopilot/run", { method: "POST" });
+      const payload = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        result?: { ran: boolean; skippedReason?: string; escalated?: boolean; steps?: Record<string, unknown> };
+      };
+      if (!res.ok || !payload.ok) {
+        throw new Error(payload.error ?? `HTTP ${res.status}`);
+      }
+      const r = payload.result;
+      if (r?.ran) {
+        setRunMsg(r.escalated ? "Autopilot ran — feed still degraded (Discord alert sent)." : "Autopilot pass complete.");
+      } else {
+        setRunMsg(r?.skippedReason ?? "Autopilot skipped.");
+      }
+      setRunState("done");
+      load();
+    } catch (err) {
+      setRunState("error");
+      setRunMsg(err instanceof Error ? err.message : "Autopilot failed");
+    }
+  };
+
+  if (error) {
+    return (
+      <IslandCard style={{ padding: 16, marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.dangerText }}>{error}</span>
+      </IslandCard>
+    );
+  }
+  if (!status) {
+    return (
+      <IslandCard style={{ padding: 16, marginBottom: 12 }}>
+        <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>Loading autopilot status…</span>
+      </IslandCard>
+    );
+  }
+
+  const job = status.job;
+  const progress = job?.progress ?? {};
+  const ingestStats =
+    progress.ingest && typeof progress.ingest === "object"
+      ? (progress.ingest as { fetched?: number; curated?: number })
+      : null;
+  const stateColor =
+    job?.state === "running"
+      ? islandTheme.color.warnAccent
+      : job?.state === "error" || job?.state === "degraded"
+        ? islandTheme.color.dangerText
+        : islandTheme.color.textMuted;
+
+  return (
+    <IslandCard style={{ padding: 16, marginBottom: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>
+          {status.enabled ? "Scheduled recovery on" : "Autopilot off"}
+        </span>
+        {job && (
+          <span style={{ fontSize: 12, color: stateColor, textTransform: "capitalize" }}>
+            Last pass: {job.state}
+          </span>
+        )}
+        <button
+          type="button"
+          className="island-btn island-btn--sm"
+          disabled={runState === "running" || job?.state === "running"}
+          onClick={() => void runAutopilot()}
+        >
+          {runState === "running" ? "Running…" : "Run recovery now"}
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.5, marginBottom: 8 }}>
+        Every 6h when the feed is degraded: retire stale backlog → ingest → curate (up to{" "}
+        {status.settings.maxCurateBatches} batches) → embed (up to {status.settings.maxEmbedRows} rows). Discord
+        only if still broken after the pass.
+      </div>
+      {job?.error && (
+        <div style={{ fontSize: 11, color: islandTheme.color.dangerText, marginBottom: 6 }}>{job.error}</div>
+      )}
+      {typeof progress.retireStale === "number" && progress.retireStale > 0 && (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+          Retired stale: {Number(progress.retireStale).toLocaleString()}
+        </div>
+      )}
+      {ingestStats && (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+          Ingest: fetched {ingestStats.fetched ?? 0}, curated {ingestStats.curated ?? 0}
+        </div>
+      )}
+      {typeof progress.curateBatches === "number" && (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+          Curate: {progress.curateBatches} batch(es), {Number(progress.curatedTotal ?? 0).toLocaleString()} new cards
+        </div>
+      )}
+      {typeof progress.embedRows === "number" && (
+        <div style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+          Embed: {Number(progress.embedRows).toLocaleString()} rows
+        </div>
+      )}
+      {runMsg && (
+        <div
+          style={{
+            fontSize: 11,
+            marginTop: 8,
+            color: runState === "error" ? islandTheme.color.dangerText : islandTheme.color.textMuted
+          }}
+        >
+          {runMsg}
         </div>
       )}
     </IslandCard>
