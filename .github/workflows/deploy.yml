@@ -11,6 +11,11 @@ name: Deploy
 #
 # GHCR packages (boneless-api/bot/web) must be set to Public once, after the
 # first push, so the box can pull them anonymously (no creds on the box).
+# Images live under the org namespace — the repo's GITHUB_TOKEN can push there;
+# pushing to a personal namespace (d0nm3ga/*) fails after the repo moved orgs.
+
+env:
+  GHCR_IMAGE_PREFIX: ghcr.io/the-boneless-island
 
 on:
   push:
@@ -51,8 +56,8 @@ jobs:
           file: apps/api/Dockerfile
           push: true
           tags: |
-            ghcr.io/d0nm3ga/boneless-api:latest
-            ghcr.io/d0nm3ga/boneless-api:${{ github.sha }}
+            ${{ env.GHCR_IMAGE_PREFIX }}/boneless-api:latest
+            ${{ env.GHCR_IMAGE_PREFIX }}/boneless-api:${{ github.sha }}
           cache-from: type=gha,scope=api
           cache-to: type=gha,mode=max,scope=api
 
@@ -63,8 +68,8 @@ jobs:
           file: apps/bot/Dockerfile
           push: true
           tags: |
-            ghcr.io/d0nm3ga/boneless-bot:latest
-            ghcr.io/d0nm3ga/boneless-bot:${{ github.sha }}
+            ${{ env.GHCR_IMAGE_PREFIX }}/boneless-bot:latest
+            ${{ env.GHCR_IMAGE_PREFIX }}/boneless-bot:${{ github.sha }}
           cache-from: type=gha,scope=bot
           cache-to: type=gha,mode=max,scope=bot
 
@@ -77,8 +82,8 @@ jobs:
             VITE_API_BASE_URL=https://api.bonelessisland.com
           push: true
           tags: |
-            ghcr.io/d0nm3ga/boneless-web:latest
-            ghcr.io/d0nm3ga/boneless-web:${{ github.sha }}
+            ${{ env.GHCR_IMAGE_PREFIX }}/boneless-web:latest
+            ${{ env.GHCR_IMAGE_PREFIX }}/boneless-web:${{ github.sha }}
           cache-from: type=gha,scope=web
           cache-to: type=gha,mode=max,scope=web
 
