@@ -192,6 +192,18 @@ export function AiAdminPage({ settings, onUpdate, onTest }: AiPageProps) {
                 onSave={onUpdate}
                 title="Provider & model"
               />
+              {provider === "bedrock" && (
+                <IslandCard style={{ padding: "14px 16px", marginTop: 10 }}>
+                  <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.55 }}>
+                    <strong>Bedrock task routing:</strong> News curation always uses{" "}
+                    <strong>Bedrock curation model</strong> (defaults to Claude Haiku) — not your main{" "}
+                    <code>ai_model</code> slot. Nuggie chat uses <strong>Bedrock chat model</strong>. Validation
+                    repair and taglines use <strong>Bedrock light tasks model</strong> (defaults to Nova Lite).
+                    Embeddings stay on Titan regardless. If summaries were short or movie-heavy, check that curation
+                    is on Haiku, then re-run <strong>Fetch &amp; Curate</strong> on the News Triggers tab.
+                  </p>
+                </IslandCard>
+              )}
               {!ready && (
                 <p style={{ margin: "10px 0 0", fontSize: 12, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
                   AI is {enabled ? "" : "disabled and "}not fully configured — pick a provider, set its API key below

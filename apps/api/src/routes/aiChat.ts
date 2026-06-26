@@ -2,7 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { requireSession } from "../lib/auth.js";
-import { getAIProvider } from "../lib/ai/index.js";
+import { getAIProviderForTask } from "../lib/ai/index.js";
 import { getGuildId } from "../lib/serverSettings.js";
 import { whatCanWePlay } from "../lib/recommend.js";
 import { getNuggiePersona, buildSystemPrompt } from "../lib/persona/nuggie.js";
@@ -126,7 +126,7 @@ aiChatRouter.post("/chat", async (req, res) => {
 
   let ai;
   try {
-    ai = getAIProvider();
+    ai = getAIProviderForTask("chat");
   } catch (err) {
     const msg = err instanceof Error ? err.message : "AI not configured";
     res.status(503).json({ error: msg });

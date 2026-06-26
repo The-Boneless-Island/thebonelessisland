@@ -1,5 +1,5 @@
 import { SITE_BRAND_NAME } from "@island/shared";
-import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index.js";
+import { AIDisabledError, AINotConfiguredError, getAIProviderForTask } from "./ai/index.js";
 import { db } from "../db/client.js";
 import { loadSettings } from "./serverSettings.js";
 
@@ -27,7 +27,7 @@ Return ONLY a valid JSON array of exactly 50 strings. No explanation, no markdow
 Example: ["Tagline one.", "Tagline two.", ...]`;
 
 export async function generateTaglines(): Promise<string[]> {
-  const ai = getAIProvider();
+  const ai = getAIProviderForTask("light");
   const result = await ai.complete(
     [{ role: "user", content: GENERATION_PROMPT }],
     { maxTokens: 2048, temperature: 0.9 }
