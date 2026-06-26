@@ -227,7 +227,7 @@ generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentR
       return;
     }
     const limit = Math.min(500, Math.max(1, parseInt(String((req.body as { limit?: number } | undefined)?.limit ?? 200), 10)));
-    const embedded = await backfillEmbeddings(limit);
+    const { embedded } = await backfillEmbeddings(limit);
     const remainingResult = await db.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM general_news WHERE embedding IS NULL`
     );
@@ -249,6 +249,7 @@ type EmbedBackfillJob = {
   finishedAt: number | null;
   total: number;
   embedded: number;
+  skipped: number;
   remaining: number;
   batches: number;
   error: string | null;
@@ -260,6 +261,7 @@ const FRESH_EMBED_JOB: EmbedBackfillJob = {
   finishedAt: null,
   total: 0,
   embedded: 0,
+  skipped: 0,
   remaining: 0,
   batches: 0,
   error: null
@@ -305,12 +307,14 @@ async function runEmbedBackfillJob(): Promise<void> {
         break;
       }
 
-      const batchEmbedded = await backfillEmbeddings(EMBED_BACKFILL_BATCH);
-      embedBackfillJob.embedded += batchEmbedded;
+      const batch = await backfillEmbeddings(EMBED_BACKFILL_BATCH);
+      embedBackfillJob.embedded += batch.embedded;
+      embedBackfillJob.skipped += batch.skipped;
       embedBackfillJob.batches = pass + 1;
       embedBackfillJob.remaining = await countMissingEmbeddings();
 
-      if (embedBackfillJob.remaining === 0 || batchEmbedded === 0) break;
+      const handled = batch.embedded + batch.skipped;
+      if (embedBackfillJob.remaining === 0 || handled === 0) break;
 
       if (embedBackfillCancelRequested) break;
       await new Promise((resolve) => setTimeout(resolve, EMBED_BACKFILL_PAUSE_MS));
@@ -407,13 +411,14 @@ type RecurateJob = {
   startedAt: number | null;
   finishedAt: number | null;
   reset: number;       // rows reset (also = total to curate)
-  curated: number;     // primary cards emitted (no dupes / merges)
-  processed: number;   // every row touched: primary + merged + duplicate + failed
-  merged: number;      // rows absorbed into an existing primary
-  duplicates: number;  // rows the AI flagged as in-batch duplicates of another article
-  failed: number;      // rows where validation never reached threshold (stored anyway)
+  curated: number;     // live primary cards in corpus right now
+  processed: number;   // rows touched so far this run
+  remaining: number;   // rows still waiting for curation
+  merged: number;
+  duplicates: number;
+  failed: number;
   total: number;       // = reset, snapshot for display
-  costUsd: number;     // estimated USD spent on AI calls during this run
+  costUsd: number;
   error: string | null;
 };
 
@@ -424,6 +429,7 @@ const FRESH_JOB: RecurateJob = {
   reset: 0,
   curated: 0,
   processed: 0,
+  remaining: 0,
   merged: 0,
   duplicates: 0,
   failed: 0,
@@ -434,8 +440,8 @@ const FRESH_JOB: RecurateJob = {
 
 let recurateJob: RecurateJob = { ...FRESH_JOB };
 
-const RECURATE_MAX_PASSES = 50; // hard safety: 50 × 25 = 1250 articles cap
 const RECURATE_BATCH_PAUSE_MS = 250;
+const RECURATE_NO_PROGRESS_LIMIT = 3;
 
 // Cooperative cancel flag. Recurate loop checks between passes and exits early.
 let recurateCancelRequested = false;
@@ -494,17 +500,26 @@ async function runRecurateJob(): Promise<void> {
     recurateJob.reset = reset;
     recurateJob.total = reset;
 
-    let remainingBefore = await countUncurated();
-    for (let pass = 0; pass < RECURATE_MAX_PASSES; pass++) {
+    recurateJob.reset = reset;
+    recurateJob.total = reset;
+    recurateJob.remaining = reset;
+
+    let noProgressStreak = 0;
+    while (true) {
       if (recurateCancelRequested) {
-        console.warn(`[generalNews] recurate cancelled by admin at pass ${pass}`);
+        console.warn("[generalNews] recurate cancelled by admin");
         break;
       }
-      await curateUncuratedGeneralNews({ reportRun: false });
+
+      const remainingBefore = await countUncurated();
+      if (remainingBefore === 0) break;
+
+      await curateUncuratedGeneralNews({ reportRun: false, bulk: true });
 
       const remainingAfter = await countUncurated();
       const breakdown = await snapshotBreakdown();
       recurateJob.processed = recurateJob.total - remainingAfter;
+      recurateJob.remaining = remainingAfter;
       recurateJob.curated = breakdown.curated;
       recurateJob.merged = breakdown.merged;
       recurateJob.duplicates = breakdown.duplicates;
@@ -512,23 +527,29 @@ async function runRecurateJob(): Promise<void> {
       recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
 
       if (recurateCancelRequested) {
-        console.warn(`[generalNews] recurate cancelled by admin after pass ${pass}`);
+        console.warn("[generalNews] recurate cancelled by admin after pass");
         break;
       }
       if (remainingAfter === 0) break;
-      // No-progress guard: if a pass didn't advance the uncurated count at all,
-      // we're stuck (AI errors, empty batch, etc.) — bail rather than tight-loop.
+
       if (remainingAfter >= remainingBefore) {
+        noProgressStreak++;
         console.warn(
-          `[generalNews] recurate stalled at pass ${pass}: ${remainingAfter} rows still uncurated (no progress)`
+          `[generalNews] recurate no progress (${noProgressStreak}/${RECURATE_NO_PROGRESS_LIMIT}): ${remainingAfter} rows still uncurated`
         );
-        break;
+        if (noProgressStreak >= RECURATE_NO_PROGRESS_LIMIT) {
+          recurateJob.error = `Stalled with ${remainingAfter.toLocaleString()} articles still uncurated — check AI settings and Validation tab`;
+          break;
+        }
+      } else {
+        noProgressStreak = 0;
       }
-      remainingBefore = remainingAfter;
+
       await new Promise((resolve) => setTimeout(resolve, RECURATE_BATCH_PAUSE_MS));
     }
+
     recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
-    recurateJob.state = "done";
+    recurateJob.state = recurateJob.error ? "error" : "done";
     recurateJob.finishedAt = Date.now();
     void reportCurationPassOutcome({
       runKind: "recurate",

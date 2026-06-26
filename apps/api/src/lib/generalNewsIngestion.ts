@@ -1668,10 +1668,10 @@ export async function ingestAndCurateGeneralNews(
     try {
       const missing = await countMissingEmbeddings();
       if (missing > 0) {
-        const backfilled = await backfillEmbeddings(50);
-        if (backfilled > 0) {
+        const { embedded: backfilled, skipped: embedSkipped } = await backfillEmbeddings(50);
+        if (backfilled > 0 || embedSkipped > 0) {
           console.log(
-            `[generalNews] auto embed backfill: ${backfilled} row(s), ~${Math.max(0, missing - backfilled)} remaining`
+            `[generalNews] auto embed backfill: ${backfilled} embedded, ${embedSkipped} skipped, ~${Math.max(0, missing - backfilled - embedSkipped)} remaining`
           );
         }
       }
@@ -1700,6 +1700,7 @@ export async function resetAllCuration(): Promise<number> {
   const result = await db.query<{ count: string }>(
     `UPDATE general_news
        SET ai_curated_at = NULL,
+           ai_relevance_score = 0,
            ai_retry_count = 0,
            ai_validation_failed = FALSE,
            ai_last_validation_errors = NULL
@@ -1750,24 +1751,16 @@ export async function debugCurateOne(): Promise<{
  * Manually trigger AI curation of any un-curated general_news rows.
  * Used by the admin "trigger curation" button.
  */
-export async function curateUncuratedGeneralNews(options: { reportRun?: boolean } = {}): Promise<number> {
+export async function curateUncuratedGeneralNews(
+  options: { reportRun?: boolean; bulk?: boolean } = {}
+): Promise<number> {
   const reportRun = options.reportRun !== false;
-  // Phase 1: cluster-aware window (catches sibling articles for same story).
-  let uncurated = await db.query<RawGeneral>(
-    `
-      SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
-      FROM general_news
-      WHERE ai_curated_at IS NULL
-        AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
-      ORDER BY published_at DESC
-      LIMIT $1
-    `,
-    [curationPoolSize()]
-  );
+  const bulk = options.bulk === true;
+  const poolLimit = bulk ? 24 : curationPoolSize();
 
-  // Phase 2 (tail): if no in-window candidates left, fall back to older
-  // articles so they still get curated. No clustering applied to the tail.
-  if (uncurated.rows.length === 0) {
+  let uncurated: { rows: RawGeneral[] };
+  if (bulk) {
+    // Full-corpus re-curate: no date window, larger pool per pass.
     uncurated = await db.query<RawGeneral>(
       `
         SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
@@ -1776,8 +1769,35 @@ export async function curateUncuratedGeneralNews(options: { reportRun?: boolean 
         ORDER BY published_at DESC
         LIMIT $1
       `,
-      [curationBatchSize()]
+      [poolLimit]
     );
+  } else {
+    // Phase 1: cluster-aware window (catches sibling articles for same story).
+    uncurated = await db.query<RawGeneral>(
+      `
+        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
+        FROM general_news
+        WHERE ai_curated_at IS NULL
+          AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
+        ORDER BY published_at DESC
+        LIMIT $1
+      `,
+      [poolLimit]
+    );
+
+    // Phase 2 (tail): if no in-window candidates left, fall back to older articles.
+    if (uncurated.rows.length === 0) {
+      uncurated = await db.query<RawGeneral>(
+        `
+          SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
+          FROM general_news
+          WHERE ai_curated_at IS NULL
+          ORDER BY published_at DESC
+          LIMIT $1
+        `,
+        [curationBatchSize()]
+      );
+    }
   }
 
   if (uncurated.rows.length === 0) return 0;

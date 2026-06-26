@@ -56,6 +56,7 @@ type AdminPageProps = {
     state: "idle" | "running" | "done" | "error";
     total: number;
     embedded: number;
+    skipped: number;
     remaining: number;
     batches: number;
     error: string | null;
@@ -68,6 +69,7 @@ type AdminPageProps = {
     reset: number;
     curated: number;
     processed?: number;
+    remaining?: number;
     merged?: number;
     duplicates?: number;
     failed?: number;
