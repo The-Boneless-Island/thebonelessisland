@@ -59,7 +59,7 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
         AND gn.ai_relevance_score > 0
         AND gn.ai_validation_failed = FALSE
         AND gn.ai_summary IS NOT NULL
-        AND LENGTH(TRIM(gn.ai_summary)) >= 150
+        AND LENGTH(TRIM(gn.ai_summary)) >= 120
         AND gn.retention_tier IN ('hot', 'warm')
         ${muteClause}
     ),

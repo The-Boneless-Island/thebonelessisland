@@ -91,6 +91,8 @@ type ValidationError =
 
 const MAX_RETRIES_PER_ARTICLE = 2;
 const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
+/** Minimum summary length — keep aligned with curator prompt (thin excerpts still need 2–3 sentences). */
+const MIN_SUMMARY_CHARS = 120;
 
 // ── Outlet name blocklist ──────────────────────────────────────────────────
 // Populated dynamically from news_source_registry at the start of every
@@ -901,7 +903,7 @@ Write so any gamer can follow it, even one who doesn't play this game. Use plain
 
 Use a mix of flowing prose paragraphs AND bullet points. Use bullets for concrete facts, specs, or list-shaped information (release dates, platforms, feature lists, pricing tiers, patch line items, performance numbers). Use prose for context, narrative, and synthesis. Format bullets as plain markdown — each bullet on its own line, prefixed with \`- \`. Separate prose paragraphs with a blank line. Separate a prose paragraph from an adjacent bullet block with a blank line.
 
-You work only from the source excerpts in this batch. Synthesize across articles in the batch when multiple cover the same story. Do NOT speculate beyond what the excerpts state. If sources are thin and you can only reliably restate the headline, do exactly that — pad nothing.
+You work only from the source excerpts in this batch. Synthesize across articles in the batch when multiple cover the same story. Do NOT speculate beyond what the excerpts state. When the excerpt is thin (headline-only or link post), still write at least 3 sentences (~150 characters minimum) restating the headline and any facts present — expand with neutral context from the headline wording, but do not invent quotes, dates, or numbers not in the excerpt.
 
 ## 3. Why This Matters to Boneless Island
 
@@ -1202,13 +1204,19 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
     ? labelRaw
     : "community") as GeneralCurationResult["label"];
 
+  let summary = pickString(obj, "summary", "ai_summary", "aiSummary");
+  const subtitle = pickString(obj, "subtitle", "ai_subtitle", "aiSubtitle");
+  if (summary.length < MIN_SUMMARY_CHARS && subtitle.length > 0) {
+    summary = summary.length > 0 ? `${subtitle}\n\n${summary}`.trim() : subtitle;
+  }
+
   return {
     id: pickString(obj, "id", "external_id", "externalId", "url"),
     relevanceScore: Number(obj.relevanceScore ?? obj.relevance_score ?? 0) || 0,
     label,
     spoilerWarning: asBool(obj.spoilerWarning ?? obj.spoiler_warning),
     title: pickString(obj, "title", "ai_title", "aiTitle"),
-    summary: pickString(obj, "summary", "ai_summary", "aiSummary"),
+    summary,
     whyMatters: pickString(
       obj,
       "whyMatters",
@@ -1249,9 +1257,46 @@ function ensurePrimarySources(
   result: GeneralCurationResult,
   item: RawGeneral
 ): GeneralCurationResult {
+  let r = result;
+  if (!r.duplicate && !isMerge(r)) {
+    if (!Array.isArray(r.sources) || r.sources.length === 0) {
+      r = { ...r, sources: [item.url] };
+    }
+    r = expandCurationSummary(r, item);
+    if ((!r.title || r.title.trim().length < 8) && item.title.trim().length >= 8) {
+      r = { ...r, title: item.title.trim() };
+    }
+    if ((!r.whyMatters || r.whyMatters.trim().length < 20) && r.subtitle && r.subtitle.trim().length >= 20) {
+      r = { ...r, whyMatters: r.subtitle.trim() };
+    }
+  }
+  return r;
+}
+
+/** Merge AI fields + source excerpt so thin RSS/Reddit posts can pass validation. */
+function expandCurationSummary(result: GeneralCurationResult, item: RawGeneral): GeneralCurationResult {
   if (result.duplicate || isMerge(result)) return result;
-  if (Array.isArray(result.sources) && result.sources.length > 0) return result;
-  return { ...result, sources: [item.url] };
+  let summary = (result.summary ?? "").trim();
+  if (summary.length >= MIN_SUMMARY_CHARS) return result;
+
+  const chunks = [
+    result.subtitle?.trim(),
+    summary,
+    result.whyMatters?.trim(),
+    (item.contents ?? "").trim()
+  ].filter((c): c is string => Boolean(c && c.length > 0));
+  const unique: string[] = [];
+  for (const c of chunks) {
+    if (!unique.some((u) => u.includes(c) || c.includes(u))) unique.push(c);
+  }
+  summary = unique.join("\n\n").trim();
+
+  if (summary.length < MIN_SUMMARY_CHARS) {
+    const headline = (result.title || item.title).trim();
+    summary = [headline, (item.contents ?? "").trim()].filter(Boolean).join("\n\n").trim();
+  }
+
+  return summary.length > 0 ? { ...result, summary } : result;
 }
 
 function isMerge(res: GeneralCurationResult): boolean {
@@ -1264,16 +1309,6 @@ function normalizeArticleId(id: string): string {
   } catch {
     return id.trim().replace(/\/$/, "").toLowerCase();
   }
-}
-
-function resultHasPayload(r: GeneralCurationResult | undefined): boolean {
-  if (!r) return false;
-  return Boolean(
-    r.duplicate ||
-    isMerge(r) ||
-    (r.title && r.title.trim().length > 0) ||
-    (r.summary && r.summary.trim().length > 0)
-  );
 }
 
 /** Map AI batch output back to input rows. Bedrock/Claude often drifts on long URL ids. */
@@ -1292,9 +1327,7 @@ function resolveCurationResultForItem(
 
   if (index < parsed.length) {
     const entry = parsed[index];
-    if (resultHasPayload(entry) || entry.duplicate || isMerge(entry)) {
-      return { result: { ...entry, id: item.external_id }, match: "ordered" };
-    }
+    return { result: { ...entry, id: item.external_id }, match: "ordered" };
   }
 
   const byPartial = parsed.find(
@@ -1314,7 +1347,7 @@ function validateCuration(res: GeneralCurationResult, batchUrls: Set<string>): V
   if (res.duplicate || isMerge(res)) return [];
   const errors: ValidationError[] = [];
   if (!res.title || res.title.trim().length < 8) errors.push("missing_title");
-  if (!res.summary || res.summary.trim().length < 150) {
+  if (!res.summary || res.summary.trim().length < MIN_SUMMARY_CHARS) {
     errors.push("summary_too_short");
   } else if (res.summary.trim().split(/\s+/).length > 1350) {
     errors.push("summary_too_long");
@@ -1370,7 +1403,7 @@ async function curateBatchWithValidation(
       failed
         .map((o) => `${o.item.external_id}: ${o.errors.join(",")}`)
         .join(" | ") +
-      `. Return corrected JSON for these IDs only: populate every required field; for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
+      `. Return corrected JSON for these IDs only: populate every required field; summary must be at least ${MIN_SUMMARY_CHARS} characters (3+ sentences for thin excerpts); for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
 
     const retryItems = failed.map((o) => o.item);
     console.warn(
@@ -1840,6 +1873,18 @@ export async function curateUncuratedGeneralNews(
   const reportRun = options.reportRun !== false;
   const bulk = options.bulk === true;
   const poolLimit = bulk ? 24 : curationPoolSize();
+
+  // Re-queue recent validation failures so a fix deploy can re-curate them.
+  await db.query(
+    `
+      UPDATE general_news
+         SET ai_curated_at = NULL,
+             ai_validation_failed = FALSE,
+             ai_last_validation_errors = NULL
+       WHERE ai_validation_failed = TRUE
+         AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
+    `
+  );
 
   let uncurated: { rows: RawGeneral[] };
   if (bulk) {
