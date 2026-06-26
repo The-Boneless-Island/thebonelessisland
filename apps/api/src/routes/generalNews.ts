@@ -16,6 +16,8 @@ import {
   CORPUS_RESET_CONFIRM_PHRASE,
   resetGeneralNewsCorpus
 } from "../lib/news/newsCorpusReset.js";
+import { retireStaleUncuratedBacklog } from "../lib/news/newsBacklog.js";
+import { getNewsPipelineDiagnostics } from "../lib/news/newsPipelineDiagnostics.js";
 import { withNewsPipelineLock } from "../lib/news/newsPipelineLock.js";
 
 export const generalNewsRouter = Router();
@@ -238,12 +240,16 @@ generalNewsRouter.post("/general/ingest", requireSession, requireParentRole, asy
  */
 generalNewsRouter.post("/general/curate", requireSession, requireParentRole, async (_req, res) => {
   try {
-    const curated = await curateUncuratedGeneralNews();
     const remainingRow = await db.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
     );
-    const remaining = parseInt(remainingRow.rows[0]?.c ?? "0", 10);
-    res.json({ ok: true, curated, remaining });
+    const remainingBefore = parseInt(remainingRow.rows[0]?.c ?? "0", 10);
+    const curated = await curateUncuratedGeneralNews({ bulk: remainingBefore > 200 });
+    const remainingAfterRow = await db.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
+    );
+    const remainingAfter = parseInt(remainingAfterRow.rows[0]?.c ?? "0", 10);
+    res.json({ ok: true, curated, remaining: remainingAfter });
   } catch (err) {
     console.error("[generalNews] POST /news/general/curate error:", err);
     res.status(500).json({ ok: false, error: "Curation failed" });
@@ -554,6 +560,20 @@ async function runRecurateJob(): Promise<void> {
   };
   await savePipelineJob("recurate", "running", { ...recurateJob }, { startedAt: new Date(), finishedAt: null, error: null });
   try {
+    const totalRow = await db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM general_news`);
+    const total = parseInt(totalRow.rows[0]?.c ?? "0", 10);
+    if (total > 1500) {
+      recurateJob.error =
+        `Corpus has ${total.toLocaleString()} articles — use Archive → Scrub the archive instead of Regenerate All Summaries on a large backlog.`;
+      recurateJob.state = "error";
+      recurateJob.finishedAt = Date.now();
+      await savePipelineJob("recurate", "error", { ...recurateJob }, {
+        error: recurateJob.error,
+        finishedAt: new Date()
+      });
+      return;
+    }
+
     const reset = await resetAllCuration();
     recurateJob.reset = reset;
     recurateJob.total = reset;
@@ -743,6 +763,49 @@ generalNewsRouter.post("/general/reset-corpus", requireSession, requireParentRol
       ok: false,
       error: err instanceof Error ? err.message : "Corpus reset failed"
     });
+  }
+});
+
+/**
+ * GET /news/general/diagnostics
+ * Admin — breakdown of backlog age, validation, and suggested next step.
+ */
+generalNewsRouter.get("/general/diagnostics", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    const diagnostics = await getNewsPipelineDiagnostics();
+    res.json({ ok: true, diagnostics });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/diagnostics error:", err);
+    res.status(500).json({ ok: false, error: "Diagnostics failed" });
+  }
+});
+
+/**
+ * POST /news/general/retire-stale-backlog
+ * Admin — mark uncurated rows outside the 14-day window as handled (no AI cost).
+ */
+generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    if (isGeneralNewsBackgroundJobRunning()) {
+      res.status(409).json({ ok: false, error: "Cancel running embed/recurate jobs first" });
+      return;
+    }
+    const locked = await withNewsPipelineLock(async () => retireStaleUncuratedBacklog());
+    if (!locked.ran) {
+      res.status(409).json({ ok: false, error: "Pipeline busy — try again in a minute" });
+      return;
+    }
+    const remainingRow = await db.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
+    );
+    res.json({
+      ok: true,
+      retired: locked.result,
+      remainingUncurated: parseInt(remainingRow.rows[0]?.c ?? "0", 10)
+    });
+  } catch (err) {
+    console.error("[generalNews] POST /news/general/retire-stale-backlog error:", err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Retire failed" });
   }
 });
 

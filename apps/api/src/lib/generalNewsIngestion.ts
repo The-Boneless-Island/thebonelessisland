@@ -14,7 +14,9 @@ import {
 } from "./news/embeddings.js";
 import { linkNewsToGame } from "./news/gameLinking.js";
 import { applyPreFilter } from "./news/newsPreFilter.js";
+import { isFreshCorpusMode, retireStaleUncuratedBacklog } from "./news/newsBacklog.js";
 import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
+import { getIngestMaxAgeDays } from "./news/newsPipelineDiagnostics.js";
 import { shouldTriggerBackgroundIngest } from "./news/newsRetention.js";
 import { reportCurationPassOutcome, setLastBatchDiagnostics } from "./news/newsCurationHealth.js";
 import { resolveHeroImage } from "./news/ogImage.js";
@@ -501,8 +503,14 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
   if (items.length === 0) return [];
 
   const insertedIds: number[] = [];
+  const ingestCutoffMs = Date.now() - getIngestMaxAgeDays() * 24 * 60 * 60 * 1000;
+  let skippedStale = 0;
 
   for (const item of items) {
+    if (item.publishedAt.getTime() < ingestCutoffMs) {
+      skippedStale++;
+      continue;
+    }
     try {
       const result = await db.query<{ id: number }>(
         `
@@ -532,6 +540,12 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
     } catch (err) {
       console.error("[generalNews] upsert failed for", item.externalId, err);
     }
+  }
+
+  if (skippedStale > 0) {
+    console.log(
+      `[generalNews] skipped ${skippedStale} feed item(s) older than ${getIngestMaxAgeDays()} days (ingest age gate)`
+    );
   }
 
   return insertedIds;
@@ -1617,6 +1631,13 @@ export async function ingestAndCurateGeneralNews(
   let errorSummary: string | null = null;
 
   try {
+    const staleBacklog = await db.query<{ c: string }>(
+      `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
+    );
+    if (parseInt(staleBacklog.rows[0]?.c ?? "0", 10) > 500) {
+      await retireStaleUncuratedBacklog();
+    }
+
     const [crewTags, gameNames, crewEntityNames] = await Promise.all([
       getCrewGameTags(), getCrewGameNames(), getCrewEntityNames()
     ]);
@@ -1647,8 +1668,17 @@ export async function ingestAndCurateGeneralNews(
 
     // Curate new rows (cluster-aware batching: pull wider pool, group siblings,
     // then pack into batches preserving cluster boundaries).
+    const freshCorpus = await isFreshCorpusMode();
     const uncurated = await db.query<RawGeneral>(
+      freshCorpus
+        ? `
+        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
+        FROM general_news
+        WHERE ai_curated_at IS NULL
+        ORDER BY published_at DESC
+        LIMIT $1
       `
+        : `
         SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
         FROM general_news
         WHERE ai_curated_at IS NULL
@@ -1820,8 +1850,19 @@ export async function curateUncuratedGeneralNews(
       `,
       [poolLimit]
     );
+  } else if (await isFreshCorpusMode()) {
+    uncurated = await db.query<RawGeneral>(
+      `
+        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
+        FROM general_news
+        WHERE ai_curated_at IS NULL
+        ORDER BY published_at DESC
+        LIMIT $1
+      `,
+      [poolLimit]
+    );
   } else {
-    // Phase 1: cluster-aware window (catches sibling articles for same story).
+    // Cluster-aware window (catches sibling articles for same story).
     uncurated = await db.query<RawGeneral>(
       `
         SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
@@ -1833,9 +1874,6 @@ export async function curateUncuratedGeneralNews(
       `,
       [poolLimit]
     );
-
-    // Phase 2 removed — auto-curation stays within CLUSTER_WINDOW to control Bedrock cost.
-    // Use admin bulk re-curate for older backlog.
   }
 
   if (uncurated.rows.length === 0) return 0;

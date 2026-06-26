@@ -336,7 +336,7 @@ export async function runNewsPipelineHealthSweep(): Promise<void> {
       `Last ingest curated **0** of **${health.lastRun.fetched}** fetched (${new Date(health.lastRun.at).toLocaleString()})`
     );
   }
-  lines.push("Admin → News → Validation · Triggers tab for backfill / regenerate.");
+  lines.push("Admin → News → Archive (Scrub / Retire stale) · Triggers → Fetch & Curate.");
 
   void sendNewsCurationAlert({
     title: "News pipeline needs attention",

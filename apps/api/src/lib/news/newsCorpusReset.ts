@@ -62,6 +62,12 @@ export async function resetGeneralNewsCorpus(): Promise<CorpusResetResult> {
 
     await db.query("COMMIT");
 
+    const verify = await db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM general_news`);
+    const remaining = parseInt(verify.rows[0]?.c ?? "0", 10);
+    if (remaining > 0) {
+      throw new Error(`Corpus reset incomplete — ${remaining} general_news row(s) still present`);
+    }
+
     return {
       deletedArticles: parseInt(before?.articles ?? "0", 10),
       deletedFeedback: parseInt(before?.feedback ?? "0", 10),
