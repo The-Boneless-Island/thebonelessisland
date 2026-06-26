@@ -209,6 +209,22 @@ export async function setEmbedding(id: number, vec: number[]): Promise<void> {
   );
 }
 
+/** Placeholder for rows with no embeddable text — keeps backfill from stalling on NULL. */
+function skippedEmbeddingVector(): number[] {
+  const v = new Array(EMBEDDING_DIM).fill(0);
+  v[0] = 1;
+  return v;
+}
+
+function buildEmbedInput(title: string, contents: string | null, aiSummary: string | null): string {
+  if (aiSummary?.trim()) return `${title}\n\n${aiSummary}`;
+  const body = (contents ?? "").trim();
+  if (body.length > 0) return `${title}\n\n${body}`;
+  const t = (title ?? "").trim();
+  if (t.length >= 8) return t;
+  return `${t || "gaming news"} — article`;
+}
+
 /** Absorb new article into an existing primary: fold its URL into the
  *  primary's sources and mark this row as a sibling (no card emitted). */
 export async function absorbAsSibling(
@@ -241,12 +257,14 @@ export async function absorbAsSibling(
 
 export type EmbedClusterResult = { embedded: number; absorbed: number; remaining: number };
 
-/** Backfill embeddings for rows missing them. */
-export async function backfillEmbeddings(maxRows: number = 200): Promise<number> {
-  if (!(await isEmbeddingColumnAvailable())) return 0;
+export type BackfillEmbeddingsResult = { embedded: number; skipped: number };
+
+/** Backfill embeddings for rows missing them. Always marks a row handled (embed or skip sentinel). */
+export async function backfillEmbeddings(maxRows: number = 200): Promise<BackfillEmbeddingsResult> {
+  if (!(await isEmbeddingColumnAvailable())) return { embedded: 0, skipped: 0 };
   if (resolveEmbeddingBackend() === "none") {
     console.warn("[embeddings] backfill skipped — no embedding backend configured (enable AI + Bedrock or OpenAI key)");
-    return 0;
+    return { embedded: 0, skipped: 0 };
   }
 
   const r = await db.query<{ id: number; title: string; contents: string | null; ai_summary: string | null }>(
@@ -259,21 +277,29 @@ export async function backfillEmbeddings(maxRows: number = 200): Promise<number>
     `,
     [maxRows]
   );
-  let count = 0;
+  let embedded = 0;
+  let skipped = 0;
   for (const row of r.rows) {
-    const text = row.ai_summary
-      ? `${row.title}\n\n${row.ai_summary}`
-      : `${row.title}\n\n${row.contents ?? ""}`;
-    const vec = await embedText(text);
+    const text = buildEmbedInput(row.title, row.contents, row.ai_summary);
+    let vec = await embedText(text);
+    if (!vec) {
+      vec = await embedText(buildEmbedInput(row.title || "News", row.contents, null));
+    }
     if (vec) {
       await setEmbedding(row.id, vec);
-      count++;
+      embedded++;
+    } else {
+      await setEmbedding(row.id, skippedEmbeddingVector());
+      skipped++;
+      console.warn(`[embeddings] backfill skip sentinel for row=${row.id} (embed failed)`);
     }
   }
-  if (count > 0) {
-    console.log(`[embeddings] backfilled ${count}/${r.rowCount} row(s) via ${resolveEmbeddingBackend()}`);
+  if (embedded > 0 || skipped > 0) {
+    console.log(
+      `[embeddings] backfilled ${embedded}/${r.rowCount} row(s), ${skipped} skip sentinel via ${resolveEmbeddingBackend()}`
+    );
   }
-  return count;
+  return { embedded, skipped };
 }
 
 /** Count rows still missing embeddings (for admin health). */

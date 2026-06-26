@@ -50,6 +50,7 @@ export type RecurateProgressSnap = {
   reset: number;
   curated: number;
   processed: number;
+  remaining: number;
   merged: number;
   duplicates: number;
   failed: number;
@@ -62,6 +63,7 @@ export type EmbedBackfillProgressSnap = {
   state: "running" | "done" | "error";
   total: number;
   embedded: number;
+  skipped: number;
   remaining: number;
   batches: number;
   error: string | null;
@@ -176,6 +178,7 @@ type NewsPageProps = {
     state: "idle" | "running" | "done" | "error";
     total: number;
     embedded: number;
+    skipped: number;
     remaining: number;
     batches: number;
     error: string | null;
@@ -188,6 +191,7 @@ type NewsPageProps = {
     reset: number;
     curated: number;
     processed?: number;
+    remaining?: number;
     merged?: number;
     duplicates?: number;
     failed?: number;
@@ -465,23 +469,37 @@ function ManualTriggersCard({
     total: number;
   } | null>(null);
 
-  function progressMsg(processed: number, total: number, costUsd: number): string {
+  function progressMsg(processed: number, total: number, remaining: number, costUsd: number): string {
     const costStr = costUsd > 0 ? ` · est. $${costUsd.toFixed(3)} spent` : "";
     if (total <= 0) return `Regenerating… ${processed} processed${costStr}`;
     const pct = Math.min(100, Math.round((processed / total) * 100));
-    return `Regenerating… ${processed} / ${total} (${pct}%)${costStr}`;
+    const remainingStr = remaining > 0 ? ` · ${remaining.toLocaleString()} left` : "";
+    return `Regenerating… ${processed.toLocaleString()} / ${total.toLocaleString()} (${pct}%)${remainingStr}${costStr}`;
   }
 
-  function doneMsg(p: { curated: number; merged: number; duplicates: number; failed: number; costUsd: number; total: number }): string {
-    const costStr = p.costUsd > 0 ? ` — est. $${p.costUsd.toFixed(3)} total spend` : "";
-    return (
-      `Done — ${p.total} articles processed: ` +
-      `${p.curated} new cards, ` +
-      `${p.merged} merged into existing cards, ` +
-      `${p.duplicates} dropped as duplicates` +
-      (p.failed > 0 ? `, ${p.failed} validation-failed` : "") +
-      costStr
-    );
+  function doneMsg(p: {
+    curated: number;
+    merged: number;
+    duplicates: number;
+    failed: number;
+    costUsd: number;
+    processed: number;
+    remaining: number;
+    total: number;
+    error: string | null;
+  }): string {
+    const costStr = p.costUsd > 0 ? ` · est. $${p.costUsd.toFixed(3)} spent` : "";
+    const lines = [
+      `Curated ${p.processed.toLocaleString()} / ${p.total.toLocaleString()} articles`,
+      `${p.curated.toLocaleString()} live cards`,
+      `${p.merged} merged`,
+      `${p.duplicates} duplicates`,
+      p.failed > 0 ? `${p.failed} validation-failed` : null,
+      p.remaining > 0 ? `${p.remaining.toLocaleString()} still waiting` : null,
+      costStr.trim() || null
+    ].filter(Boolean);
+    if (p.error) return `${p.error} — ${lines.join(" · ")}`;
+    return `Done — ${lines.join(" · ")}`;
   }
 
   function handleRecurateSnap(snap: RecurateProgressSnap) {
@@ -501,9 +519,9 @@ function ManualTriggersCard({
         costUsd: snap.costUsd,
         total: snap.total
       });
-      setRecurateMsg(progressMsg(snap.processed, snap.total, snap.costUsd));
-    } else if (snap.state === "done") {
-      setRecurateState("done");
+      setRecurateMsg(progressMsg(snap.processed, snap.total, snap.remaining, snap.costUsd));
+    } else if (snap.state === "done" || snap.state === "error") {
+      setRecurateState(snap.state === "error" ? "error" : "done");
       setRecurateProgress({
         processed: snap.processed,
         curated: snap.curated,
@@ -536,7 +554,7 @@ function ManualTriggersCard({
         costUsd: job.costUsd ?? 0,
         total: job.total
       });
-      setRecurateMsg(progressMsg(job.processed ?? 0, job.total, job.costUsd ?? 0));
+      setRecurateMsg(progressMsg(job.processed ?? 0, job.total, job.remaining ?? job.total, job.costUsd ?? 0));
 
       const result = await onRecurate((snap) => {
         if (cancelled) return;
@@ -838,10 +856,14 @@ function embedProgressMsg(snap: EmbedBackfillProgressSnap): string {
   if (snap.total <= 0 && snap.state === "done") return "Nothing to embed — all rows already have vectors.";
   const done = snap.total - snap.remaining;
   const pct = snap.total > 0 ? Math.min(100, Math.round((done / snap.total) * 100)) : 0;
+  const skippedStr = snap.skipped > 0 ? ` · ${snap.skipped.toLocaleString()} skip-sentinel` : "";
   if (snap.state === "done") {
-    return `Done — ${snap.embedded.toLocaleString()} embedded · ${snap.remaining.toLocaleString()} remaining (${pct}% of ${snap.total.toLocaleString()} starting backlog)`;
+    if (snap.remaining > 0) {
+      return `Partial — ${snap.embedded.toLocaleString()} embedded${skippedStr} · ${snap.remaining.toLocaleString()} still missing (${pct}% of ${snap.total.toLocaleString()})`;
+    }
+    return `Done — ${snap.embedded.toLocaleString()} embedded${skippedStr} · 0 remaining`;
   }
-  return `Embedding… ${done.toLocaleString()} / ${snap.total.toLocaleString()} (${pct}%) · batch ${snap.batches} · ${snap.remaining.toLocaleString()} left`;
+  return `Embedding… ${done.toLocaleString()} / ${snap.total.toLocaleString()} (${pct}%) · batch ${snap.batches}${skippedStr} · ${snap.remaining.toLocaleString()} left`;
 }
 
 function EmbedBackfillButton({
@@ -857,6 +879,7 @@ function EmbedBackfillButton({
     state: "idle" | "running" | "done" | "error";
     total: number;
     embedded: number;
+    skipped: number;
     remaining: number;
     batches: number;
     error: string | null;
@@ -896,7 +919,7 @@ function EmbedBackfillButton({
     (async () => {
       const job = await onFetchEmbedBackfillStatus();
       if (cancelled || !job || job.state !== "running") return;
-      applySnap({ ...job, state: "running" });
+      applySnap({ ...job, state: "running", skipped: job.skipped ?? 0 });
       const result = await onEmbedBackfill((snap) => {
         if (!cancelled) applySnap(snap);
       });

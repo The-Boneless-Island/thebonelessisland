@@ -986,6 +986,7 @@ export function App() {
       state: "running" | "done" | "error";
       total: number;
       embedded: number;
+      skipped: number;
       remaining: number;
       batches: number;
       error: string | null;
@@ -995,6 +996,7 @@ export function App() {
       state: "idle" | "running" | "done" | "error";
       total: number;
       embedded: number;
+      skipped?: number;
       remaining: number;
       batches: number;
       error: string | null;
@@ -1003,6 +1005,7 @@ export function App() {
       state,
       total: job.total,
       embedded: job.embedded,
+      skipped: job.skipped ?? 0,
       remaining: job.remaining,
       batches: job.batches,
       error: state === "error" ? job.error : null
@@ -1068,12 +1071,14 @@ export function App() {
           state: "idle" | "running" | "done" | "error";
           total: number;
           embedded: number;
+          skipped?: number;
           remaining: number;
           batches: number;
           error: string | null;
         };
       } | null;
-      return data?.job ?? null;
+      const job = data?.job;
+      return job ? { ...job, skipped: job.skipped ?? 0 } : null;
     } catch {
       return null;
     }
@@ -1102,6 +1107,7 @@ export function App() {
       reset: number;
       curated: number;
       processed: number;
+      remaining: number;
       merged: number;
       duplicates: number;
       failed: number;
@@ -1115,6 +1121,7 @@ export function App() {
       reset: number;
       curated: number;
       processed?: number;
+      remaining?: number;
       merged?: number;
       duplicates?: number;
       failed?: number;
@@ -1127,6 +1134,7 @@ export function App() {
       reset: job.reset,
       curated: job.curated,
       processed: job.processed ?? 0,
+      remaining: job.remaining ?? 0,
       merged: job.merged ?? 0,
       duplicates: job.duplicates ?? 0,
       failed: job.failed ?? 0,
@@ -1142,9 +1150,8 @@ export function App() {
         return { ok: false, error: body?.error ?? `HTTP ${kickResp.status}` };
       }
 
-      // Poll status until terminal state
       const POLL_INTERVAL_MS = 2000;
-      const MAX_POLLS = 600; // 20 min hard cap so we never poll forever
+      const MAX_POLLS = 14400; // ~8 hours for full-corpus re-curate
       for (let i = 0; i < MAX_POLLS; i++) {
         await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
         const statusResp = await apiFetch("/news/general/recurate/status", { credentials: "include" });
@@ -1200,6 +1207,7 @@ export function App() {
           reset: number;
           curated: number;
           processed?: number;
+          remaining?: number;
           merged?: number;
           duplicates?: number;
           failed?: number;
