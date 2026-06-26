@@ -851,7 +851,11 @@ async function curateBatchOnce(
     url: it.url,
     cluster: extractClusterKey(it),
     title: it.title,
-    excerpt: it.contents ? it.contents.slice(0, 800) + (it.contents.length > 800 ? "…" : "") : ""
+    excerpt: (() => {
+      const body = (it.contents ?? "").trim();
+      const text = body.length >= 40 ? body : it.title;
+      return text.length > 800 ? text.slice(0, 800) + "…" : text;
+    })()
   }));
 
   const existingPayload = existingPrimaries.map((p) => ({
