@@ -133,6 +133,8 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     status = "off";
   } else if (counts.liveCards === 0 && counts.uncuratedBacklog > 50) {
     status = "critical";
+  } else if (counts.uncuratedBacklog > 200 && counts.liveCards < counts.uncuratedBacklog * 0.15) {
+    status = "degraded";
   } else if (
     counts.liveCards === 0 &&
     counts.uncuratedBacklog > 0 &&
@@ -316,6 +318,10 @@ export async function runNewsPipelineHealthSweep(): Promise<void> {
   let autopilotSkipped: string | undefined;
   try {
     const { runNewsAutopilot } = await import("./newsAutopilot.js");
+    const { isPipelineQueueEnabled, enqueueOrRunCurate } = await import("./newsPipelineQueue.js");
+    if (healthBefore.uncuratedBacklog > 200 && isPipelineQueueEnabled()) {
+      await enqueueOrRunCurate({ priority: 5, reportRun: false });
+    }
     const autopilot = await runNewsAutopilot();
     autopilotEscalated = autopilot.escalated;
     autopilotSkipped = autopilot.skippedReason;

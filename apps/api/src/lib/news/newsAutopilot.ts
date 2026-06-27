@@ -128,10 +128,12 @@ async function sendAutopilotEscalation(
 }
 
 /**
- * Bounded self-healing pass: retire stale backlog → ingest if needed → curate → embed.
- * Safe to run on a schedule; skips when disabled, manual jobs are running, or autopilot is already active.
+ * Bounded self-healing pass (internal). When skipLock is true, caller or queue worker
+ * already holds the pipeline lock — child ingest/curate must not re-acquire.
  */
-export async function runNewsAutopilot(opts: { force?: boolean } = {}): Promise<AutopilotResult> {
+export async function executeAutopilotPass(
+  opts: { force?: boolean; skipLock?: boolean } = {}
+): Promise<AutopilotResult> {
   const finishedAt = new Date().toISOString();
   const emptySteps: AutopilotStepLog = {};
 
@@ -215,7 +217,7 @@ export async function runNewsAutopilot(opts: { force?: boolean } = {}): Promise<
     const feedStale = await isFeedStale();
     const shouldIngest = feedStale || counts.liveCards === 0 || counts.uncuratedBacklog > 0;
     if (shouldIngest) {
-      steps.ingest = await ingestAndCurateGeneralNews(true);
+      steps.ingest = await ingestAndCurateGeneralNews(true, { skipLock: opts.skipLock });
     }
 
     let curatedTotal = 0;
@@ -225,7 +227,7 @@ export async function runNewsAutopilot(opts: { force?: boolean } = {}): Promise<
       const remaining = await countUncuratedWithinWindow();
       if (remaining === 0) break;
 
-      const n = await curateUncuratedGeneralNews({ reportRun: false });
+      const n = await curateUncuratedGeneralNews({ reportRun: false }, { skipLock: opts.skipLock });
       curateBatches++;
       curatedTotal += n;
       if (n === 0) {
@@ -309,6 +311,36 @@ export async function runNewsAutopilot(opts: { force?: boolean } = {}): Promise<
     );
     throw err;
   }
+}
+
+/** Public entry — enqueues when the pipeline queue is enabled. */
+export async function runNewsAutopilot(opts: { force?: boolean } = {}): Promise<AutopilotResult> {
+  const { isPipelineQueueEnabled, enqueueOrRunAutopilot } = await import("./newsPipelineQueue.js");
+  if (!isPipelineQueueEnabled()) {
+    return executeAutopilotPass(opts);
+  }
+
+  const health = await getNewsPipelineHealth();
+  const healthSnap = {
+    status: health.status,
+    liveCards: health.liveCards,
+    validationFailures: health.validationFailures,
+    uncuratedBacklog: health.uncuratedBacklog,
+    embeddingsMissing: health.embeddingsMissing
+  };
+  const enqueued = await enqueueOrRunAutopilot(opts.force === true);
+  return {
+    ran: false,
+    skippedReason: enqueued.alreadyPending
+      ? `Queued (position ${enqueued.position})`
+      : `Queued as job #${enqueued.jobId} (position ${enqueued.position})`,
+    steps: {},
+    costUsd: 0,
+    healthBefore: healthSnap,
+    healthAfter: healthSnap,
+    escalated: false,
+    finishedAt: new Date().toISOString()
+  };
 }
 
 export async function getAutopilotStatus(): Promise<{

@@ -1725,11 +1725,17 @@ async function persistCurationOutcome(
 /** Fire-and-forget ingest when the public feed is stale (or legacy page-load mode). */
 export async function maybeBackgroundIngest(): Promise<void> {
   if (!(await shouldTriggerBackgroundIngest())) return;
+  const { isPipelineQueueEnabled, enqueueOrRunIngest } = await import("./news/newsPipelineQueue.js");
+  if (isPipelineQueueEnabled()) {
+    await enqueueOrRunIngest(false);
+    return;
+  }
   void ingestAndCurateGeneralNews(false);
 }
 
 export async function ingestAndCurateGeneralNews(
-  force = false
+  force = false,
+  opts: { skipLock?: boolean } = {}
 ): Promise<{ fetched: number; curated: number; embedded: number }> {
   const enabled = getAISetting("news_general_enabled");
   if (enabled === "false") return { fetched: 0, curated: 0, embedded: 0 };
@@ -1737,7 +1743,7 @@ export async function ingestAndCurateGeneralNews(
     return { fetched: 0, curated: 0, embedded: 0 };
   }
 
-  const locked = await withNewsPipelineLock(async () => {
+  const runIngest = async (): Promise<{ fetched: number; curated: number; embedded: number }> => {
   const costAtStart = getAiCostTotalUsd();
 
   let totalFetched = 0;
@@ -1881,9 +1887,20 @@ export async function ingestAndCurateGeneralNews(
   }
 
   return { fetched: totalFetched, curated: totalCurated, embedded: totalEmbedded };
-  });
+  };
 
-  if (!locked.ran) return { fetched: 0, curated: 0, embedded: 0 };
+  if (opts.skipLock) {
+    return runIngest();
+  }
+
+  const locked = await withNewsPipelineLock(runIngest);
+  if (!locked.ran) {
+    const { isPipelineQueueEnabled, enqueueOrRunIngest } = await import("./news/newsPipelineQueue.js");
+    if (isPipelineQueueEnabled()) {
+      await enqueueOrRunIngest(force);
+    }
+    return { fetched: 0, curated: 0, embedded: 0 };
+  }
   return locked.result;
 }
 
@@ -1947,7 +1964,8 @@ export async function debugCurateOne(): Promise<{
  * Used by the admin "trigger curation" button.
  */
 export async function curateUncuratedGeneralNews(
-  options: { reportRun?: boolean; bulk?: boolean } = {}
+  options: { reportRun?: boolean; bulk?: boolean } = {},
+  opts: { skipLock?: boolean } = {}
 ): Promise<number> {
   const reportRun = options.reportRun !== false;
   const bulk = options.bulk === true;
@@ -2014,7 +2032,7 @@ export async function curateUncuratedGeneralNews(
 
   if (uncurated.rows.length === 0) return 0;
 
-  const locked = await withNewsPipelineLock(async () => {
+  const runCurate = async (): Promise<number> => {
   const costAtStart = getAiCostTotalUsd();
   let batchFailed = 0;
 
@@ -2072,7 +2090,13 @@ export async function curateUncuratedGeneralNews(
     }
     return 0;
   }
-  });
+  };
+
+  if (opts.skipLock) {
+    return runCurate();
+  }
+
+  const locked = await withNewsPipelineLock(runCurate);
 
   if (!locked.ran) {
     setLastBatchDiagnostics({
@@ -2083,6 +2107,12 @@ export async function curateUncuratedGeneralNews(
       provider: getAISetting("ai_provider") ?? "unknown",
       model: resolveModelForTask("curation") ?? getAISetting("ai_model") ?? "default"
     });
+    const { isPipelineQueueEnabled, enqueueOrRunCurate } = await import("./news/newsPipelineQueue.js");
+    if (isPipelineQueueEnabled()) {
+      await enqueueOrRunCurate({ bulk: options.bulk, reportRun: options.reportRun, priority: 7 });
+      console.warn("[generalNews] curation lock busy — queued for pipeline worker");
+      return 0;
+    }
     console.warn("[generalNews] curation skipped — pipeline lock busy (ingest or another job running)");
     return 0;
   }
