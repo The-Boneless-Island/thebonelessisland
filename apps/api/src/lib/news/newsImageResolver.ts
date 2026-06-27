@@ -1,4 +1,5 @@
 import { db } from "../../db/client.js";
+import { resolveEntityLogoUrl } from "./newsEntityLogo.js";
 import { resolveGameCoverUrl } from "../gameCatalogEnrichment.js";
 import { extractImageFromHtml } from "./newsImageHtml.js";
 import { verifyImageUrl } from "./newsImageVerify.js";
@@ -16,6 +17,8 @@ export type NewsImageSource =
   | "steam"
   | "cheapshark"
   | "igdb"
+  | "entity_igdb"
+  | "wikipedia"
   | "default"
   | "none";
 
@@ -29,6 +32,9 @@ export type ResolvedNewsImage = {
 type NewsImageRow = {
   id: number;
   url: string;
+  title: string;
+  ai_title: string | null;
+  ai_tags: string[];
   contents: string | null;
   image_url: string | null;
   image_source: string | null;
@@ -38,10 +44,18 @@ type NewsImageRow = {
   published_at: string;
 };
 
+function isIslandDefaultCover(row: Pick<NewsImageRow, "image_url" | "image_source">): boolean {
+  return (
+    row.image_source === "default" ||
+    row.image_url === NEWS_DEFAULT_COVER_PATH ||
+    (row.image_url?.endsWith(NEWS_DEFAULT_COVER_PATH) ?? false)
+  );
+}
+
 async function loadNewsImageRow(id: number): Promise<NewsImageRow | null> {
   const r = await db.query<NewsImageRow>(
     `
-      SELECT id, url, contents, image_url, image_source, linked_app_id,
+      SELECT id, url, title, ai_title, ai_tags, contents, image_url, image_source, linked_app_id,
              ai_game_title, ai_story_fingerprint, published_at::text
         FROM general_news
        WHERE id = $1
@@ -118,12 +132,28 @@ async function resolveGameCover(row: NewsImageRow): Promise<{ url: string; sourc
   return { url: verified.url, source };
 }
 
+async function resolveEntityCover(
+  row: NewsImageRow
+): Promise<{ url: string; source: NewsImageSource } | null> {
+  const entity = await resolveEntityLogoUrl({
+    title: row.title,
+    aiTitle: row.ai_title,
+    aiGameTitle: row.ai_game_title,
+    aiTags: row.ai_tags,
+    storyFingerprint: row.ai_story_fingerprint
+  });
+  if (!entity) return null;
+  const verified = await tryUrl(entity.url);
+  if (!verified) return null;
+  return { url: verified.url, source: entity.source };
+}
+
 /**
  * Resolve a cover through the full fallback ladder (no AI generation).
- * Always returns an image — branded default is the terminal fallback.
+ * Island default is only used when no related art or entity logo can be found.
  */
 export async function resolveNewsArticleImage(row: NewsImageRow): Promise<ResolvedNewsImage> {
-  if (row.image_url) {
+  if (row.image_url && !isIslandDefaultCover(row)) {
     const existing = await tryUrl(row.image_url, row.url);
     if (existing) {
       return {
@@ -162,6 +192,11 @@ export async function resolveNewsArticleImage(row: NewsImageRow): Promise<Resolv
     return { url: gameCover.url, source: gameCover.source, width: null, height: null };
   }
 
+  const entityCover = await resolveEntityCover(row);
+  if (entityCover) {
+    return { url: entityCover.url, source: entityCover.source, width: null, height: null };
+  }
+
   return {
     url: NEWS_DEFAULT_COVER_PATH,
     source: "default",
@@ -197,7 +232,14 @@ export async function resolveNewsImagesForIds(ids: number[]): Promise<{ resolved
     try {
       const before = await loadNewsImageRow(id);
       const after = await persistNewsArticleImage(id);
-      if (after && (!before?.image_url || before.image_url !== after.url)) resolved++;
+      if (
+        after &&
+        (!before?.image_url ||
+          before.image_url !== after.url ||
+          isIslandDefaultCover(before))
+      ) {
+        resolved++;
+      }
     } catch (err) {
       console.warn(`[news-images] resolve failed for id=${id}:`, err);
     }
@@ -218,7 +260,7 @@ export async function countNewsImagesMissing(): Promise<number> {
   return parseInt(r.rows[0]?.c ?? "0", 10);
 }
 
-/** Live feed cards without any stored cover. */
+/** Live feed cards still on the generic island placeholder or unresolved. */
 export async function countLiveCardsMissingImages(): Promise<number> {
   const r = await db.query<{ c: string }>(
     `
@@ -227,7 +269,11 @@ export async function countLiveCardsMissingImages(): Promise<number> {
        WHERE ai_curated_at IS NOT NULL
          AND ai_relevance_score > 0
          AND ai_validation_failed = FALSE
-         AND (image_url IS NULL OR image_resolved_at IS NULL)
+         AND (
+           image_url IS NULL
+           OR image_resolved_at IS NULL
+           OR image_source = 'default'
+         )
     `
   );
   return parseInt(r.rows[0]?.c ?? "0", 10);
@@ -243,7 +289,9 @@ export async function backfillMissingNewsImages(
     `
       SELECT id
         FROM general_news
-       WHERE image_url IS NULL OR image_resolved_at IS NULL
+       WHERE image_url IS NULL
+          OR image_resolved_at IS NULL
+          OR image_source = 'default'
        ORDER BY
          (ai_curated_at IS NOT NULL AND ai_relevance_score > 0 AND ai_validation_failed = FALSE) DESC,
          published_at DESC
