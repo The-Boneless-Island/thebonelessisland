@@ -2,6 +2,7 @@ import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
+import { userOrIp } from "../middleware/rateLimit.js";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
@@ -1086,10 +1087,7 @@ const uploadLimiter = rateLimit({
   limit: () => getSetting("forums_upload_per_hour", 20),
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req: Request) => {
-    const uid = (req as Request & { session?: { userId?: string } }).session?.userId;
-    return uid ? `u:${uid}` : `ip:${req.ip ?? "unknown"}`;
-  },
+  keyGenerator: userOrIp,
   message: { error: "Too many uploads — try again later" },
 });
 

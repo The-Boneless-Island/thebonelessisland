@@ -22,7 +22,9 @@ import type { Request } from "express";
 
 // Use session user id when available so two people behind the same NAT IP
 // don't share a bucket. Falls back to IP for unauthenticated requests.
-function userOrIp(req: Request): string {
+// Exported so route-local limiters reuse the IPv6-safe key (ipKeyGenerator)
+// instead of hand-rolling `req.ip`, which express-rate-limit v8 rejects.
+export function userOrIp(req: Request): string {
   const sessionUserId = (req as Request & { session?: { userId?: string } }).session?.userId;
   if (sessionUserId) return `u:${sessionUserId}`;
   return `ip:${ipKeyGenerator(req.ip ?? "unknown")}`;
