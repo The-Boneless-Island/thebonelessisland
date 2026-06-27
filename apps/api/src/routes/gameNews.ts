@@ -1,7 +1,7 @@
 import express from "express";
 import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
-import { ingestNewsForApps } from "../lib/gameNewsIngestion.js";
+import { enqueueGameNewsIngest } from "../lib/gameNewsIngestQueue.js";
 import { getAISetting, getGuildId } from "../lib/serverSettings.js";
 import { curateUncuratedNews, forceCurateNews } from "../lib/newsCurator.js";
 
@@ -169,11 +169,10 @@ gameNewsRouter.get("/news", async (_req, res) => {
   // Fire-and-forget ingest — skip when a recent run already happened (cron or prior GET).
   if (Date.now() - lastGameNewsIngestAt >= INGEST_COOLDOWN_MS) {
     lastGameNewsIngestAt = Date.now();
-    ingestNewsForApps(scope.topAppIds, { maxApps: 30 })
-      .then(() => curateUncuratedNews(scope.topAppIds))
-      .catch((err) => {
-        console.error("[gameNews] background ingest/curate error:", err);
-      });
+    enqueueGameNewsIngest(scope.topAppIds, { maxApps: 30 });
+    curateUncuratedNews(scope.topAppIds).catch((err) => {
+      console.error("[gameNews] background curate error:", err);
+    });
   }
 
   const result = await db.query<NewsRow>(

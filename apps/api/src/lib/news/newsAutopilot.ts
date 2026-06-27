@@ -81,7 +81,19 @@ async function isManualJobRunning(): Promise<boolean> {
   const r = await db.query<{ job_kind: string }>(
     `SELECT job_kind FROM news_pipeline_jobs WHERE state = 'running' AND job_kind IN ('recurate', 'embed_backfill')`
   );
-  return r.rows.length > 0;
+  if (r.rows.length > 0) return true;
+
+  const { isRecurateJobRunning } = await import("./newsRecurateJob.js");
+  const { isEmbedBackfillJobRunning } = await import("./newsEmbedBackfillJob.js");
+  if (isRecurateJobRunning() || isEmbedBackfillJobRunning()) return true;
+
+  const { isPipelineQueueEnabled } = await import("./newsPipelineQueue.js");
+  if (!isPipelineQueueEnabled()) return false;
+
+  const queueRunning = await db.query<{ job_kind: string }>(
+    `SELECT job_kind FROM news_pipeline_queue WHERE state = 'running' AND job_kind IN ('recurate', 'embed_backfill')`
+  );
+  return queueRunning.rows.length > 0;
 }
 
 async function sendAutopilotEscalation(
