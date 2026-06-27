@@ -4,6 +4,7 @@ import { Sentry } from "../sentry.js";
 import { log } from "../structuredLog.js";
 import { getAISetting } from "../serverSettings.js";
 import { countMissingEmbeddings, resolveEmbeddingBackend } from "./embeddings.js";
+import { countLiveCardsMissingImages } from "./newsImageResolver.js";
 import { isNewsCurationAlertConfigured, sendNewsCurationAlert } from "./newsCurationAlert.js";
 
 export type BatchDiagnostics = {
@@ -35,6 +36,7 @@ export type NewsPipelineHealth = {
   liveCards: number;
   validationFailures: number;
   uncuratedBacklog: number;
+  liveCardsMissingImages: number;
   queuePending: number;
   queueRunning: number;
   queueOldestPendingAt: string | null;
@@ -115,9 +117,10 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     ? await getPipelineQueueCounts()
     : { pending: 0, running: 0, oldestPendingAt: null as string | null };
 
-  const [counts, embeddingsMissing, lastRunRow] = await Promise.all([
+  const [counts, embeddingsMissing, liveCardsMissingImages, lastRunRow] = await Promise.all([
     snapshotPipelineCounts(),
     countMissingEmbeddings(),
+    countLiveCardsMissingImages(),
     db.query<{
       started_at: string;
       run_kind: string;
@@ -166,6 +169,8 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     status = "degraded";
   } else if (counts.validationFailures > 10) {
     status = "degraded";
+  } else if (liveCardsMissingImages > 5) {
+    status = "degraded";
   } else if (embeddingsMissing > 500) {
     status = "degraded";
   } else if (lr?.curated === 0 && (lr?.fetched ?? 0) > 0) {
@@ -179,6 +184,7 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     liveCards: counts.liveCards,
     validationFailures: counts.validationFailures,
     uncuratedBacklog: counts.uncuratedBacklog,
+    liveCardsMissingImages,
     queuePending: queueCounts.pending,
     queueRunning: queueCounts.running,
     queueOldestPendingAt: queueCounts.oldestPendingAt,

@@ -7,6 +7,7 @@ import { backfillEmbeddings, countMissingEmbeddings } from "./embeddings.js";
 import { retireStaleUncuratedBacklog } from "./newsBacklog.js";
 import { executeAutopilotPass } from "./newsAutopilot.js";
 import { runEmbedBackfillJob } from "./newsEmbedBackfillJob.js";
+import { backfillMissingNewsImages } from "./newsImageResolver.js";
 import { runRecurateJob } from "./newsRecurateJob.js";
 import { withNewsPipelineLock } from "./newsPipelineLock.js";
 import { getAISetting } from "../serverSettings.js";
@@ -17,7 +18,8 @@ export type PipelineQueueKind =
   | "autopilot"
   | "retire_stale"
   | "recurate"
-  | "embed_backfill";
+  | "embed_backfill"
+  | "resolve_images";
 
 export type PipelineQueueJob = {
   id: number;
@@ -198,6 +200,10 @@ async function executeQueueJob(job: PipelineQueueJob): Promise<Record<string, un
       });
     case "embed_backfill":
       return await runEmbedBackfillJob();
+    case "resolve_images": {
+      const limit = Math.min(200, Math.max(1, parseInt(String(job.payload.limit ?? 40), 10)));
+      return await backfillMissingNewsImages(limit);
+    }
     default:
       throw new Error(`Unknown queue job kind: ${job.job_kind}`);
   }
@@ -326,6 +332,14 @@ export async function enqueueOrRunRecurate(resetFirst = false): Promise<EnqueueP
 
 export async function enqueueOrRunEmbedBackfill(): Promise<EnqueuePipelineResult> {
   return enqueuePipelineJob("embed_backfill", {}, { priority: 3, dedupeKey: "embed_backfill:pipeline" });
+}
+
+export async function enqueueOrRunResolveImages(limit = 40): Promise<EnqueuePipelineResult> {
+  return enqueuePipelineJob(
+    "resolve_images",
+    { limit },
+    { priority: 2, dedupeKey: "resolve_images:pipeline" }
+  );
 }
 
 export async function getPipelineQueueCounts(): Promise<{

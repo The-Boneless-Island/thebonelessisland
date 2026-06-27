@@ -416,10 +416,8 @@ generalNewsRouter.get(
 
 /**
  * POST /news/general/image-backfill
- * Admin — scrape og:image covers for already-ingested rows that have none (the
- * ingest hook only touches freshly-inserted rows). Bounded per call (default
- * 50); poll until remaining returns 0. Image scraping is network-bound, so keep
- * the limit modest to avoid request timeouts.
+ * Admin — run the full cover fallback ladder (og → body → sibling → game art → island default).
+ * Bounded per call (default 50); poll until remaining returns 0.
  */
 generalNewsRouter.post("/general/image-backfill", requireSession, requireParentRole, async (req, res) => {
   try {

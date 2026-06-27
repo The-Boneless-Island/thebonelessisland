@@ -1,6 +1,7 @@
 // Shared helpers used by every NewsProvider.
 
 import Parser from "rss-parser";
+import { extractImageFromHtml } from "../newsImageHtml.js";
 
 /** Substring-match the article against crew game tags + game names. The
  *  result lands in general_news.matched_tags and is later used by the AI
@@ -32,17 +33,37 @@ export const rssParser = new Parser({
 /** Max items pulled from a single feed per ingestion cycle. */
 export const ITEMS_PER_FEED = 20;
 
-/** Best-effort image-URL extraction from common RSS field shapes. */
+/** Best-effort image-URL extraction from common RSS field shapes.
+ *  Priority: media:content > media:thumbnail > enclosure (image/*) > description img. */
 export function extractImageUrl(item: unknown): string | null {
   const it = item as {
-    mediaThumbnail?: { $?: { url?: string } };
-    mediaContent?: { $?: { url?: string } };
-    enclosure?: { url?: string };
+    mediaThumbnail?: { $?: { url?: string; width?: string; height?: string } };
+    mediaContent?: { $?: { url?: string; medium?: string; type?: string } } | Array<{ $?: { url?: string; medium?: string; type?: string } }>;
+    enclosure?: { url?: string; type?: string };
+    content?: string;
+    contentSnippet?: string;
+    summary?: string;
+    description?: string;
   };
-  return (
-    it.mediaThumbnail?.["$"]?.url ??
-    it.mediaContent?.["$"]?.url ??
-    it.enclosure?.url ??
-    null
-  );
+
+  const mediaContents = Array.isArray(it.mediaContent) ? it.mediaContent : it.mediaContent ? [it.mediaContent] : [];
+  for (const mc of mediaContents) {
+    const url = mc?.$?.url;
+    const type = mc?.$?.type ?? "";
+    const medium = mc?.$?.medium ?? "";
+    if (url && (type.includes("image") || medium === "image")) return url;
+  }
+
+  const thumbUrl = it.mediaThumbnail?.["$"]?.url;
+  if (thumbUrl) return thumbUrl;
+
+  const encType = it.enclosure?.type ?? "";
+  if (it.enclosure?.url && encType.includes("image")) return it.enclosure.url;
+
+  const html =
+    (typeof it.content === "string" && it.content) ||
+    (typeof it.description === "string" && it.description) ||
+    (typeof it.summary === "string" && it.summary) ||
+    null;
+  return extractImageFromHtml(html);
 }
