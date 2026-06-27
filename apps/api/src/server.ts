@@ -517,6 +517,25 @@ async function bootstrap() {
 
   startPipelineQueueWorker();
 
+  setTimeout(() => {
+    void (async () => {
+      try {
+        const { isPipelineQueueEnabled, enqueueOrRunResolveImages } = await import(
+          "./lib/news/newsPipelineQueue.js"
+        );
+        const { countLiveCardsMissingImages } = await import("./lib/news/newsImageResolver.js");
+        if (!isPipelineQueueEnabled()) return;
+        const missing = await countLiveCardsMissingImages();
+        if (missing > 0) {
+          await enqueueOrRunResolveImages(Math.min(80, missing));
+          console.log(`[generalNews] queued image resolve for ~${missing} live card(s)`);
+        }
+      } catch (err) {
+        console.error("[generalNews] boot image resolve enqueue failed:", err);
+      }
+    })();
+  }, 75_000);
+
   // Pipeline health sweep — bounded autopilot recovery, then Discord if still degraded.
   const runHealthSweep = () =>
     runNewsPipelineHealthSweep().catch((err) => {

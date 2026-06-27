@@ -13,6 +13,12 @@ import {
   countMissingEmbeddings
 } from "./news/embeddings.js";
 import { linkNewsToGame } from "./news/gameLinking.js";
+import {
+  backfillMissingNewsImages,
+  countLiveCardsMissingImages,
+  persistNewsArticleImage,
+  resolveNewsImagesForIds
+} from "./news/newsImageResolver.js";
 import { applyPreFilter, looksLikeNonGamingNews } from "./news/newsPreFilter.js";
 import { isFreshCorpusMode, retireStaleUncuratedBacklog } from "./news/newsBacklog.js";
 import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
@@ -23,7 +29,6 @@ import {
   reportCurationPassOutcome,
   setLastBatchDiagnostics
 } from "./news/newsCurationHealth.js";
-import { resolveHeroImage } from "./news/ogImage.js";
 import {
   recordSourceCurated,
   recordSourceFetchError,
@@ -524,8 +529,8 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
         `
           INSERT INTO general_news
             (source_type, source_name, external_id, title, url, contents, author,
-             image_url, published_at, matched_tags)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             image_url, image_source, published_at, matched_tags)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
           ON CONFLICT (source_type, external_id) DO NOTHING
           RETURNING id
         `,
@@ -538,6 +543,7 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
           item.contents,
           item.author,
           item.imageUrl,
+          item.imageUrl ? "feed" : null,
           item.publishedAt.toISOString(),
           item.matchedTags
         ]
@@ -559,67 +565,22 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
   return insertedIds;
 }
 
-/**
- * For freshly-inserted rows with no feed image, scrape the article's og:image
- * (or twitter:image) so the Hero/Cards have a large cover to show. Scrape-once:
- * sets image_resolved_at even on failure so a dead page isn't re-hit every run.
- * Best-effort and fail-open — never blocks ingestion.
- */
-async function resolveMissingImages(newIds: number[]): Promise<{ scanned: number; resolved: number }> {
-  if (newIds.length === 0) return { scanned: 0, resolved: 0 };
-  const rows = await db.query<{ id: number; url: string }>(
-    `SELECT id, url FROM general_news
-      WHERE id = ANY($1::int[])
-        AND image_url IS NULL
-        AND image_resolved_at IS NULL`,
-    [newIds]
-  );
-  if (rows.rows.length === 0) return { scanned: 0, resolved: 0 };
-
-  let resolved = 0;
-  for (const row of rows.rows) {
-    let img: Awaited<ReturnType<typeof resolveHeroImage>> = null;
-    try {
-      img = await resolveHeroImage(row.url);
-    } catch {
-      img = null;
-    }
-    await db.query(
-      `UPDATE general_news
-          SET image_url = $1, image_source = $2, image_width = $3,
-              image_height = $4, image_resolved_at = NOW()
-        WHERE id = $5`,
-      [img?.url ?? null, img?.source ?? "none", img?.width ?? null, img?.height ?? null, row.id]
-    );
-    if (img?.url) resolved++;
-  }
-  console.log(
-    `[generalNews] og:image scrape — resolved ${resolved}/${rows.rows.length} imageless row(s)`
-  );
-  return { scanned: rows.rows.length, resolved };
-}
-
-/**
- * One-time backfill of cover images for already-ingested rows that never got an
- * og:image scrape (the ingest hook only touches freshly-inserted rows). Bounded
- * per call so the admin endpoint stays responsive; poll until remaining hits 0.
- */
+/** Admin/corpus backfill — runs the full image fallback ladder per row. */
 export async function backfillMissingImages(
   maxRows = 50
 ): Promise<{ scanned: number; resolved: number; remaining: number }> {
-  const candidates = await db.query<{ id: number }>(
-    `SELECT id FROM general_news
-      WHERE image_url IS NULL AND image_resolved_at IS NULL
-      ORDER BY published_at DESC
-      LIMIT $1`,
-    [maxRows]
-  );
-  const { scanned, resolved } = await resolveMissingImages(candidates.rows.map((r) => r.id));
-  const rem = await db.query<{ c: string }>(
-    `SELECT COUNT(*)::text AS c FROM general_news
-      WHERE image_url IS NULL AND image_resolved_at IS NULL`
-  );
-  return { scanned, resolved, remaining: parseInt(rem.rows[0]?.c ?? "0", 10) };
+  return backfillMissingNewsImages(maxRows);
+}
+
+/**
+ * For freshly-inserted rows, run the cover fallback ladder (og → body → sibling → game → default).
+ */
+async function resolveMissingImages(newIds: number[]): Promise<{ scanned: number; resolved: number }> {
+  const { scanned, resolved } = await resolveNewsImagesForIds(newIds);
+  if (scanned > 0) {
+    console.log(`[generalNews] cover resolve — updated ${resolved}/${scanned} row(s)`);
+  }
+  return { scanned, resolved };
 }
 
 /**
@@ -1691,7 +1652,15 @@ async function persistCurationOutcome(
     );
   } else if (!publishResult.duplicate && !isMerge(publishResult)) {
     await recordSourceCurated(item.source_name);
-    void linkNewsToGame(item.id, publishResult.gameTitle ?? null);
+    await linkNewsToGame(item.id, publishResult.gameTitle ?? null);
+    try {
+      await persistNewsArticleImage(item.id);
+    } catch (err) {
+      console.warn(
+        `[generalNews] post-curation image resolve failed for ${item.external_id}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
   }
 
   // Embed the newly-curated primary so future ingests can match against the
@@ -1874,6 +1843,19 @@ export async function ingestAndCurateGeneralNews(
       }
     } catch (err) {
       console.warn("[generalNews] auto embed backfill failed:", err);
+    }
+    try {
+      const missingImages = await countLiveCardsMissingImages();
+      if (missingImages > 0) {
+        const { isPipelineQueueEnabled, enqueueOrRunResolveImages } = await import("./news/newsPipelineQueue.js");
+        if (isPipelineQueueEnabled()) {
+          await enqueueOrRunResolveImages(Math.min(50, missingImages));
+        } else {
+          await backfillMissingNewsImages(Math.min(50, missingImages));
+        }
+      }
+    } catch (err) {
+      console.warn("[generalNews] auto image resolve failed:", err);
     }
     void reportCurationPassOutcome({
       runKind: "ingest",

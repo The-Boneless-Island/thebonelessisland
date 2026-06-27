@@ -4,6 +4,59 @@ import { db } from "../db/client.js";
 export type GameImageProvider = "steam" | "cheapshark" | "igdb";
 export const GAME_IMAGE_PROVIDER_PRIORITY: readonly GameImageProvider[] = ["steam", "cheapshark", "igdb"];
 
+export async function resolveGameCoverUrl(context: {
+  appId?: number | null;
+  gameName?: string | null;
+}): Promise<{ url: string; provider: GameImageProvider } | null> {
+  const appId = context.appId ?? null;
+  const gameName = (context.gameName ?? "").trim();
+
+  if (appId) {
+    const cached = await db.query<{ header_image_url: string | null; name: string }>(
+      `SELECT header_image_url, name FROM games WHERE app_id = $1`,
+      [appId]
+    );
+    const row = cached.rows[0];
+    if (row?.header_image_url?.trim()) {
+      return { url: row.header_image_url.trim(), provider: "steam" };
+    }
+    if (row?.name) {
+      const steamMap = await resolveSteamImageMap([appId]);
+      const steamUrl = steamMap.get(appId);
+      if (steamUrl) return { url: steamUrl, provider: "steam" };
+    }
+  }
+
+  const lookupName = gameName || (appId
+    ? (await db.query<{ name: string }>(`SELECT name FROM games WHERE app_id = $1`, [appId])).rows[0]?.name
+    : null);
+  if (!lookupName?.trim()) return null;
+
+  const candidateContext: GameImageCandidateContext = {
+    appId: appId ?? 0,
+    name: lookupName.trim()
+  };
+
+  for (const provider of GAME_IMAGE_PROVIDER_PRIORITY) {
+    if (!isProviderEnabled(provider)) continue;
+    if (provider === "steam" && appId) {
+      const steamMap = await resolveSteamImageMap([appId]);
+      const steamUrl = steamMap.get(appId);
+      if (steamUrl) return { url: steamUrl, provider: "steam" };
+      continue;
+    }
+    if (provider === "cheapshark") {
+      const cheap = await resolveCheapSharkImage(candidateContext);
+      if (cheap) return { url: cheap, provider: "cheapshark" };
+    }
+    if (provider === "igdb") {
+      const igdb = await resolveIgdbImageByName(candidateContext.name);
+      if (igdb) return { url: igdb, provider: "igdb" };
+    }
+  }
+  return null;
+}
+
 type SteamAppDetails = {
   success?: boolean;
   data?: {

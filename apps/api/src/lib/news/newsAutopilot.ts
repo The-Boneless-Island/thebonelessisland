@@ -5,6 +5,7 @@ import {
   ingestAndCurateGeneralNews
 } from "../generalNewsIngestion.js";
 import { backfillEmbeddings, countMissingEmbeddings } from "./embeddings.js";
+import { backfillMissingNewsImages, countLiveCardsMissingImages } from "./newsImageResolver.js";
 import { CURATION_WINDOW_DAYS, retireStaleUncuratedBacklog } from "./newsBacklog.js";
 import {
   getNewsPipelineHealth,
@@ -24,6 +25,8 @@ export type AutopilotStepLog = {
   curatedTotal?: number;
   embedRows?: number;
   embedRemaining?: number;
+  imagesResolved?: number;
+  imagesRemaining?: number;
 };
 
 export type AutopilotResult = {
@@ -267,6 +270,19 @@ export async function executeAutopilotPass(
     if (embedRows > 0) {
       steps.embedRows = embedRows;
       steps.embedRemaining = remainingEmbeds;
+    }
+
+    const missingImages = await countLiveCardsMissingImages();
+    if (missingImages > 0) {
+      const { isPipelineQueueEnabled, enqueueOrRunResolveImages } = await import("./newsPipelineQueue.js");
+      if (isPipelineQueueEnabled()) {
+        await enqueueOrRunResolveImages(50);
+        steps.imagesRemaining = missingImages;
+      } else {
+        const imageBatch = await backfillMissingNewsImages(Math.min(50, missingImages));
+        steps.imagesResolved = imageBatch.resolved;
+        steps.imagesRemaining = imageBatch.remaining;
+      }
     }
 
     const costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
