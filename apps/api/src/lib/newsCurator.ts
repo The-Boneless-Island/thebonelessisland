@@ -20,6 +20,7 @@ type CurationResult = {
   label?: "personal" | "community" | "top_news";
   spoilerWarning?: boolean;
   duplicate?: boolean; // true = merged into another story; skip DB write
+  isGuide?: boolean; // true = evergreen how-to/walkthrough; not news, drop it
 };
 
 // Larger batch amortises the fixed cost of the long system prompt over more articles.
@@ -101,6 +102,14 @@ Every claim in your summary must be **directly supported by the article excerpt 
 3. Secondary outlets and aggregators
 4. Social posts and user-generated content
 
+# Guides and how-to content — EXCLUDE
+
+Some articles are evergreen player-instruction content, not news — walkthroughs, "how to unlock / beat / get / find X", boss strategies, puzzle solutions, tier lists, best builds / loadouts / settings, "all <collectibles/locations> in <game>", beginner tips. Players look these up on demand; they do not belong in a news feed.
+
+Set \`"isGuide": true\` when the article's PRIMARY purpose is instructing a player how to perform an in-game action or progress. When true, set \`relevanceScore\` to 0 and keep the summary to one short line — the article will be dropped.
+
+**Judge by meaning, not wording.** "How to crash a game studio in 1 release" is opinion/satire about the industry, NOT a guide — set \`isGuide: false\` and process normally. Rule: if the headline tells a *player* how to do something *inside a game*, it's a guide; if it uses guide-style phrasing to comment on the industry, a studio, or a release, it is not.
+
 # Output format
 
 Return a JSON array — one object per input article. Every input \`gid\` must appear exactly once.
@@ -112,7 +121,8 @@ Return a JSON array — one object per input article. Every input \`gid\` must a
     "label": "<personal | community | top_news>",
     "spoilerWarning": <true | false>,
     "summary": "<2–3 sentences, casual gamer tone, factual>",
-    "duplicate": <true | false>
+    "duplicate": <true | false>,
+    "isGuide": <true | false — evergreen player how-to / walkthrough / guide content; when true set relevanceScore 0>
   }
 ]
 
@@ -329,6 +339,17 @@ export async function curateUncuratedNews(appIds: number[]): Promise<number> {
       if (!item.gid) continue;
       if (item.duplicate) {
         // Mark as curated with score 0 so it doesn't re-enter the un-curated queue
+        await db.query(
+          `UPDATE game_news SET ai_relevance_score = 0, ai_summary = NULL, ai_curated_at = NOW() WHERE gid = $1`,
+          [item.gid]
+        );
+        continue;
+      }
+
+      // Guides / how-to / walkthroughs are not news — drop with score 0 (same
+      // mechanism as duplicates). AI judges by meaning, so play-on-words
+      // headlines stay (isGuide=false).
+      if (item.isGuide) {
         await db.query(
           `UPDATE game_news SET ai_relevance_score = 0, ai_summary = NULL, ai_curated_at = NOW() WHERE gid = $1`,
           [item.gid]

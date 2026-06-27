@@ -58,6 +58,11 @@ type GeneralCurationResult = {
   tags: string[];
   gameTitle: string | null;
   duplicate?: boolean;
+  // Evergreen player-instruction content (how-to / walkthrough / tier list /
+  // best-build). Not news — looked up on demand. When true the card is dropped
+  // (score 0, summary cleared). AI judges by meaning so play-on-words headlines
+  // like "How to crash a game studio in 1 release" stay (isGuide=false).
+  isGuide?: boolean;
   // Semantic fingerprint for merge clustering (v3.2). Normalized lowercase
   // "entity:event-topic", e.g. "poe2:1-0-launch", "ea:layoffs-2026q1".
   storyFingerprint?: string;
@@ -123,7 +128,7 @@ async function refreshOutletBlocklist(): Promise<void> {
 // Taxonomy allowlists — only these values are accepted for each category
 const ALLOWED_CONTENT_TYPES = new Set([
   "News", "Patch Notes", "Announcement", "Review", "Preview",
-  "Opinion", "Interview", "Feature", "Rumor"
+  "Opinion", "Interview", "Feature", "Rumor", "Guide"
 ]);
 const ALLOWED_GENRES = new Set([
   "FPS", "RPG", "Strategy", "Horror", "Platformer", "Survival",
@@ -976,6 +981,26 @@ The user message contains a separate \`existingStories\` array. These are alread
 - \`community\`: Trending gaming news that matches crew genre interests but not specific games they own
 - \`personal\`: Directly about games or series the crew actively plays
 
+# Guides and how-to content — EXCLUDE
+
+Some articles are evergreen player-instruction content, not news. Players look these up on demand when they need them; they are not time-sensitive and do not belong in a news feed.
+
+Set \`isGuide: true\` when the article's PRIMARY purpose is instructing a player how to perform an in-game action or progress. Signals:
+- "How to unlock / beat / defeat / get / find / craft / farm / complete / reach / kill / solve X"
+- Walkthroughs, step-by-step guides, boss strategies, puzzle solutions, quest guides
+- "All <collectibles/locations/recipes/codes/secrets> in <game>", tier lists, best builds / loadouts / settings / classes
+- Beginner tips, "things to do first", grinding / leveling guides
+
+When \`isGuide: true\`: set \`relevanceScore\` to 0 and leave \`summary\`, \`whyMatters\`, and \`sources\` empty — the card will be dropped, so don't spend effort summarizing it. Still emit \`title\`, \`subtitle\`, \`tags\` (use the \`Guide\` content type), and \`storyFingerprint\`.
+
+**Judge by meaning, not wording.** These are NOT guides — set \`isGuide: false\` and process normally:
+- "How to crash a game studio in 1 release" → opinion/satire about a bad launch. Instructs no player; comments on the industry. KEEP.
+- "Best games of 2026" → editorial roundup. Feature. KEEP.
+- "How [Studio] rebuilt its engine" → development insight. News/Interview. KEEP.
+- "Where to buy the cheapest GPU this week" → shopping/hardware, not in-game instruction. KEEP as News.
+
+Rule of thumb: if the headline tells a *player* how to do something *inside a game*, it's a guide. If it uses guide-style phrasing to comment on the industry, a studio, or a release, it is NOT a guide.
+
 # Factual accuracy — HIGHEST PRIORITY
 
 Every claim in your summary must be **directly supported by the source excerpts in this batch**. Do not infer, generalize, or fill in plausible-sounding details from prior knowledge of the game, studio, or industry.
@@ -1032,7 +1057,9 @@ Write a cross-source synthesis covering:
 BEFORE generating output, determine the correct tags for each article using ONLY these categories. Never use outlet or publication names — they are never tags.
 
 **Content Type** (always exactly 1 — pick the best fit):
-News · Patch Notes · Announcement · Review · Preview · Opinion · Interview · Feature · Rumor
+News · Patch Notes · Announcement · Review · Preview · Opinion · Interview · Feature · Rumor · Guide
+
+Use \`Guide\` for evergreen player-instruction content (how-to, walkthrough, tier list, best build). When you tag \`Guide\` you must also set \`isGuide: true\` — see the "Guides and how-to content — EXCLUDE" section.
 
 **Genre** (0–1, the game's primary genre; omit if article is industry/hardware/esports news with no dominant genre):
 FPS · RPG · Strategy · Horror · Platformer · Survival · Battle Royale · MOBA · Racing · Puzzle · Fighting · Sim · MMO
@@ -1069,6 +1096,7 @@ Return a JSON array — one object per input article, in the same order. Every f
     "relevanceScore": <number 0.0–1.0>,
     "spoilerWarning": <true | false>,
     "duplicate": <true | false>,
+    "isGuide": <true | false — evergreen player how-to / walkthrough / tier-list / best-build content; when true set relevanceScore 0 and leave summary, whyMatters, sources empty>,
     "storyFingerprint": "<entity:event-topic — REQUIRED on every article>",
     "mergesIntoExistingId": "<existingId of parent story, or null>",
     "updatedTitle": "<refreshed headline for the parent; only when mergesIntoExistingId is set>",
@@ -1197,6 +1225,7 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
     tags: Array.isArray(obj.tags) ? obj.tags.filter((t): t is string => typeof t === "string") : [],
     gameTitle: pickString(obj, "gameTitle", "game_title") || null,
     duplicate: asBool(obj.duplicate),
+    isGuide: asBool(obj.isGuide ?? obj.is_guide),
     storyFingerprint: pickString(obj, "storyFingerprint", "story_fingerprint") || undefined,
     mergesIntoExistingId:
       pickString(obj, "mergesIntoExistingId", "merges_into_existing_id") || null,
@@ -1221,6 +1250,8 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
 }
 
 function applyDefaultRelevanceScore(result: GeneralCurationResult): GeneralCurationResult {
+  // Guides are deliberately excluded — never salvage them with a fallback score.
+  if (result.isGuide) return { ...result, relevanceScore: 0 };
   if ((result.relevanceScore ?? 0) > 0) return result;
   if (result.duplicate || isMerge(result)) return result;
   return { ...result, relevanceScore: FALLBACK_RELEVANCE_SCORE };
@@ -1519,6 +1550,26 @@ async function persistCurationOutcome(
   crewEntityNames: Set<string>
 ): Promise<{ persisted: boolean; failed: boolean; merged?: boolean }> {
   const { item, result, errors, attempts } = outcome;
+
+  // Guides / how-to / walkthrough content is not news — drop it before any
+  // merge or publish. Trust the AI's isGuide judgment (it handles play-on-words
+  // headlines), with a "Guide" content-type tag as a backstop.
+  const taggedGuide = (result.tags ?? []).some((t) => t.trim().toLowerCase() === "guide");
+  if (result.isGuide || taggedGuide) {
+    await db.query(
+      `UPDATE general_news
+         SET ai_relevance_score = 0,
+             ai_summary = NULL,
+             ai_curated_at = NOW(),
+             ai_validation_failed = FALSE,
+             ai_last_validation_errors = NULL,
+             pre_filter_reason = 'guide_content'
+       WHERE id = $1`,
+      [item.id]
+    );
+    console.log(`[generalNews] guide dropped external=${item.external_id}`);
+    return { persisted: true, failed: false };
+  }
 
   // Merge into an existing curated primary: refresh that primary's fields with
   // the AI-supplied synthesis, then mark the new article as absorbed (no card).
