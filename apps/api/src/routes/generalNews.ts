@@ -19,6 +19,12 @@ import {
 import { retireStaleUncuratedBacklog } from "../lib/news/newsBacklog.js";
 import { getNewsPipelineDiagnostics } from "../lib/news/newsPipelineDiagnostics.js";
 import { getAutopilotStatus, runNewsAutopilot } from "../lib/news/newsAutopilot.js";
+import {
+  enqueueOrRunCurate,
+  enqueueOrRunIngest,
+  getPipelineQueueStatus,
+  isPipelineQueueEnabled
+} from "../lib/news/newsPipelineQueue.js";
 import { withNewsPipelineLock } from "../lib/news/newsPipelineLock.js";
 
 export const generalNewsRouter = Router();
@@ -227,7 +233,21 @@ generalNewsRouter.delete("/general/mutes", requireSession, async (req, res) => {
  */
 generalNewsRouter.post("/general/ingest", requireSession, requireParentRole, async (_req, res) => {
   try {
-    const result = await ingestAndCurateGeneralNews(true); // force bypasses 1-hour cooldown
+    if (isPipelineQueueEnabled()) {
+      const queued = await enqueueOrRunIngest(true);
+      res.json({
+        ok: true,
+        queued: true,
+        jobId: queued.jobId,
+        position: queued.position,
+        alreadyPending: queued.alreadyPending,
+        message: queued.alreadyPending
+          ? `Ingest already queued (position ${queued.position})`
+          : `Ingest queued as job #${queued.jobId}`
+      });
+      return;
+    }
+    const result = await ingestAndCurateGeneralNews(true);
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[generalNews] POST /news/general/ingest error:", err);
@@ -245,7 +265,25 @@ generalNewsRouter.post("/general/curate", requireSession, requireParentRole, asy
       `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
     );
     const remainingBefore = parseInt(remainingRow.rows[0]?.c ?? "0", 10);
-    const curated = await curateUncuratedGeneralNews({ bulk: remainingBefore > 200 });
+    const bulk = remainingBefore > 200;
+
+    if (isPipelineQueueEnabled()) {
+      const queued = await enqueueOrRunCurate({ bulk, reportRun: true, priority: 10 });
+      res.json({
+        ok: true,
+        queued: true,
+        jobId: queued.jobId,
+        position: queued.position,
+        alreadyPending: queued.alreadyPending,
+        remaining: remainingBefore,
+        message: queued.alreadyPending
+          ? `Curation already queued (position ${queued.position})`
+          : `Curation queued as job #${queued.jobId} (~${remainingBefore.toLocaleString()} backlog)`
+      });
+      return;
+    }
+
+    const curated = await curateUncuratedGeneralNews({ bulk });
     const remainingAfterRow = await db.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
     );
@@ -814,6 +852,20 @@ generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireP
   } catch (err) {
     console.error("[generalNews] POST /news/general/retire-stale-backlog error:", err);
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Retire failed" });
+  }
+});
+
+/**
+ * GET /news/general/queue/status
+ * Admin — serial pipeline queue depth and active job.
+ */
+generalNewsRouter.get("/general/queue/status", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    const status = await getPipelineQueueStatus();
+    res.json({ ok: true, ...status });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/queue/status error:", err);
+    res.status(500).json({ ok: false, error: "Queue status failed" });
   }
 });
 

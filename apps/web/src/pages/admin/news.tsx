@@ -166,12 +166,23 @@ type NewsPageProps = {
   onUpdate: (key: string, value: string) => void;
   onIngest: () => Promise<{
     ok: boolean;
+    queued?: boolean;
+    message?: string;
+    position?: number;
     fetched?: number;
     curated?: number;
     embedded?: number;
     error?: string;
   }>;
-  onCurate: () => Promise<{ ok: boolean; curated?: number; remaining?: number; error?: string }>;
+  onCurate: () => Promise<{
+    ok: boolean;
+    queued?: boolean;
+    message?: string;
+    position?: number;
+    curated?: number;
+    remaining?: number;
+    error?: string;
+  }>;
   onRecurate: (
     onProgress?: (snap: RecurateProgressSnap) => void
   ) => Promise<{ ok: boolean; reset?: number; curated?: number; error?: string }>;
@@ -946,11 +957,19 @@ function ManualTriggersCard({
               const result = await onIngest();
               if (result.ok) {
                 setIngestState("done");
-                setIngestMsg(
-                  `Fetched ${result.fetched ?? 0} new · curated ${result.curated ?? 0} cards · embedded ${result.embedded ?? 0} new · elapsed ${formatElapsed(Date.now() - started)}` +
-                    (result.fetched === 0 ? " — nothing new since last run" : "")
-                );
-                setIngestHint("");
+                if (result.queued) {
+                  setIngestMsg(
+                    result.message ??
+                      `Ingest queued${result.position ? ` (position ${result.position})` : ""} — watch Validation queue`
+                  );
+                  setIngestHint("Jobs run one at a time on the server.");
+                } else {
+                  setIngestMsg(
+                    `Fetched ${result.fetched ?? 0} new · curated ${result.curated ?? 0} cards · embedded ${result.embedded ?? 0} new · elapsed ${formatElapsed(Date.now() - started)}` +
+                      (result.fetched === 0 ? " — nothing new since last run" : "")
+                  );
+                  setIngestHint("");
+                }
                 setTimeout(() => setIngestState("idle"), 12000);
               } else {
                 setIngestState("error");
@@ -983,19 +1002,27 @@ function ManualTriggersCard({
               const result = await onCurate();
               if (result.ok) {
                 setCurateState("done");
-                const remaining = result.remaining ?? 0;
-                if ((result.curated ?? 0) > 0) {
+                if (result.queued) {
                   setCurateMsg(
-                    `Curated ${result.curated} new card${result.curated === 1 ? "" : "s"} · ~${remaining.toLocaleString()} still uncurated`
+                    result.message ??
+                      `Curation queued${result.position ? ` (position ${result.position})` : ""} — watch the queue on Validation`
                   );
-                } else if (remaining > 0) {
-                  setCurateMsg(
-                    `No new cards this pass · ~${remaining.toLocaleString()} still uncurated — check Validation tab`
-                  );
+                  setCurateHint("The pipeline worker runs jobs one at a time. Safe to leave this tab.");
                 } else {
-                  setCurateMsg("Backlog clear — nothing left to curate");
+                  const remaining = result.remaining ?? 0;
+                  if ((result.curated ?? 0) > 0) {
+                    setCurateMsg(
+                      `Curated ${result.curated} new card${result.curated === 1 ? "" : "s"} · ~${remaining.toLocaleString()} still uncurated`
+                    );
+                  } else if (remaining > 0) {
+                    setCurateMsg(
+                      `No new cards this pass · ~${remaining.toLocaleString()} still uncurated — check Validation tab`
+                    );
+                  } else {
+                    setCurateMsg("Backlog clear — nothing left to curate");
+                  }
+                  setCurateHint("");
                 }
-                setCurateHint("");
                 setTimeout(() => setCurateState("idle"), 12000);
               } else {
                 setCurateState("error");
@@ -1485,10 +1512,11 @@ function NewsPipelineHealthPanel() {
       )}
       {health.lastBatch && (health.lastBatch.matchCounts.lock_busy ?? 0) > 0 && (
         <div style={{ fontSize: 11, color: islandTheme.color.warnAccent, lineHeight: 1.4 }}>
-          Last pass skipped — pipeline lock busy (ingest or another job was running). Retry Fetch &amp; Curate in a
-          minute.
+          Last pass hit a busy pipeline lock — work should auto-queue now. Check the queue panel below or retry
+          Fetch &amp; Curate (jobs run one at a time).
         </div>
       )}
+      <NewsPipelineQueuePanel />
       {health.lastBatch &&
         health.lastBatch.parsedCount > 0 &&
         (health.lastBatch.matchCounts.none ?? 0) > 0 && (
@@ -1511,6 +1539,80 @@ function NewsPipelineHealthPanel() {
         </div>
       )}
     </IslandCard>
+  );
+}
+
+type PipelineQueueStatus = {
+  enabled: boolean;
+  pending: number;
+  running: {
+    id: number;
+    job_kind: string;
+    started_at: string | null;
+  } | null;
+  recent: Array<{ id: number; job_kind: string; state: string; finished_at: string | null; error: string | null }>;
+};
+
+function NewsPipelineQueuePanel() {
+  const [status, setStatus] = useState<PipelineQueueStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      apiFetch("/news/general/queue/status")
+        .then(async (res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return (await res.json()) as PipelineQueueStatus & { ok?: boolean };
+        })
+        .then((payload) => {
+          if (!cancelled) {
+            setStatus({
+              enabled: payload.enabled,
+              pending: payload.pending,
+              running: payload.running
+                ? {
+                    id: payload.running.id,
+                    job_kind: payload.running.job_kind,
+                    started_at: payload.running.started_at
+                  }
+                : null,
+              recent: payload.recent ?? []
+            });
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setStatus(null);
+        });
+    };
+    load();
+    const handle = window.setInterval(load, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, []);
+
+  if (!status?.enabled) return null;
+
+  return (
+    <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${islandTheme.color.border}` }}>
+      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Pipeline queue</div>
+      <div style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.5 }}>
+        {status.running ? (
+          <>
+            Running: <strong>{status.running.job_kind}</strong>
+            {status.running.started_at
+              ? ` since ${new Date(status.running.started_at).toLocaleTimeString()}`
+              : ""}
+            {status.pending > 0 ? ` · ${status.pending} waiting` : ""}
+          </>
+        ) : status.pending > 0 ? (
+          <>{status.pending} job(s) waiting — worker picks up every ~12s</>
+        ) : (
+          <>Idle — ingest, curate, and autopilot run one at a time (no lock collisions)</>
+        )}
+      </div>
+    </div>
   );
 }
 

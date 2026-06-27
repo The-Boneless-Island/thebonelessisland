@@ -955,6 +955,10 @@ export function App() {
       const response = await apiFetch("/news/general/ingest", { method: "POST", credentials: "include" });
       const data = (await response.json().catch(() => null)) as {
         ok: boolean;
+        queued?: boolean;
+        message?: string;
+        position?: number;
+        jobId?: number;
         fetched?: number;
         curated?: number;
         embedded?: number;
@@ -971,6 +975,10 @@ export function App() {
       const response = await apiFetch("/news/general/curate", { method: "POST", credentials: "include" });
       const data = (await response.json().catch(() => null)) as {
         ok: boolean;
+        queued?: boolean;
+        message?: string;
+        position?: number;
+        jobId?: number;
         curated?: number;
         remaining?: number;
         error?: string;

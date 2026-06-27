@@ -35,6 +35,7 @@ import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { runNewsPipelineHealthSweep } from "./lib/news/newsCurationHealth.js";
 import { reconcileInterruptedPipelineJobs } from "./lib/news/newsPipelineJobs.js";
+import { startPipelineQueueWorker } from "./lib/news/newsPipelineQueue.js";
 import { runNewsRetentionSweep } from "./lib/news/newsRetention.js";
 import { ingestNewsForApps } from "./lib/gameNewsIngestion.js";
 import { resolveCrewLibraryAppIds } from "./lib/patchAlerts.js";
@@ -475,16 +476,23 @@ async function bootstrap() {
     });
   }, 5 * 60 * 1000);
 
-  // Background news refresh — guarantees fresh stories every 4 hours even
-  // when no members visit the gaming-news page. Page-load triggers still run
-  // as before; the 1-hour ingest cooldown inside ingestAndCurateGeneralNews
-  // prevents duplicate work when both fire close together. Force=false so
-  // the cooldown is respected.
+  // Background news refresh — enqueue serial pipeline work (ingest + curate).
   setInterval(() => {
-    ingestAndCurateGeneralNews().catch((err) => {
-      console.error("[generalNews] scheduled background ingest failed:", err);
-    });
+    void (async () => {
+      try {
+        const { isPipelineQueueEnabled, enqueueOrRunIngest } = await import("./lib/news/newsPipelineQueue.js");
+        if (isPipelineQueueEnabled()) {
+          await enqueueOrRunIngest(false);
+        } else {
+          await ingestAndCurateGeneralNews();
+        }
+      } catch (err) {
+        console.error("[generalNews] scheduled background ingest failed:", err);
+      }
+    })();
   }, 4 * 60 * 60 * 1000);
+
+  startPipelineQueueWorker();
 
   // Pipeline health sweep — bounded autopilot recovery, then Discord if still degraded.
   const runHealthSweep = () =>
