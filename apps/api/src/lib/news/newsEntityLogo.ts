@@ -43,6 +43,35 @@ const FINGERPRINT_ENTITY_NAMES: Record<string, string[]> = {
   id: ["id Software"]
 };
 
+/** Single-word fingerprint slugs that collide with non-gaming Wikipedia topics. */
+const AMBIGUOUS_ENTITY_SLUGS = new Set([
+  "obsidian",
+  "apple",
+  "valve",
+  "epic",
+  "riot",
+  "square",
+  "id",
+  "dice",
+  "embrace",
+  "embracer",
+  "bandai",
+  "namco",
+  "capcom",
+  "sega",
+  "sony",
+  "nintendo",
+  "ea"
+]);
+
+const WIKI_REJECT_SNIPPET =
+  /\b(volcanic glass|igneous rock|mineral|metamorphic rock|sedimentary|gemstone|crystalline|geolog|magma|lava\b|silicate glass)\b/i;
+
+const WIKI_GAMING_SNIPPET =
+  /\b(video game|game developer|game studio|game publisher|software company|interactive entertainment|xbox game studios|playstation|nintendo|steam\b|esports|mmorpg|rpg studio)\b/i;
+
+const STUDIO_NAME_SUFFIX = /\b(Entertainment|Interactive|Games|Studios|Software|Corporation|Inc\.|Ltd\.)\b/i;
+
 let igdbAccessTokenCache: { token: string; expiresAtMs: number } | null = null;
 
 async function getIgdbAccessToken(): Promise<string | null> {
@@ -80,7 +109,7 @@ async function resolveIgdbCompanyLogo(name: string): Promise<string | null> {
   if (!accessToken) return null;
 
   const escaped = name.replaceAll('"', '\\"');
-  const searchQuery = [`search "${escaped}";`, "fields name, logo;", "limit 3;"].join(" ");
+  const searchQuery = [`search "${escaped}";`, "fields name, logo;", "limit 8;"].join(" ");
   const companiesResponse = await fetch("https://api.igdb.com/v4/companies", {
     method: "POST",
     headers: {
@@ -96,10 +125,26 @@ async function resolveIgdbCompanyLogo(name: string): Promise<string | null> {
     name?: string;
     logo?: number;
   }>;
-  const logoId = companies.find((c) => c.logo)?.logo;
-  if (!logoId) return null;
 
-  const logoQuery = [`where id = ${logoId};`, "fields image_id;", "limit 1;"].join(" ");
+  const query = name.toLowerCase();
+  let best: { logo: number; score: number } | null = null;
+  for (const company of companies) {
+    if (!company.logo || !company.name) continue;
+    const cn = company.name.toLowerCase();
+    let score = 0;
+    if (cn === query) score = 100;
+    else if (cn.includes(query) || query.includes(cn)) score = 85;
+    else if (query.includes(" ") && cn.startsWith(query.split(" ")[0] ?? "")) score = 55;
+    else continue;
+
+    // Bare single-word company names are too ambiguous (e.g. "Obsidian" the mineral context).
+    if (!query.includes(" ") && !STUDIO_NAME_SUFFIX.test(company.name) && score < 100) continue;
+
+    if (!best || score > best.score) best = { logo: company.logo, score };
+  }
+  if (!best || best.score < 55) return null;
+
+  const logoQuery = [`where id = ${best.logo};`, "fields image_id;", "limit 1;"].join(" ");
   const logosResponse = await fetch("https://api.igdb.com/v4/company_logos", {
     method: "POST",
     headers: {
@@ -117,25 +162,92 @@ async function resolveIgdbCompanyLogo(name: string): Promise<string | null> {
   return `https://images.igdb.com/igdb/image/upload/t_logo_med/${imageId}.png`;
 }
 
-async function resolveWikipediaLogo(name: string): Promise<string | null> {
-  const slug = name.trim().replace(/\s+/g, "_");
-  if (slug.length < 2) return null;
+type WikiSummary = {
+  title?: string;
+  description?: string;
+  extract?: string;
+  thumbnail?: { source?: string; width?: number; height?: number };
+};
 
+function isGamingEntityWikiPage(summary: WikiSummary, searchTerm: string): boolean {
+  const title = summary.title ?? "";
+  const text = `${title} ${summary.description ?? ""} ${summary.extract ?? ""}`;
+  if (WIKI_REJECT_SNIPPET.test(text)) return false;
+
+  if (STUDIO_NAME_SUFFIX.test(title)) return true;
+  if (WIKI_GAMING_SNIPPET.test(text)) return true;
+
+  const queryWords = searchTerm.trim().split(/\s+/);
+  if (queryWords.length === 1) {
+    // Never accept a single-word page unless it clearly describes a gaming org.
+    return false;
+  }
+
+  const firstQuery = queryWords[0]?.toLowerCase() ?? "";
+  return title.toLowerCase().includes(firstQuery);
+}
+
+function wikiThumbnailOk(summary: WikiSummary): string | null {
+  const source = summary.thumbnail?.source?.trim();
+  if (!source) return null;
+  const w = summary.thumbnail?.width ?? 0;
+  const h = summary.thumbnail?.height ?? 0;
+  if (w > 0 && w < 64) return null;
+  // Wide landscape photos are rarely company logos — reject unless title is clearly a studio.
+  if (w > 0 && h > 0 && w / h > 1.75 && !STUDIO_NAME_SUFFIX.test(summary.title ?? "")) {
+    return null;
+  }
+  return source;
+}
+
+async function fetchWikipediaSummary(titleSlug: string): Promise<WikiSummary | null> {
   const response = await fetch(
-    `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(slug)}`,
+    `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titleSlug)}`,
     {
       headers: { "user-agent": WIKI_USER_AGENT, accept: "application/json" }
     }
   ).catch(() => null);
   if (!response?.ok) return null;
+  return (await response.json().catch(() => null)) as WikiSummary | null;
+}
 
+async function searchWikipediaTitle(query: string): Promise<string | null> {
+  const params = new URLSearchParams({
+    action: "query",
+    list: "search",
+    srsearch: `${query} video game company`,
+    srlimit: "5",
+    format: "json",
+    origin: "*"
+  });
+  const response = await fetch(`https://en.wikipedia.org/w/api.php?${params}`, {
+    headers: { "user-agent": WIKI_USER_AGENT, accept: "application/json" }
+  }).catch(() => null);
+  if (!response?.ok) return null;
   const data = (await response.json().catch(() => null)) as {
-    thumbnail?: { source?: string; width?: number };
+    query?: { search?: Array<{ title?: string }> };
   } | null;
-  const source = data?.thumbnail?.source?.trim();
-  if (!source || !data) return null;
-  if ((data.thumbnail?.width ?? 0) < 64) return null;
-  return source;
+  return data?.query?.search?.[0]?.title ?? null;
+}
+
+async function resolveWikipediaLogo(name: string): Promise<string | null> {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return null;
+
+  const candidates: string[] = [trimmed.replace(/\s+/g, "_")];
+  if (trimmed.includes(" ")) {
+    const searched = await searchWikipediaTitle(trimmed);
+    if (searched) candidates.unshift(searched.replace(/\s+/g, "_"));
+  }
+
+  for (const slug of candidates) {
+    const summary = await fetchWikipediaSummary(slug);
+    if (!summary || !isGamingEntityWikiPage(summary, trimmed)) continue;
+    const thumb = wikiThumbnailOk(summary);
+    if (thumb) return thumb;
+  }
+
+  return null;
 }
 
 function titleCaseFromSlug(slug: string): string {
@@ -171,7 +283,9 @@ export function buildEntityLogoSearchTerms(input: {
     const entity = input.storyFingerprint.split(":")[0]?.trim().toLowerCase();
     if (entity) {
       for (const mapped of FINGERPRINT_ENTITY_NAMES[entity] ?? []) add(mapped);
-      add(titleCaseFromSlug(entity));
+      if (!AMBIGUOUS_ENTITY_SLUGS.has(entity)) {
+        add(titleCaseFromSlug(entity));
+      }
     }
   }
 
@@ -195,7 +309,9 @@ export function buildEntityLogoSearchTerms(input: {
   }
 
   const firstWords = headline.match(/^([A-Z][A-Za-z0-9&.'-]{2,28})\b/);
-  if (firstWords) add(firstWords[1]);
+  if (firstWords && !AMBIGUOUS_ENTITY_SLUGS.has(firstWords[1].toLowerCase())) {
+    add(firstWords[1]);
+  }
 
   return terms;
 }

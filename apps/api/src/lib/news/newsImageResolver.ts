@@ -156,6 +156,17 @@ export async function resolveNewsArticleImage(row: NewsImageRow): Promise<Resolv
   if (row.image_url && !isIslandDefaultCover(row)) {
     const existing = await tryUrl(row.image_url, row.url);
     if (existing) {
+      if (row.image_source === "wikipedia" || row.image_source === "entity_igdb") {
+        const entityCover = await resolveEntityCover(row);
+        if (entityCover && entityCover.url !== existing.url) {
+          return {
+            url: entityCover.url,
+            source: entityCover.source,
+            width: null,
+            height: null
+          };
+        }
+      }
       return {
         url: existing.url,
         source: (row.image_source as NewsImageSource) || "feed",
@@ -292,6 +303,8 @@ export async function backfillMissingNewsImages(
        WHERE image_url IS NULL
           OR image_resolved_at IS NULL
           OR image_source = 'default'
+          OR image_source = 'wikipedia'
+          OR image_source = 'entity_igdb'
        ORDER BY
          (ai_curated_at IS NOT NULL AND ai_relevance_score > 0 AND ai_validation_failed = FALSE) DESC,
          published_at DESC
