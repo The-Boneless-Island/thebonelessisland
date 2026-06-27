@@ -8,7 +8,7 @@ import { requireParentRole, requireSession } from "../lib/auth.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
 import { resolveGameNamesFromAppList } from "../lib/steamAppList.js";
 import { syncAchievementSchema } from "../lib/steamAchievementSchema.js";
-import { ingestNewsForApps } from "../lib/gameNewsIngestion.js";
+import { enqueueGameNewsIngest } from "../lib/gameNewsIngestQueue.js";
 import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
 
@@ -701,7 +701,7 @@ export async function syncOwnedGamesForUser(
     .slice(0, 8)
     .map((g) => g.appid);
   if (topAppIds.length > 0) {
-    void ingestNewsForApps(topAppIds, { maxApps: 8 }).catch(() => {});
+    enqueueGameNewsIngest(topAppIds, { maxApps: 8 });
   }
 
   // Fire-and-forget profile-context backfill (groups + achievements). Runs its

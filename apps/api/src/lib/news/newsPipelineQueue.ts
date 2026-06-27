@@ -6,10 +6,18 @@ import {
 import { backfillEmbeddings, countMissingEmbeddings } from "./embeddings.js";
 import { retireStaleUncuratedBacklog } from "./newsBacklog.js";
 import { executeAutopilotPass } from "./newsAutopilot.js";
+import { runEmbedBackfillJob } from "./newsEmbedBackfillJob.js";
+import { runRecurateJob } from "./newsRecurateJob.js";
 import { withNewsPipelineLock } from "./newsPipelineLock.js";
 import { getAISetting } from "../serverSettings.js";
 
-export type PipelineQueueKind = "ingest" | "curate" | "autopilot" | "retire_stale";
+export type PipelineQueueKind =
+  | "ingest"
+  | "curate"
+  | "autopilot"
+  | "retire_stale"
+  | "recurate"
+  | "embed_backfill";
 
 export type PipelineQueueJob = {
   id: number;
@@ -183,6 +191,13 @@ async function executeQueueJob(job: PipelineQueueJob): Promise<Record<string, un
       const retired = await retireStaleUncuratedBacklog();
       return { retired };
     }
+    case "recurate":
+      return await runRecurateJob({
+        resetFirst: job.payload.resetFirst === true,
+        skipLock: true
+      });
+    case "embed_backfill":
+      return await runEmbedBackfillJob();
     default:
       throw new Error(`Unknown queue job kind: ${job.job_kind}`);
   }
@@ -299,6 +314,37 @@ export async function enqueueOrRunCurate(payload: {
 
 export async function enqueueOrRunAutopilot(force = false): Promise<EnqueuePipelineResult> {
   return enqueuePipelineJob("autopilot", { force }, { priority: force ? 9 : 4, dedupeKey: "autopilot:pipeline" });
+}
+
+export async function enqueueOrRunRecurate(resetFirst = false): Promise<EnqueuePipelineResult> {
+  return enqueuePipelineJob(
+    "recurate",
+    { resetFirst },
+    { priority: resetFirst ? 10 : 7, dedupeKey: "recurate:pipeline" }
+  );
+}
+
+export async function enqueueOrRunEmbedBackfill(): Promise<EnqueuePipelineResult> {
+  return enqueuePipelineJob("embed_backfill", {}, { priority: 3, dedupeKey: "embed_backfill:pipeline" });
+}
+
+export async function getPipelineQueueCounts(): Promise<{
+  pending: number;
+  running: number;
+  oldestPendingAt: string | null;
+}> {
+  const [pendingRow, runningRow, oldestRow] = await Promise.all([
+    db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM news_pipeline_queue WHERE state = 'pending'`),
+    db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM news_pipeline_queue WHERE state = 'running'`),
+    db.query<{ at: string | null }>(
+      `SELECT MIN(created_at)::text AS at FROM news_pipeline_queue WHERE state = 'pending'`
+    )
+  ]);
+  return {
+    pending: parseInt(pendingRow.rows[0]?.c ?? "0", 10),
+    running: parseInt(runningRow.rows[0]?.c ?? "0", 10),
+    oldestPendingAt: oldestRow.rows[0]?.at ?? null
+  };
 }
 
 export function startPipelineQueueWorker(): void {

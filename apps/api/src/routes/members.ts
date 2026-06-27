@@ -6,6 +6,7 @@ import { requireBotSecret, requireSession } from "../lib/auth.js";
 import { privateCache } from "../middleware/privateCache.js";
 import { broadcast } from "../lib/eventBus.js";
 import { activityText } from "../lib/presence.js";
+import { getMemberSyncStatus, runMemberSyncSingleFlight } from "../lib/memberSyncFlight.js";
 
 const PRESENCE_STATUSES = new Set(["online", "idle", "dnd", "offline"]);
 
@@ -63,7 +64,7 @@ type VoiceSyncDiagnostics = {
   details?: string;
 };
 
-type MemberSyncResult = {
+export type MemberSyncResult = {
   syncedMembers: number;
   voice: VoiceSyncDiagnostics;
 };
@@ -83,7 +84,7 @@ class MemberSyncError extends Error {
 
 // Reusable member-sync routine (no req/res). Reads guild id + bot token the
 // same way the handler does. Called by POST /members/sync and the server cron.
-export async function syncGuildMembers(): Promise<MemberSyncResult> {
+async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
   if (!getGuildId() || !env.DISCORD_BOT_TOKEN) {
     throw new MemberSyncError(
       400,
@@ -305,6 +306,10 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
   return { syncedMembers: normalized.length, voice: voiceDiagnostics };
 }
 
+export async function syncGuildMembers(): Promise<MemberSyncResult> {
+  return runMemberSyncSingleFlight(syncGuildMembersInternal);
+}
+
 export const membersRouter = express.Router();
 
 membersRouter.get("/", requireSession, privateCache(60), async (_req, res) => {
@@ -405,6 +410,10 @@ membersRouter.post("/presence/:discordUserId", requireBotSecret, async (req, res
   );
   broadcast("members-changed");
   res.json({ ok: true, updated: result.rowCount ?? 0 });
+});
+
+membersRouter.get("/sync/status", requireSession, (_req, res) => {
+  res.json({ ok: true, ...getMemberSyncStatus() });
 });
 
 membersRouter.post("/sync", requireSession, async (_req, res) => {

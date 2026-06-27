@@ -35,9 +35,10 @@ import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { runNewsPipelineHealthSweep } from "./lib/news/newsCurationHealth.js";
 import { reconcileInterruptedPipelineJobs } from "./lib/news/newsPipelineJobs.js";
-import { startPipelineQueueWorker } from "./lib/news/newsPipelineQueue.js";
+import { startPipelineQueueWorker, getPipelineQueueCounts, isPipelineQueueEnabled } from "./lib/news/newsPipelineQueue.js";
 import { runNewsRetentionSweep } from "./lib/news/newsRetention.js";
-import { ingestNewsForApps } from "./lib/gameNewsIngestion.js";
+import { enqueueGameNewsIngest, getGameNewsIngestQueueStatus } from "./lib/gameNewsIngestQueue.js";
+import { getMemberSyncStatus } from "./lib/memberSyncFlight.js";
 import { resolveCrewLibraryAppIds } from "./lib/patchAlerts.js";
 import { sweepExpiredGames } from "./lib/nuggiesGames.js";
 import { processDefaultedLoans } from "./lib/nuggiesLedger.js";
@@ -233,6 +234,28 @@ app.get("/health", (_req, res) => {
     return;
   }
   res.json({ ok: true, migrations: "ok" });
+});
+
+app.get("/health/ready", async (_req, res) => {
+  if (migrationFailure !== null) {
+    res.status(503).json({ ok: false, reason: "migrations_failed" });
+    return;
+  }
+
+  const memberSync = getMemberSyncStatus();
+  const gameNews = getGameNewsIngestQueueStatus();
+  const queue = isPipelineQueueEnabled() ? await getPipelineQueueCounts() : null;
+
+  res.json({
+    ok: true,
+    memberSync: {
+      running: memberSync.running,
+      lastSyncAt: memberSync.lastSyncAt,
+      lastError: memberSync.lastSyncError
+    },
+    gameNewsIngest: gameNews,
+    newsPipelineQueue: queue
+  });
 });
 
 // Server-sent events stream for push freshness (members + game nights).
@@ -499,7 +522,7 @@ async function bootstrap() {
     runNewsPipelineHealthSweep().catch((err) => {
       console.error("[generalNews] pipeline health sweep failed:", err);
     });
-  setTimeout(runHealthSweep, 2 * 60 * 1000);
+  setTimeout(runHealthSweep, 3 * 60 * 1000);
   setInterval(runHealthSweep, 6 * 60 * 60 * 1000);
 
   // Nightly retention: tier assignment, warm-tier stripping, prune dead rows.
@@ -507,18 +530,20 @@ async function bootstrap() {
     runNewsRetentionSweep().catch((err) => {
       console.error("[news-retention] sweep failed:", err);
     });
-  setTimeout(runRetentionSweep, 5 * 60 * 1000);
+  setTimeout(runRetentionSweep, 7 * 60 * 1000);
   setInterval(runRetentionSweep, 24 * 60 * 60 * 1000);
 
   // Crew-library patch alerts: poll Steam/RSS sources on a tighter cadence than
   // the lazy page-load ingest so Discord alerts land within ~20 minutes.
   const runPatchAlertIngest = () =>
     resolveCrewLibraryAppIds()
-      .then((appIds) =>
-        appIds.length > 0
-          ? ingestNewsForApps(appIds, { staleAfterMs: 20 * 60 * 1000, maxApps: 25 })
-          : { ingestedApps: 0, ingestedItems: 0 }
-      )
+      .then((appIds) => {
+        if (appIds.length === 0) {
+          return { ingestedApps: 0, ingestedItems: 0 };
+        }
+        enqueueGameNewsIngest(appIds, { staleAfterMs: 20 * 60 * 1000, maxApps: 25 });
+        return { ingestedApps: appIds.length, ingestedItems: 0 };
+      })
       .then(({ ingestedApps, ingestedItems }) => {
         if (ingestedApps > 0 || ingestedItems > 0) {
           console.log(`[patchAlerts] ingest: ${ingestedApps} app(s), ${ingestedItems} item(s)`);
@@ -529,7 +554,7 @@ async function bootstrap() {
     runPatchAlertIngest().catch((err) => {
       console.error("[patchAlerts] initial ingest failed:", err);
     });
-  }, 90_000);
+  }, 105_000);
   setInterval(() => {
     runPatchAlertIngest().catch((err) => {
       console.error("[patchAlerts] scheduled ingest failed:", err);
@@ -545,7 +570,7 @@ async function bootstrap() {
       .catch((err) => {
         console.error("[members] initial sync failed:", err);
       });
-  }, 5_000);
+  }, 12_000);
   setInterval(() => {
     syncGuildMembers()
       .then(() => broadcast("members-changed"))

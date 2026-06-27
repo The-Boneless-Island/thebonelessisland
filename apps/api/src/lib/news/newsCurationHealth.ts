@@ -35,6 +35,9 @@ export type NewsPipelineHealth = {
   liveCards: number;
   validationFailures: number;
   uncuratedBacklog: number;
+  queuePending: number;
+  queueRunning: number;
+  queueOldestPendingAt: string | null;
   lastRun: {
     at: string;
     kind: string;
@@ -107,6 +110,11 @@ export async function snapshotPipelineCounts(): Promise<{
 export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
   const newsEnabled = getAISetting("news_general_enabled") !== "false";
   const aiEnabled = getAISetting("ai_enabled") === "true";
+  const { getPipelineQueueCounts, isPipelineQueueEnabled } = await import("./newsPipelineQueue.js");
+  const queueCounts = isPipelineQueueEnabled()
+    ? await getPipelineQueueCounts()
+    : { pending: 0, running: 0, oldestPendingAt: null as string | null };
+
   const [counts, embeddingsMissing, lastRunRow] = await Promise.all([
     snapshotPipelineCounts(),
     countMissingEmbeddings(),
@@ -129,6 +137,14 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
 
   const lr = lastRunRow.rows[0];
   let status: NewsPipelineHealth["status"] = "healthy";
+  const queueStaleMs =
+    queueCounts.oldestPendingAt !== null
+      ? Date.now() - new Date(queueCounts.oldestPendingAt).getTime()
+      : 0;
+  const queueBacklogged =
+    queueCounts.pending >= 5 ||
+    (queueCounts.pending > 0 && queueStaleMs > 30 * 60 * 1000);
+
   if (!newsEnabled || !aiEnabled) {
     status = "off";
   } else if (counts.liveCards === 0 && counts.uncuratedBacklog > 50) {
@@ -146,6 +162,8 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     status = "degraded";
   } else if (lr?.error_summary) {
     status = "critical";
+  } else if (queueBacklogged && counts.uncuratedBacklog > 100) {
+    status = "degraded";
   } else if (counts.validationFailures > 10) {
     status = "degraded";
   } else if (embeddingsMissing > 500) {
@@ -161,6 +179,9 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     liveCards: counts.liveCards,
     validationFailures: counts.validationFailures,
     uncuratedBacklog: counts.uncuratedBacklog,
+    queuePending: queueCounts.pending,
+    queueRunning: queueCounts.running,
+    queueOldestPendingAt: queueCounts.oldestPendingAt,
     lastRun: lr
       ? {
           at: lr.started_at,
@@ -334,6 +355,15 @@ export async function runNewsPipelineHealthSweep(): Promise<void> {
   const health = await getNewsPipelineHealth();
   if (health.status === "healthy" || health.status === "off") return;
   if (autopilotEscalated) return;
+  if (health.queuePending > 0 || health.queueRunning > 0) {
+    log.info("generalNews", "pipeline_degraded_queue_in_flight", {
+      status: health.status,
+      queuePending: health.queuePending,
+      queueRunning: health.queueRunning,
+      autopilotSkipped
+    });
+    return;
+  }
 
   if (!isNewsCurationAlertConfigured()) {
     log.warn("generalNews", "pipeline_degraded_no_webhook", {

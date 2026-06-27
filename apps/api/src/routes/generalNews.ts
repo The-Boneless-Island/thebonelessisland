@@ -1,17 +1,15 @@
 import { Router } from "express";
 import { db } from "../db/client.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
-import { getAiCostTotalUsd } from "../lib/ai/usageTally.js";
+import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, backfillMissingImages, maybeBackgroundIngest, debugCurateOne } from "../lib/generalNewsIngestion.js";
 import {
   backfillEmbeddings,
-  countMissingEmbeddings,
   isEmbeddingColumnAvailable
 } from "../lib/news/embeddings.js";
-import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, resetAllCuration, backfillMissingImages, maybeBackgroundIngest, debugCurateOne } from "../lib/generalNewsIngestion.js";
 import { buildGeneralNewsFeedQuery } from "../lib/news/newsFeed.js";
 import { savePipelineJob, reconcileInterruptedPipelineJobs } from "../lib/news/newsPipelineJobs.js";
 import { findSimilarArticles, searchGeneralNews } from "../lib/news/newsSearch.js";
-import { getNewsPipelineHealth, reportCurationPassOutcome } from "../lib/news/newsCurationHealth.js";
+import { getNewsPipelineHealth } from "../lib/news/newsCurationHealth.js";
 import {
   CORPUS_RESET_CONFIRM_PHRASE,
   resetGeneralNewsCorpus
@@ -21,10 +19,26 @@ import { getNewsPipelineDiagnostics } from "../lib/news/newsPipelineDiagnostics.
 import { getAutopilotStatus, runNewsAutopilot } from "../lib/news/newsAutopilot.js";
 import {
   enqueueOrRunCurate,
+  enqueueOrRunEmbedBackfill,
   enqueueOrRunIngest,
+  enqueueOrRunRecurate,
   getPipelineQueueStatus,
   isPipelineQueueEnabled
 } from "../lib/news/newsPipelineQueue.js";
+import {
+  getEmbedBackfillJob,
+  isEmbedBackfillJobRunning,
+  requestEmbedBackfillCancel,
+  resetEmbedBackfillJobState,
+  runEmbedBackfillJob
+} from "../lib/news/newsEmbedBackfillJob.js";
+import {
+  getRecurateJob,
+  isRecurateJobRunning,
+  requestRecurateCancel,
+  resetRecurateJobState,
+  runRecurateJob
+} from "../lib/news/newsRecurateJob.js";
 import { withNewsPipelineLock } from "../lib/news/newsPipelineLock.js";
 
 export const generalNewsRouter = Router();
@@ -325,114 +339,13 @@ generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentR
 
 // ── Embed backfill job (background, polled by client) ─────────────────────────
 
-type EmbedBackfillJobState = "idle" | "running" | "done" | "error";
-
-type EmbedBackfillJob = {
-  state: EmbedBackfillJobState;
-  startedAt: number | null;
-  finishedAt: number | null;
-  total: number;
-  embedded: number;
-  skipped: number;
-  remaining: number;
-  batches: number;
-  error: string | null;
-};
-
-const FRESH_EMBED_JOB: EmbedBackfillJob = {
-  state: "idle",
-  startedAt: null,
-  finishedAt: null,
-  total: 0,
-  embedded: 0,
-  skipped: 0,
-  remaining: 0,
-  batches: 0,
-  error: null
-};
-
-let embedBackfillJob: EmbedBackfillJob = { ...FRESH_EMBED_JOB };
-let embedBackfillCancelRequested = false;
-
 function resetGeneralNewsJobState(): void {
-  recurateCancelRequested = true;
-  embedBackfillCancelRequested = true;
-  recurateJob = { ...FRESH_JOB };
-  embedBackfillJob = { ...FRESH_EMBED_JOB };
+  resetRecurateJobState();
+  resetEmbedBackfillJobState();
 }
 
 function isGeneralNewsBackgroundJobRunning(): boolean {
-  return recurateJob.state === "running" || embedBackfillJob.state === "running";
-}
-
-const EMBED_BACKFILL_BATCH = 40;
-const EMBED_BACKFILL_MAX_PASSES = 500;
-const EMBED_BACKFILL_PAUSE_MS = 50;
-
-async function runEmbedBackfillJob(): Promise<void> {
-  embedBackfillCancelRequested = false;
-  embedBackfillJob = {
-    ...FRESH_EMBED_JOB,
-    state: "running",
-    startedAt: Date.now()
-  };
-  await savePipelineJob("embed_backfill", "running", { ...embedBackfillJob }, { startedAt: new Date(), finishedAt: null, error: null });
-
-  try {
-    if (!(await isEmbeddingColumnAvailable())) {
-      embedBackfillJob.state = "error";
-      embedBackfillJob.error =
-        "pgvector / embedding column not available. Install pgvector and re-run migration 040.";
-      embedBackfillJob.finishedAt = Date.now();
-      return;
-    }
-
-    const initialRemaining = await countMissingEmbeddings();
-    embedBackfillJob.total = initialRemaining;
-    embedBackfillJob.remaining = initialRemaining;
-
-    if (initialRemaining === 0) {
-      embedBackfillJob.state = "done";
-      embedBackfillJob.finishedAt = Date.now();
-      return;
-    }
-
-    for (let pass = 0; pass < EMBED_BACKFILL_MAX_PASSES; pass++) {
-      if (embedBackfillCancelRequested) {
-        console.warn(`[generalNews] embed backfill cancelled by admin at batch ${pass}`);
-        break;
-      }
-
-      const batch = await backfillEmbeddings(EMBED_BACKFILL_BATCH);
-      embedBackfillJob.embedded += batch.embedded;
-      embedBackfillJob.skipped += batch.skipped;
-      embedBackfillJob.batches = pass + 1;
-      embedBackfillJob.remaining = await countMissingEmbeddings();
-
-      const handled = batch.embedded + batch.skipped;
-      if (embedBackfillJob.remaining === 0 || handled === 0) break;
-
-      await savePipelineJob("embed_backfill", "running", { ...embedBackfillJob });
-
-      if (embedBackfillCancelRequested) break;
-      await new Promise((resolve) => setTimeout(resolve, EMBED_BACKFILL_PAUSE_MS));
-    }
-
-    embedBackfillJob.state = embedBackfillJob.error ? "error" : "done";
-    embedBackfillJob.finishedAt = Date.now();
-    console.log(
-      `[generalNews] embed backfill job finished: ${embedBackfillJob.embedded} embedded, ${embedBackfillJob.remaining} remaining`
-    );
-  } catch (err) {
-    embedBackfillJob.state = "error";
-    embedBackfillJob.error = err instanceof Error ? err.message : String(err);
-    embedBackfillJob.finishedAt = Date.now();
-    console.error("[generalNews] embed backfill job failed:", err);
-  }
-  await savePipelineJob("embed_backfill", embedBackfillJob.state, { ...embedBackfillJob }, {
-    error: embedBackfillJob.error,
-    finishedAt: embedBackfillJob.finishedAt ? new Date(embedBackfillJob.finishedAt) : new Date()
-  });
+  return isRecurateJobRunning() || isEmbedBackfillJobRunning();
 }
 
 /**
@@ -444,15 +357,30 @@ generalNewsRouter.post(
   "/general/embed-backfill/start",
   requireSession,
   requireParentRole,
-  (_req, res) => {
-    if (embedBackfillJob.state === "running") {
-      res.status(409).json({ ok: false, error: "Embed backfill already running", job: embedBackfillJob });
+  async (_req, res) => {
+    if (isEmbedBackfillJobRunning()) {
+      res.status(409).json({ ok: false, error: "Embed backfill already running", job: getEmbedBackfillJob() });
+      return;
+    }
+    if (isPipelineQueueEnabled()) {
+      const queued = await enqueueOrRunEmbedBackfill();
+      res.status(202).json({
+        ok: true,
+        queued: true,
+        jobId: queued.jobId,
+        position: queued.position,
+        alreadyPending: queued.alreadyPending,
+        job: getEmbedBackfillJob(),
+        message: queued.alreadyPending
+          ? `Embed backfill already queued (position ${queued.position})`
+          : `Embed backfill queued as job #${queued.jobId}`
+      });
       return;
     }
     runEmbedBackfillJob().catch((err) => {
       console.error("[generalNews] runEmbedBackfillJob unhandled:", err);
     });
-    res.status(202).json({ ok: true, job: embedBackfillJob });
+    res.status(202).json({ ok: true, job: getEmbedBackfillJob() });
   }
 );
 
@@ -465,11 +393,11 @@ generalNewsRouter.post(
   requireSession,
   requireParentRole,
   (_req, res) => {
-    if (embedBackfillJob.state !== "running") {
+    if (!isEmbedBackfillJobRunning()) {
       res.status(409).json({ ok: false, error: "No embed backfill job running" });
       return;
     }
-    embedBackfillCancelRequested = true;
+    requestEmbedBackfillCancel();
     res.json({ ok: true, message: "Cancel requested — job will stop after the current batch completes" });
   }
 );
@@ -482,7 +410,7 @@ generalNewsRouter.get(
   requireSession,
   requireParentRole,
   (_req, res) => {
-    res.json({ ok: true, job: embedBackfillJob });
+    res.json({ ok: true, job: getEmbedBackfillJob() });
   }
 );
 
@@ -504,226 +432,37 @@ generalNewsRouter.post("/general/image-backfill", requireSession, requireParentR
   }
 });
 
-// ── Recurate Job (background, polled by client) ───────────────────────────────
-
-type RecurateJobState = "idle" | "running" | "done" | "error";
-
-type RecurateJob = {
-  state: RecurateJobState;
-  startedAt: number | null;
-  finishedAt: number | null;
-  reset: number;       // rows reset (also = total to curate)
-  curated: number;     // live primary cards in corpus right now
-  processed: number;   // rows touched so far this run
-  remaining: number;   // rows still waiting for curation
-  merged: number;
-  duplicates: number;
-  failed: number;
-  total: number;       // = reset, snapshot for display
-  costUsd: number;
-  error: string | null;
-};
-
-const FRESH_JOB: RecurateJob = {
-  state: "idle",
-  startedAt: null,
-  finishedAt: null,
-  reset: 0,
-  curated: 0,
-  processed: 0,
-  remaining: 0,
-  merged: 0,
-  duplicates: 0,
-  failed: 0,
-  total: 0,
-  costUsd: 0,
-  error: null
-};
-
-let recurateJob: RecurateJob = { ...FRESH_JOB };
-
-const RECURATE_BATCH_PAUSE_MS = 250;
-const RECURATE_NO_PROGRESS_LIMIT = 3;
-
-// Cooperative cancel flag. Recurate loop checks between passes and exits early.
-let recurateCancelRequested = false;
-
-async function countUncurated(): Promise<number> {
-  const r = await db.query<{ c: string }>(
-    `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
-  );
-  return parseInt(r.rows[0]?.c ?? "0", 10);
-}
-
-async function snapshotBreakdown(): Promise<{
-  curated: number;
-  merged: number;
-  duplicates: number;
-  failed: number;
-}> {
-  // Primary cards: curated, non-failed, score > 0.
-  // Merged/duplicate absorbed: curated, score = 0, summary NULL (merge child) OR
-  //   score = 0 with non-null summary (regular dup).
-  // Failed: ai_validation_failed = TRUE.
-  const r = await db.query<{
-    curated: string;
-    score_zero_no_summary: string;
-    score_zero_with_summary: string;
-    failed: string;
-  }>(
-    `
-      SELECT
-        COUNT(*) FILTER (WHERE ai_curated_at IS NOT NULL AND ai_relevance_score > 0 AND ai_validation_failed = FALSE)::text AS curated,
-        COUNT(*) FILTER (WHERE ai_curated_at IS NOT NULL AND ai_relevance_score = 0 AND ai_summary IS NULL)::text AS score_zero_no_summary,
-        COUNT(*) FILTER (WHERE ai_curated_at IS NOT NULL AND ai_relevance_score = 0 AND ai_summary IS NOT NULL)::text AS score_zero_with_summary,
-        COUNT(*) FILTER (WHERE ai_validation_failed = TRUE)::text AS failed
-      FROM general_news
-    `
-  );
-  const row = r.rows[0];
-  return {
-    curated: parseInt(row?.curated ?? "0", 10),
-    merged: parseInt(row?.score_zero_no_summary ?? "0", 10),
-    duplicates: parseInt(row?.score_zero_with_summary ?? "0", 10),
-    failed: parseInt(row?.failed ?? "0", 10)
-  };
-}
-
-async function runRecurateJob(opts: { resetFirst?: boolean } = {}): Promise<void> {
-  const resetFirst = opts.resetFirst === true;
-  const costAtStart = getAiCostTotalUsd();
-  recurateCancelRequested = false;
-  recurateJob = {
-    ...FRESH_JOB,
-    state: "running",
-    startedAt: Date.now()
-  };
-  await savePipelineJob("recurate", "running", { ...recurateJob }, { startedAt: new Date(), finishedAt: null, error: null });
-  try {
-    const totalRow = await db.query<{ c: string }>(`SELECT COUNT(*)::text AS c FROM general_news`);
-    const total = parseInt(totalRow.rows[0]?.c ?? "0", 10);
-    if (resetFirst && total > 1500) {
-      recurateJob.error =
-        `Corpus has ${total.toLocaleString()} articles — use Archive → Scrub the archive instead of Regenerate All Summaries on a large backlog.`;
-      recurateJob.state = "error";
-      recurateJob.finishedAt = Date.now();
-      await savePipelineJob("recurate", "error", { ...recurateJob }, {
-        error: recurateJob.error,
-        finishedAt: new Date()
-      });
-      return;
-    }
-
-    if (resetFirst) {
-      const reset = await resetAllCuration();
-      recurateJob.reset = reset;
-      recurateJob.total = reset;
-      recurateJob.remaining = reset;
-    } else {
-      const remaining = await countUncurated();
-      recurateJob.reset = 0;
-      recurateJob.total = remaining;
-      recurateJob.remaining = remaining;
-    }
-
-    let noProgressStreak = 0;
-    while (true) {
-      if (recurateCancelRequested) {
-        console.warn("[generalNews] recurate cancelled by admin");
-        break;
-      }
-
-      const remainingBefore = await countUncurated();
-      if (remainingBefore === 0) break;
-
-      await curateUncuratedGeneralNews({ reportRun: false, bulk: true });
-
-      const remainingAfter = await countUncurated();
-      const breakdown = await snapshotBreakdown();
-      recurateJob.processed = recurateJob.total - remainingAfter;
-      recurateJob.remaining = remainingAfter;
-      recurateJob.curated = breakdown.curated;
-      recurateJob.merged = breakdown.merged;
-      recurateJob.duplicates = breakdown.duplicates;
-      recurateJob.failed = breakdown.failed;
-      recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
-
-      await savePipelineJob("recurate", "running", { ...recurateJob });
-
-      if (recurateCancelRequested) {
-        console.warn("[generalNews] recurate cancelled by admin after pass");
-        break;
-      }
-      if (remainingAfter === 0) break;
-
-      if (remainingAfter >= remainingBefore) {
-        noProgressStreak++;
-        console.warn(
-          `[generalNews] recurate no progress (${noProgressStreak}/${RECURATE_NO_PROGRESS_LIMIT}): ${remainingAfter} rows still uncurated`
-        );
-        if (noProgressStreak >= RECURATE_NO_PROGRESS_LIMIT) {
-          recurateJob.error = `Stalled with ${remainingAfter.toLocaleString()} articles still uncurated — check AI settings and Validation tab`;
-          break;
-        }
-      } else {
-        noProgressStreak = 0;
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, RECURATE_BATCH_PAUSE_MS));
-    }
-
-    recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
-    recurateJob.state = recurateJob.error ? "error" : "done";
-    recurateJob.finishedAt = Date.now();
-    void reportCurationPassOutcome({
-      runKind: "recurate",
-      fetched: 0,
-      curated: recurateJob.curated,
-      merged: recurateJob.merged,
-      duplicates: recurateJob.duplicates,
-      failed: recurateJob.failed,
-      embedded: 0,
-      errorSummary: recurateJob.error ?? null,
-      costUsdStart: costAtStart
-    });
-  } catch (err) {
-    recurateJob.costUsd = Math.max(0, getAiCostTotalUsd() - costAtStart);
-    recurateJob.state = "error";
-    recurateJob.finishedAt = Date.now();
-    recurateJob.error = err instanceof Error ? err.message : String(err);
-    console.error("[generalNews] recurate job error:", err);
-    void reportCurationPassOutcome({
-      runKind: "recurate",
-      fetched: 0,
-      curated: recurateJob.curated,
-      failed: recurateJob.failed,
-      embedded: 0,
-      errorSummary: recurateJob.error,
-      costUsdStart: costAtStart
-    });
-  }
-  await savePipelineJob("recurate", recurateJob.state, { ...recurateJob }, {
-    error: recurateJob.error,
-    finishedAt: recurateJob.finishedAt ? new Date(recurateJob.finishedAt) : new Date()
-  });
-}
-
 /**
  * POST /news/general/recurate
  * Admin endpoint — kicks off background re-curation. Returns 202 immediately.
  * Poll /news/general/recurate/status for progress.
  */
-generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, (req, res) => {
-  if (recurateJob.state === "running") {
-    res.status(409).json({ ok: false, error: "Recurate already running", job: recurateJob });
+generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, async (req, res) => {
+  if (isRecurateJobRunning()) {
+    res.status(409).json({ ok: false, error: "Recurate already running", job: getRecurateJob() });
     return;
   }
   const resetFirst = req.body?.reset === true;
-  // Fire and forget — runner updates module-level job state
+  if (isPipelineQueueEnabled()) {
+    const queued = await enqueueOrRunRecurate(resetFirst);
+    res.status(202).json({
+      ok: true,
+      resetFirst,
+      queued: true,
+      jobId: queued.jobId,
+      position: queued.position,
+      alreadyPending: queued.alreadyPending,
+      job: getRecurateJob(),
+      message: queued.alreadyPending
+        ? `Recurate already queued (position ${queued.position})`
+        : `Recurate queued as job #${queued.jobId}`
+    });
+    return;
+  }
   runRecurateJob({ resetFirst }).catch((err) => {
     console.error("[generalNews] runRecurateJob unhandled:", err);
   });
-  res.status(202).json({ ok: true, resetFirst, job: recurateJob });
+  res.status(202).json({ ok: true, resetFirst, job: getRecurateJob() });
 });
 
 /**
@@ -733,11 +472,11 @@ generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, (
  * call mid-flight).
  */
 generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParentRole, (_req, res) => {
-  if (recurateJob.state !== "running") {
+  if (!isRecurateJobRunning()) {
     res.status(409).json({ ok: false, error: "No recurate job running" });
     return;
   }
-  recurateCancelRequested = true;
+  requestRecurateCancel();
   res.json({ ok: true, message: "Cancel requested — job will stop after the current pass completes" });
 });
 
@@ -746,7 +485,7 @@ generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParent
  * Returns current/last recurate job snapshot for client polling.
  */
 generalNewsRouter.get("/general/recurate/status", requireSession, requireParentRole, (_req, res) => {
-  res.json({ ok: true, job: recurateJob });
+  res.json({ ok: true, job: getRecurateJob() });
 });
 
 /**
