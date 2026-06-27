@@ -1,5 +1,5 @@
 import { db } from "../db/client.js";
-import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index.js";
+import { AIDisabledError, AINotConfiguredError, getAIProviderForTask, resolveModelForTask } from "./ai/index.js";
 import { getAiCostTotalUsd } from "./ai/usageTally.js";
 import { PROVIDERS } from "./news/providers/index.js";
 import type { FeedItem, NewsSourceRow } from "./news/providers/index.js";
@@ -13,12 +13,16 @@ import {
   countMissingEmbeddings
 } from "./news/embeddings.js";
 import { linkNewsToGame } from "./news/gameLinking.js";
-import { applyPreFilter } from "./news/newsPreFilter.js";
+import { applyPreFilter, looksLikeNonGamingNews } from "./news/newsPreFilter.js";
 import { isFreshCorpusMode, retireStaleUncuratedBacklog } from "./news/newsBacklog.js";
 import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
 import { getIngestMaxAgeDays } from "./news/newsPipelineDiagnostics.js";
 import { shouldTriggerBackgroundIngest } from "./news/newsRetention.js";
-import { reportCurationPassOutcome, setLastBatchDiagnostics } from "./news/newsCurationHealth.js";
+import {
+  getLastBatchDiagnostics,
+  reportCurationPassOutcome,
+  setLastBatchDiagnostics
+} from "./news/newsCurationHealth.js";
 import { resolveHeroImage } from "./news/ogImage.js";
 import {
   recordSourceCurated,
@@ -91,6 +95,10 @@ type ValidationError =
 
 const MAX_RETRIES_PER_ARTICLE = 2;
 const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
+/** Minimum summary length — keep aligned with curator prompt (~3 sentences / 250+ chars). */
+export const MIN_SUMMARY_CHARS = 250;
+/** Default score for salvage/repair/fallback cards so they can appear in the feed. */
+const FALLBACK_RELEVANCE_SCORE = 0.55;
 
 // ── Outlet name blocklist ──────────────────────────────────────────────────
 // Populated dynamically from news_source_registry at the start of every
@@ -303,7 +311,7 @@ async function assignStoryFingerprints(
   // batches in the same run.)
   if (rows.length <= curationBatchSize()) return new Map();
 
-  const ai = getAIProvider();
+  const ai = getAIProviderForTask("light");
   const payload = rows.map((r) => ({ id: r.external_id, title: r.title }));
 
   const systemPrompt = `You assign a normalized story fingerprint to gaming news articles for downstream clustering.
@@ -842,7 +850,7 @@ async function curateBatchOnce(
   existingPrimaries: ExistingPrimary[] = [],
   retryReminder?: string
 ): Promise<GeneralCurationResult[]> {
-  const ai = getAIProvider();
+  const ai = getAIProviderForTask("curation");
 
   const payload = items.map((it, batchIndex) => ({
     batchIndex,
@@ -901,7 +909,7 @@ Write so any gamer can follow it, even one who doesn't play this game. Use plain
 
 Use a mix of flowing prose paragraphs AND bullet points. Use bullets for concrete facts, specs, or list-shaped information (release dates, platforms, feature lists, pricing tiers, patch line items, performance numbers). Use prose for context, narrative, and synthesis. Format bullets as plain markdown — each bullet on its own line, prefixed with \`- \`. Separate prose paragraphs with a blank line. Separate a prose paragraph from an adjacent bullet block with a blank line.
 
-You work only from the source excerpts in this batch. Synthesize across articles in the batch when multiple cover the same story. Do NOT speculate beyond what the excerpts state. If sources are thin and you can only reliably restate the headline, do exactly that — pad nothing.
+You work only from the source excerpts in this batch. Synthesize across articles in the batch when multiple cover the same story. Do NOT speculate beyond what the excerpts state. When the excerpt is thin (headline-only or link post), still write at least 3 sentences (~150 characters minimum) restating the headline and any facts present — expand with neutral context from the headline wording, but do not invent quotes, dates, or numbers not in the excerpt.
 
 ## 3. Why This Matters to Boneless Island
 
@@ -1202,13 +1210,19 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
     ? labelRaw
     : "community") as GeneralCurationResult["label"];
 
+  let summary = pickString(obj, "summary", "ai_summary", "aiSummary");
+  const subtitle = pickString(obj, "subtitle", "ai_subtitle", "aiSubtitle");
+  if (summary.length < MIN_SUMMARY_CHARS && subtitle.length > 0) {
+    summary = summary.length > 0 ? `${subtitle}\n\n${summary}`.trim() : subtitle;
+  }
+
   return {
     id: pickString(obj, "id", "external_id", "externalId", "url"),
     relevanceScore: Number(obj.relevanceScore ?? obj.relevance_score ?? 0) || 0,
     label,
     spoilerWarning: asBool(obj.spoilerWarning ?? obj.spoiler_warning),
     title: pickString(obj, "title", "ai_title", "aiTitle"),
-    summary: pickString(obj, "summary", "ai_summary", "aiSummary"),
+    summary,
     whyMatters: pickString(
       obj,
       "whyMatters",
@@ -1245,13 +1259,103 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
   };
 }
 
+function applyDefaultRelevanceScore(result: GeneralCurationResult): GeneralCurationResult {
+  if ((result.relevanceScore ?? 0) > 0) return result;
+  if (result.duplicate || isMerge(result)) return result;
+  return { ...result, relevanceScore: FALLBACK_RELEVANCE_SCORE };
+}
+
+/** Deterministic card when Bedrock returns empty or unmatched output. */
+function buildFallbackCurationResult(item: RawGeneral): GeneralCurationResult {
+  const title =
+    item.title.trim().length >= 8 ? item.title.trim() : item.title.trim() || "Gaming news update";
+  const body = (item.contents ?? "").trim();
+
+  if (looksLikeNonGamingNews(title, body)) {
+    return {
+      id: item.external_id,
+      relevanceScore: 0,
+      label: "community",
+      spoilerWarning: false,
+      title,
+      summary: "",
+      whyMatters: "",
+      sources: [item.url],
+      subtitle: "",
+      tags: [],
+      gameTitle: null,
+      duplicate: true
+    };
+  }
+
+  let summary = [body, title].filter(Boolean).join("\n\n").trim();
+  if (summary.length < MIN_SUMMARY_CHARS) {
+    summary = `${title}\n\n${body || "See the linked article for full details."}`.trim();
+  }
+  while (summary.length < MIN_SUMMARY_CHARS) {
+    summary += " More coverage may follow as the story develops.";
+  }
+  const whyMatters =
+    `Worth a look for the crew — this ${item.source_name} story may affect games on your shelf or tonight's picks.`;
+  return {
+    id: item.external_id,
+    relevanceScore: FALLBACK_RELEVANCE_SCORE,
+    label: "community",
+    spoilerWarning: false,
+    title,
+    summary: summary.slice(0, 4000),
+    whyMatters,
+    sources: [item.url],
+    subtitle: "",
+    tags: (item.matched_tags ?? []).slice(0, 3),
+    gameTitle: null
+  };
+}
+
 function ensurePrimarySources(
   result: GeneralCurationResult,
   item: RawGeneral
 ): GeneralCurationResult {
+  let r = result;
+  if (!r.duplicate && !isMerge(r)) {
+    if (!Array.isArray(r.sources) || r.sources.length === 0) {
+      r = { ...r, sources: [item.url] };
+    }
+    r = expandCurationSummary(r, item);
+    if ((!r.title || r.title.trim().length < 8) && item.title.trim().length >= 8) {
+      r = { ...r, title: item.title.trim() };
+    }
+    if ((!r.whyMatters || r.whyMatters.trim().length < 20) && r.subtitle && r.subtitle.trim().length >= 20) {
+      r = { ...r, whyMatters: r.subtitle.trim() };
+    }
+  }
+  return r;
+}
+
+/** Merge AI fields + source excerpt so thin RSS/Reddit posts can pass validation. */
+function expandCurationSummary(result: GeneralCurationResult, item: RawGeneral): GeneralCurationResult {
   if (result.duplicate || isMerge(result)) return result;
-  if (Array.isArray(result.sources) && result.sources.length > 0) return result;
-  return { ...result, sources: [item.url] };
+  let summary = (result.summary ?? "").trim();
+  if (summary.length >= MIN_SUMMARY_CHARS) return result;
+
+  const chunks = [
+    result.subtitle?.trim(),
+    summary,
+    result.whyMatters?.trim(),
+    (item.contents ?? "").trim()
+  ].filter((c): c is string => Boolean(c && c.length > 0));
+  const unique: string[] = [];
+  for (const c of chunks) {
+    if (!unique.some((u) => u.includes(c) || c.includes(u))) unique.push(c);
+  }
+  summary = unique.join("\n\n").trim();
+
+  if (summary.length < MIN_SUMMARY_CHARS) {
+    const headline = (result.title || item.title).trim();
+    summary = [headline, (item.contents ?? "").trim()].filter(Boolean).join("\n\n").trim();
+  }
+
+  return summary.length > 0 ? { ...result, summary } : result;
 }
 
 function isMerge(res: GeneralCurationResult): boolean {
@@ -1264,16 +1368,6 @@ function normalizeArticleId(id: string): string {
   } catch {
     return id.trim().replace(/\/$/, "").toLowerCase();
   }
-}
-
-function resultHasPayload(r: GeneralCurationResult | undefined): boolean {
-  if (!r) return false;
-  return Boolean(
-    r.duplicate ||
-    isMerge(r) ||
-    (r.title && r.title.trim().length > 0) ||
-    (r.summary && r.summary.trim().length > 0)
-  );
 }
 
 /** Map AI batch output back to input rows. Bedrock/Claude often drifts on long URL ids. */
@@ -1292,9 +1386,7 @@ function resolveCurationResultForItem(
 
   if (index < parsed.length) {
     const entry = parsed[index];
-    if (resultHasPayload(entry) || entry.duplicate || isMerge(entry)) {
-      return { result: { ...entry, id: item.external_id }, match: "ordered" };
-    }
+    return { result: { ...entry, id: item.external_id }, match: "ordered" };
   }
 
   const byPartial = parsed.find(
@@ -1314,7 +1406,7 @@ function validateCuration(res: GeneralCurationResult, batchUrls: Set<string>): V
   if (res.duplicate || isMerge(res)) return [];
   const errors: ValidationError[] = [];
   if (!res.title || res.title.trim().length < 8) errors.push("missing_title");
-  if (!res.summary || res.summary.trim().length < 150) {
+  if (!res.summary || res.summary.trim().length < MIN_SUMMARY_CHARS) {
     errors.push("summary_too_short");
   } else if (res.summary.trim().split(/\s+/).length > 1350) {
     errors.push("summary_too_long");
@@ -1336,6 +1428,7 @@ type CurationOutcome = {
   item: RawGeneral;
   errors: ValidationError[];
   attempts: number;
+  aiMatch: string;
 };
 
 async function curateBatchWithValidation(
@@ -1355,7 +1448,8 @@ async function curateBatchWithValidation(
       item,
       result,
       errors: validateCuration(result, batchUrls),
-      attempts: 1
+      attempts: 1,
+      aiMatch: match
     };
   });
 
@@ -1370,7 +1464,7 @@ async function curateBatchWithValidation(
       failed
         .map((o) => `${o.item.external_id}: ${o.errors.join(",")}`)
         .join(" | ") +
-      `. Return corrected JSON for these IDs only: populate every required field; for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
+      `. Return corrected JSON for these IDs only: populate every required field; summary must be at least ${MIN_SUMMARY_CHARS} characters (3+ sentences for thin excerpts); for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
 
     const retryItems = failed.map((o) => o.item);
     console.warn(
@@ -1429,6 +1523,23 @@ async function curateBatchWithValidation(
     o.attempts++;
   }
 
+  const aiEmpty = initial.length === 0;
+  for (const o of outcomes) {
+    if (o.errors.length === 0) {
+      o.result = applyDefaultRelevanceScore(o.result);
+      continue;
+    }
+    if (!aiEmpty && o.aiMatch !== "none") continue;
+    const fallback = ensurePrimarySources(buildFallbackCurationResult(o.item), o.item);
+    const fallbackErrors = validateCuration(fallback, batchUrls);
+    if (fallbackErrors.length === 0) {
+      o.result = fallback;
+      o.errors = [];
+      matchCounts.fallback = (matchCounts.fallback ?? 0) + 1;
+      console.log(`[generalNews] fallback card for ${o.item.external_id} (AI empty=${aiEmpty})`);
+    }
+  }
+
   const failed = outcomes.filter((o) => o.errors.length > 0);
   setLastBatchDiagnostics({
     batchSize: items.length,
@@ -1436,7 +1547,7 @@ async function curateBatchWithValidation(
     matchCounts,
     failedCount: failed.length,
     provider: getAISetting("ai_provider") ?? "unknown",
-    model: getAISetting("ai_model") ?? "default"
+    model: resolveModelForTask("curation") ?? getAISetting("ai_model") ?? "default"
   });
 
   return outcomes;
@@ -1531,10 +1642,11 @@ async function persistCurationOutcome(
   }
 
   const validationFailed = errors.length > 0;
-  const tags = sanitizeTags(result.tags ?? [], crewEntityNames);
+  const publishResult = validationFailed ? result : applyDefaultRelevanceScore(result);
+  const tags = sanitizeTags(publishResult.tags ?? [], crewEntityNames);
   const finalRetryCount = (item.ai_retry_count ?? 0) + attempts - 1;
 
-  const fingerprint = (result.storyFingerprint ?? "").trim();
+  const fingerprint = (publishResult.storyFingerprint ?? "").trim();
   await db.query(
     `UPDATE general_news
        SET ai_relevance_score        = $1,
@@ -1554,16 +1666,16 @@ async function persistCurationOutcome(
            ai_curated_at             = NOW()
      WHERE id = $15`,
     [
-      result.relevanceScore ?? 0,
-      result.summary || null,
-      result.label || null,
-      result.spoilerWarning ?? false,
-      result.subtitle || null,
+      publishResult.relevanceScore ?? 0,
+      publishResult.summary || null,
+      publishResult.label || null,
+      publishResult.spoilerWarning ?? false,
+      publishResult.subtitle || null,
       tags,
-      result.whyMatters || null,
-      result.gameTitle || null,
-      result.title || null,
-      Array.isArray(result.sources) ? result.sources : null,
+      publishResult.whyMatters || null,
+      publishResult.gameTitle || null,
+      publishResult.title || null,
+      Array.isArray(publishResult.sources) ? publishResult.sources : null,
       finalRetryCount,
       validationFailed,
       validationFailed ? errors : null,
@@ -1577,9 +1689,9 @@ async function persistCurationOutcome(
     console.warn(
       `[generalNews] validation failed after ${attempts} attempts for ${item.external_id}: ${errors.join(",")}`
     );
-  } else if (!result.duplicate && !isMerge(result)) {
+  } else if (!publishResult.duplicate && !isMerge(publishResult)) {
     await recordSourceCurated(item.source_name);
-    void linkNewsToGame(item.id, result.gameTitle ?? null);
+    void linkNewsToGame(item.id, publishResult.gameTitle ?? null);
   }
 
   // Embed the newly-curated primary so future ingests can match against the
@@ -1587,9 +1699,9 @@ async function persistCurationOutcome(
   // silently when pgvector / embedding backend isn't configured.
   if (!validationFailed && (await isEmbeddingColumnAvailable())) {
     try {
-      const text = result.summary
-        ? `${result.title}\n\n${result.summary}`
-        : `${result.title}\n\n${(item.contents ?? "").slice(0, 1500)}`;
+      const text = publishResult.summary
+        ? `${publishResult.title}\n\n${publishResult.summary}`
+        : `${publishResult.title}\n\n${(item.contents ?? "").slice(0, 1500)}`;
       const vec = await embedText(text);
       if (vec) await setEmbedding(item.id, vec);
     } catch (err) {
@@ -1613,11 +1725,17 @@ async function persistCurationOutcome(
 /** Fire-and-forget ingest when the public feed is stale (or legacy page-load mode). */
 export async function maybeBackgroundIngest(): Promise<void> {
   if (!(await shouldTriggerBackgroundIngest())) return;
+  const { isPipelineQueueEnabled, enqueueOrRunIngest } = await import("./news/newsPipelineQueue.js");
+  if (isPipelineQueueEnabled()) {
+    await enqueueOrRunIngest(false);
+    return;
+  }
   void ingestAndCurateGeneralNews(false);
 }
 
 export async function ingestAndCurateGeneralNews(
-  force = false
+  force = false,
+  opts: { skipLock?: boolean } = {}
 ): Promise<{ fetched: number; curated: number; embedded: number }> {
   const enabled = getAISetting("news_general_enabled");
   if (enabled === "false") return { fetched: 0, curated: 0, embedded: 0 };
@@ -1625,7 +1743,7 @@ export async function ingestAndCurateGeneralNews(
     return { fetched: 0, curated: 0, embedded: 0 };
   }
 
-  const locked = await withNewsPipelineLock(async () => {
+  const runIngest = async (): Promise<{ fetched: number; curated: number; embedded: number }> => {
   const costAtStart = getAiCostTotalUsd();
 
   let totalFetched = 0;
@@ -1769,9 +1887,20 @@ export async function ingestAndCurateGeneralNews(
   }
 
   return { fetched: totalFetched, curated: totalCurated, embedded: totalEmbedded };
-  });
+  };
 
-  if (!locked.ran) return { fetched: 0, curated: 0, embedded: 0 };
+  if (opts.skipLock) {
+    return runIngest();
+  }
+
+  const locked = await withNewsPipelineLock(runIngest);
+  if (!locked.ran) {
+    const { isPipelineQueueEnabled, enqueueOrRunIngest } = await import("./news/newsPipelineQueue.js");
+    if (isPipelineQueueEnabled()) {
+      await enqueueOrRunIngest(force);
+    }
+    return { fetched: 0, curated: 0, embedded: 0 };
+  }
   return locked.result;
 }
 
@@ -1835,11 +1964,32 @@ export async function debugCurateOne(): Promise<{
  * Used by the admin "trigger curation" button.
  */
 export async function curateUncuratedGeneralNews(
-  options: { reportRun?: boolean; bulk?: boolean } = {}
+  options: { reportRun?: boolean; bulk?: boolean } = {},
+  opts: { skipLock?: boolean } = {}
 ): Promise<number> {
   const reportRun = options.reportRun !== false;
   const bulk = options.bulk === true;
   const poolLimit = bulk ? 24 : curationPoolSize();
+
+  const lastBatch = getLastBatchDiagnostics();
+  const skipRequeue = lastBatch?.parsedCount === 0 && (lastBatch?.batchSize ?? 0) > 0;
+  if (skipRequeue) {
+    console.warn(
+      "[generalNews] skipping validation-failure re-queue — last batch had empty AI response (fix provider first)"
+    );
+  } else {
+    // Re-queue recent validation failures so a fix deploy can re-curate them.
+    await db.query(
+      `
+        UPDATE general_news
+           SET ai_curated_at = NULL,
+               ai_validation_failed = FALSE,
+               ai_last_validation_errors = NULL
+         WHERE ai_validation_failed = TRUE
+           AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
+      `
+    );
+  }
 
   let uncurated: { rows: RawGeneral[] };
   if (bulk) {
@@ -1882,7 +2032,7 @@ export async function curateUncuratedGeneralNews(
 
   if (uncurated.rows.length === 0) return 0;
 
-  const locked = await withNewsPipelineLock(async () => {
+  const runCurate = async (): Promise<number> => {
   const costAtStart = getAiCostTotalUsd();
   let batchFailed = 0;
 
@@ -1940,8 +2090,31 @@ export async function curateUncuratedGeneralNews(
     }
     return 0;
   }
-  });
+  };
 
-  if (!locked.ran) return 0;
+  if (opts.skipLock) {
+    return runCurate();
+  }
+
+  const locked = await withNewsPipelineLock(runCurate);
+
+  if (!locked.ran) {
+    setLastBatchDiagnostics({
+      batchSize: 0,
+      parsedCount: 0,
+      matchCounts: { lock_busy: 1 },
+      failedCount: 0,
+      provider: getAISetting("ai_provider") ?? "unknown",
+      model: resolveModelForTask("curation") ?? getAISetting("ai_model") ?? "default"
+    });
+    const { isPipelineQueueEnabled, enqueueOrRunCurate } = await import("./news/newsPipelineQueue.js");
+    if (isPipelineQueueEnabled()) {
+      await enqueueOrRunCurate({ bulk: options.bulk, reportRun: options.reportRun, priority: 7 });
+      console.warn("[generalNews] curation lock busy — queued for pipeline worker");
+      return 0;
+    }
+    console.warn("[generalNews] curation skipped — pipeline lock busy (ingest or another job running)");
+    return 0;
+  }
   return locked.result;
 }

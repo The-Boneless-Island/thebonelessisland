@@ -1,4 +1,4 @@
-import { getAIProvider } from "../ai/index.js";
+import { getAIProviderForTask } from "../ai/index.js";
 import { getAISetting } from "../serverSettings.js";
 
 type RepairableResult = {
@@ -37,8 +37,8 @@ type RepairInput = {
 export async function tryValidationRepair(input: RepairInput): Promise<RepairableResult | null> {
   if (!isRepairableValidation(input.errors)) return null;
 
-  const ai = getAIProvider();
-  const systemPrompt = `You repair incomplete JSON for a gaming news card. Fill ONLY the fields listed as missing. Do not rewrite the summary unless it is too short (<150 chars). Keep whyMatters to 1–2 concrete sentences about why a Discord gaming crew would care. Sources must be valid https URLs from the provided list or the article URL. Return ONLY JSON:
+  const ai = getAIProviderForTask("light");
+  const systemPrompt = `You repair incomplete JSON for a gaming news card. Fill ONLY the fields listed as missing. If summary is too short, expand it to at least 250 characters using facts from the excerpt (3+ sentences). Keep whyMatters to 1–2 concrete sentences about why a Discord gaming crew would care. Sources must be valid https URLs from the provided list or the article URL. Return ONLY JSON:
 
 {
   "id": "<exact id>",
@@ -68,7 +68,7 @@ export async function tryValidationRepair(input: RepairInput): Promise<Repairabl
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent }
       ],
-      { maxTokens: 1200, temperature: 0 }
+      { maxTokens: 2048, temperature: 0 }
     );
     const text = result.text.trim();
     const jsonStart = text.indexOf("{");

@@ -1,6 +1,18 @@
 import { db } from "../../db/client.js";
 
 const MIN_TEXT_CHARS = 40;
+
+const GAMING_SIGNAL =
+  /\b(video game|gaming|playstation|xbox|nintendo|steam deck|steam|patch notes|dlc|multiplayer|esports|game developer|game studio|valve|bethesda|ubisoft|call of duty|elden ring|fortnite|minecraft|capcom|fromsoftware|dlc|season pass|battle pass)\b/i;
+const ENTERTAINMENT_SIGNAL =
+  /\b(box office|oscar|emmy|golden globe|streaming series|season finale|marvel studios|disney movie|film review|movie review|tv show premiere|cinema release|hollywood|red carpet)\b/i;
+
+export function looksLikeNonGamingNews(title: string, body: string): boolean {
+  const text = `${title} ${body}`.trim();
+  if (!text) return false;
+  if (GAMING_SIGNAL.test(text)) return false;
+  return ENTERTAINMENT_SIGNAL.test(text);
+}
 const BLOCKED_HOSTS = new Set([
   "click.linksynergy.com",
   "bit.ly",
@@ -29,6 +41,8 @@ export function preFilterReason(row: PreFilterRow): string | null {
   } catch {
     return "invalid_url";
   }
+
+  if (looksLikeNonGamingNews(title, body)) return "off_topic_entertainment";
 
   return null;
 }

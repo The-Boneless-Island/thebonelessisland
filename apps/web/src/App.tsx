@@ -955,6 +955,10 @@ export function App() {
       const response = await apiFetch("/news/general/ingest", { method: "POST", credentials: "include" });
       const data = (await response.json().catch(() => null)) as {
         ok: boolean;
+        queued?: boolean;
+        message?: string;
+        position?: number;
+        jobId?: number;
         fetched?: number;
         curated?: number;
         embedded?: number;
@@ -971,6 +975,10 @@ export function App() {
       const response = await apiFetch("/news/general/curate", { method: "POST", credentials: "include" });
       const data = (await response.json().catch(() => null)) as {
         ok: boolean;
+        queued?: boolean;
+        message?: string;
+        position?: number;
+        jobId?: number;
         curated?: number;
         remaining?: number;
         error?: string;
@@ -1167,7 +1175,12 @@ export function App() {
       error: state === "error" ? job.error : null
     });
     try {
-      const kickResp = await apiFetch("/news/general/recurate", { method: "POST", credentials: "include" });
+      const kickResp = await apiFetch("/news/general/recurate", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reset: true })
+      });
       // 202 = newly started, 409 = already running (we just attach to it). Anything else = error.
       if (!kickResp.ok && kickResp.status !== 202 && kickResp.status !== 409) {
         const body = (await kickResp.json().catch(() => null)) as { error?: string } | null;

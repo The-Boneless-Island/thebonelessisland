@@ -1,6 +1,6 @@
 import { RecommendedGame, SITE_BRAND_NAME } from "@island/shared";
 import { db } from "../db/client.js";
-import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index.js";
+import { AIDisabledError, AINotConfiguredError, getAIProviderForTask } from "./ai/index.js";
 
 type GameMeta = {
   tags: string[];
@@ -47,7 +47,7 @@ export async function generateRecommendationBlurb(
 
   let ai;
   try {
-    ai = getAIProvider();
+    ai = getAIProviderForTask("light");
   } catch (err) {
     if (err instanceof AIDisabledError || err instanceof AINotConfiguredError) {
       return null;

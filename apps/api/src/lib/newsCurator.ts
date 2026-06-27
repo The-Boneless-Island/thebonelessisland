@@ -1,6 +1,6 @@
 import { SITE_BRAND_NAME } from "@island/shared";
 import { db } from "../db/client.js";
-import { AIDisabledError, AINotConfiguredError, getAIProvider } from "./ai/index.js";
+import { AIDisabledError, AINotConfiguredError, getAIProviderForTask } from "./ai/index.js";
 
 type RawNewsItem = {
   app_id: number;
@@ -36,7 +36,7 @@ async function callAIForCuration(
   items: RawNewsItem[],
   crewContext: string
 ): Promise<CurationResult[]> {
-  const ai = getAIProvider();
+  const ai = getAIProviderForTask("curation");
 
   const itemsPayload = items.map((item) => ({
     gid: item.gid,
