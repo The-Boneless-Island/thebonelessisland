@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { resolveGatewayConfig } from "../gateway.js";
 import { AICompleteOpts, AIMessage, AIProvider, AIResult } from "../provider.js";
 import { recordAiCost } from "../usageTally.js";
 
@@ -33,7 +34,14 @@ export class OpenAIProvider implements AIProvider {
   private model: string;
 
   constructor(apiKey: string, model: string) {
-    this.client = new OpenAI({ apiKey });
+    const gateway = resolveGatewayConfig("openai");
+    this.client = new OpenAI({
+      apiKey,
+      ...(gateway ? { baseURL: gateway.baseURL } : {}),
+      ...(gateway && Object.keys(gateway.headers).length > 0
+        ? { defaultHeaders: gateway.headers }
+        : {})
+    });
     this.model = model;
   }
 

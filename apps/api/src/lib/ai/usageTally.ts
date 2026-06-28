@@ -54,3 +54,23 @@ export async function getTodayCostUsd(): Promise<{ usd: number; calls: number }>
     return { usd: 0, calls: 0 };
   }
 }
+
+/**
+ * Month-to-date AI spend from the ledger.
+ *
+ * Fails OPEN (returns 0) on any DB error so a transient hiccup never blocks
+ * curation. The Cloudflare gateway spend limit is the real hard backstop.
+ */
+export async function getMonthToDateCostUsd(): Promise<number> {
+  try {
+    const r = await db.query<{ total: string }>(
+      `SELECT COALESCE(SUM(cost_usd), 0)::text AS total
+         FROM ai_cost_ledger
+        WHERE date >= date_trunc('month', CURRENT_DATE)`
+    );
+    return parseFloat(r.rows[0]?.total ?? "0");
+  } catch (err) {
+    console.warn("[ai:tally] getMonthToDateCostUsd failed:", err instanceof Error ? err.message : err);
+    return 0;
+  }
+}

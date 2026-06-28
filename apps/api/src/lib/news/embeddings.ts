@@ -1,26 +1,31 @@
-import { BedrockRuntimeClient, InvokeModelCommand } from "@aws-sdk/client-bedrock-runtime";
-import OpenAI from "openai";
-import { env } from "../../config.js";
 import { db } from "../../db/client.js";
-import { recordAiCost } from "../ai/usageTally.js";
-import { getAISetting } from "../serverSettings.js";
+import { getEmbeddingProvider, resolveEmbeddingProviderName } from "../ai/embeddings/index.js";
+import { EMBEDDING_DIM } from "./embeddingDim.js";
 
-// Embeddings-based clustering. Default: Amazon Titan Embed v2 on Bedrock (1024-dim)
-// when ai_provider is bedrock. Falls back to OpenAI text-embedding-3-small when an
-// OpenAI key is configured. Stored in general_news.embedding (pgvector).
+// Embeddings-based clustering. Active backend: OpenAI text-embedding-3-large
+// at 3072 dimensions (pgvector halfvec or vector depending on installed
+// pgvector version — auto-detected once at startup).
+//
+// All public exports are unchanged so dependents compile without edits.
 
-export const EMBEDDING_DIM = 1024;
-const TITAN_EMBED_MODEL = "amazon.titan-embed-text-v2:0";
-const OPENAI_EMBED_MODEL = "text-embedding-3-small";
-const TITAN_PRICE_PER_M_TOKENS = 0.02;
-const OPENAI_PRICE_PER_M_TOKENS = 0.02;
+export { EMBEDDING_DIM } from "./embeddingDim.js";
+
 const SIMILARITY_THRESHOLD = 0.85;
 const SIMILARITY_WINDOW_DAYS = 14;
 
-export type EmbeddingBackend = "bedrock" | "openai" | "none";
+export type EmbeddingBackend = "bedrock" | "openai" | "gemini" | "none";
+
+// ── Column availability + type cache ─────────────────────────────────────────
 
 let availabilityChecked = false;
 let columnAvailable = false;
+
+/**
+ * "halfvec" or "vector" — detected once after the migration lands.
+ * Drives the cast used in similarity queries so the correct operator class
+ * fires regardless of pgvector version.
+ */
+let embeddingColumnType: "halfvec" | "vector" | null = null;
 
 /** Returns true once pgvector is installed AND the embedding column exists. */
 export async function isEmbeddingColumnAvailable(): Promise<boolean> {
@@ -41,100 +46,70 @@ export async function isEmbeddingColumnAvailable(): Promise<boolean> {
   return columnAvailable;
 }
 
-function resolveOpenAIKey(): string | null {
-  const fromOpenAI = getAISetting("openai_api_key");
-  const legacy = getAISetting("ai_api_key");
-  const key = (fromOpenAI || legacy || env.OPENAI_API_KEY || "").trim();
-  return key.length > 0 ? key : null;
+/**
+ * Detect whether the embedding column is `halfvec` or `vector` by querying
+ * pg_attribute. Falls back to `vector` if the column is absent or the type
+ * cannot be resolved. Result is cached for the process lifetime.
+ */
+async function resolveColumnType(): Promise<"halfvec" | "vector"> {
+  if (embeddingColumnType) return embeddingColumnType;
+  try {
+    const r = await db.query<{ typname: string }>(
+      `SELECT t.typname
+         FROM pg_attribute a
+         JOIN pg_class c ON c.oid = a.attrelid
+         JOIN pg_type  t ON t.oid = a.atttypid
+        WHERE c.relname = 'general_news'
+          AND a.attname = 'embedding'
+          AND a.attnum  > 0
+          AND NOT a.attisdropped`
+    );
+    const typname = r.rows[0]?.typname ?? "vector";
+    embeddingColumnType = typname === "halfvec" ? "halfvec" : "vector";
+  } catch {
+    embeddingColumnType = "vector";
+  }
+  return embeddingColumnType;
 }
 
-function bedrockRegion(): string {
-  return getAISetting("bedrock_region") || process.env.AWS_REGION || "us-east-1";
+/**
+ * Returns the SQL cast expression for a vector literal, e.g. `$1::halfvec`
+ * or `$1::vector`, so the correct cosine `<=>` operator class is resolved.
+ * Exported so sibling query files (newsSearch.ts) can use the same cast.
+ */
+export async function getEmbeddingCast(paramNum: number = 1): Promise<string> {
+  const colType = await resolveColumnType();
+  return `$${paramNum}::${colType}`;
 }
 
-/** Which embedding backend would be used right now (for admin health UI). */
+/** @internal — alias used within this file for readability */
+async function vectorCast(paramNum: number = 1): Promise<string> {
+  return getEmbeddingCast(paramNum);
+}
+
+// ── Backend resolver (admin health UI) ───────────────────────────────────────
+
+/**
+ * Which embedding backend would be used right now.
+ * Preserved for the admin health UI; now delegates to the provider factory.
+ *
+ * Returns "openai" | "gemini" | "bedrock" | "none" — the first segment of
+ * the provider name. Callers that type-check against EmbeddingBackend will
+ * work as before for "bedrock"/"openai"/"none"; "gemini" is a new value.
+ */
 export function resolveEmbeddingBackend(): EmbeddingBackend {
-  if (getAISetting("ai_enabled") !== "true") return "none";
-  const chatProvider = (getAISetting("ai_provider") ?? "").toLowerCase();
-  if (chatProvider === "bedrock") return "bedrock";
-  if (resolveOpenAIKey()) return "openai";
+  const name = resolveEmbeddingProviderName();
+  if (name.startsWith("openai")) return "openai";
+  if (name.startsWith("bedrock")) return "bedrock";
+  if (name.startsWith("gemini")) return "gemini";
   return "none";
 }
 
-let openaiClient: OpenAI | null = null;
-let openaiKey: string | null = null;
-function getOpenAIClient(): OpenAI | null {
-  const key = resolveOpenAIKey();
-  if (!key) return null;
-  if (openaiClient && openaiKey === key) return openaiClient;
-  openaiClient = new OpenAI({ apiKey: key });
-  openaiKey = key;
-  return openaiClient;
-}
+// ── Core embedding call ───────────────────────────────────────────────────────
 
-let bedrockClient: BedrockRuntimeClient | null = null;
-let bedrockClientRegion: string | null = null;
-function getBedrockClient(): BedrockRuntimeClient {
-  const region = bedrockRegion();
-  if (bedrockClient && bedrockClientRegion === region) return bedrockClient;
-  bedrockClient = new BedrockRuntimeClient({ region });
-  bedrockClientRegion = region;
-  return bedrockClient;
-}
-
-async function embedViaBedrock(text: string): Promise<number[] | null> {
-  try {
-    const client = getBedrockClient();
-    const body = JSON.stringify({
-      inputText: text,
-      dimensions: EMBEDDING_DIM,
-      normalize: true
-    });
-    const res = await client.send(
-      new InvokeModelCommand({
-        modelId: TITAN_EMBED_MODEL,
-        contentType: "application/json",
-        accept: "application/json",
-        body: new TextEncoder().encode(body)
-      })
-    );
-    const parsed = JSON.parse(new TextDecoder().decode(res.body)) as {
-      embedding?: number[];
-      inputTextTokenCount?: number;
-    };
-    const vec = parsed.embedding;
-    if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIM) return null;
-    const inputTokens = parsed.inputTextTokenCount ?? 0;
-    if (inputTokens > 0) {
-      recordAiCost("bedrock", TITAN_EMBED_MODEL, (inputTokens * TITAN_PRICE_PER_M_TOKENS) / 1_000_000);
-    }
-    return vec;
-  } catch (err) {
-    console.warn("[embeddings] bedrock embed failed:", err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-
-async function embedViaOpenAI(text: string): Promise<number[] | null> {
-  const client = getOpenAIClient();
-  if (!client) return null;
-  try {
-    const resp = await client.embeddings.create({
-      model: OPENAI_EMBED_MODEL,
-      input: text,
-      dimensions: EMBEDDING_DIM
-    });
-    const vec = resp.data[0]?.embedding;
-    if (!vec || vec.length !== EMBEDDING_DIM) return null;
-    const promptTokens = resp.usage?.prompt_tokens ?? 0;
-    if (promptTokens > 0) {
-      recordAiCost("openai", OPENAI_EMBED_MODEL, (promptTokens * OPENAI_PRICE_PER_M_TOKENS) / 1_000_000);
-    }
-    return vec;
-  } catch (err) {
-    console.warn("[embeddings] openai embed failed:", err instanceof Error ? err.message : err);
-    return null;
-  }
+/** pgvector literal — `[0.1, 0.2, ...]` (no cast; cast is applied per-query). */
+function vectorLiteral(vec: number[]): string {
+  return `[${vec.join(",")}]`;
 }
 
 /** Embed a piece of text. Returns null when no backend is configured or input is empty. */
@@ -142,16 +117,16 @@ export async function embedText(text: string): Promise<number[] | null> {
   const trimmed = (text ?? "").slice(0, 6000).trim();
   if (trimmed.length < 8) return null;
 
-  const backend = resolveEmbeddingBackend();
-  if (backend === "bedrock") return embedViaBedrock(trimmed);
-  if (backend === "openai") return embedViaOpenAI(trimmed);
-  return null;
+  const provider = getEmbeddingProvider();
+  if (!provider) return null;
+
+  const vec = await provider.embed(trimmed);
+  // Provider implementations already validate length; double-check here.
+  if (!vec || vec.length !== EMBEDDING_DIM) return null;
+  return vec;
 }
 
-/** pgvector literal — `'[0.1, 0.2, ...]'::vector`. */
-function vectorLiteral(vec: number[]): string {
-  return `[${vec.join(",")}]`;
-}
+// ── Similarity query ──────────────────────────────────────────────────────────
 
 export type SimilarPrimary = {
   id: number;
@@ -167,6 +142,8 @@ export async function findSimilarPrimary(
   excludeId?: number
 ): Promise<SimilarPrimary | null> {
   const v = vectorLiteral(embedding);
+  const cast = await vectorCast(1);
+
   const r = await db.query<{
     id: number;
     external_id: string;
@@ -176,7 +153,7 @@ export async function findSimilarPrimary(
   }>(
     `
       SELECT id, external_id, ai_story_fingerprint, ai_sources,
-             1 - (embedding <=> $1::vector) AS similarity
+             1 - (embedding <=> ${cast}) AS similarity
         FROM general_news
        WHERE embedding IS NOT NULL
          AND ai_curated_at IS NOT NULL
@@ -185,7 +162,7 @@ export async function findSimilarPrimary(
          AND ai_validation_failed = FALSE
          AND published_at > NOW() - INTERVAL '${SIMILARITY_WINDOW_DAYS} days'
          AND ($2::int IS NULL OR id <> $2::int)
-       ORDER BY embedding <=> $1::vector
+       ORDER BY embedding <=> ${cast}
        LIMIT 1
     `,
     [v, excludeId ?? null]
@@ -202,9 +179,12 @@ export async function findSimilarPrimary(
   };
 }
 
+// ── Persistence helpers ───────────────────────────────────────────────────────
+
 export async function setEmbedding(id: number, vec: number[]): Promise<void> {
+  const cast = await vectorCast(1);
   await db.query(
-    `UPDATE general_news SET embedding = $1::vector WHERE id = $2`,
+    `UPDATE general_news SET embedding = ${cast} WHERE id = $2`,
     [vectorLiteral(vec), id]
   );
 }
@@ -263,7 +243,7 @@ export type BackfillEmbeddingsResult = { embedded: number; skipped: number };
 export async function backfillEmbeddings(maxRows: number = 200): Promise<BackfillEmbeddingsResult> {
   if (!(await isEmbeddingColumnAvailable())) return { embedded: 0, skipped: 0 };
   if (resolveEmbeddingBackend() === "none") {
-    console.warn("[embeddings] backfill skipped — no embedding backend configured (enable AI + Bedrock or OpenAI key)");
+    console.warn("[embeddings] backfill skipped — no embedding backend configured (enable AI + configure embedding model)");
     return { embedded: 0, skipped: 0 };
   }
 
@@ -296,7 +276,7 @@ export async function backfillEmbeddings(maxRows: number = 200): Promise<Backfil
   }
   if (embedded > 0 || skipped > 0) {
     console.log(
-      `[embeddings] backfilled ${embedded}/${r.rowCount} row(s), ${skipped} skip sentinel via ${resolveEmbeddingBackend()}`
+      `[embeddings] backfilled ${embedded}/${r.rowCount} row(s), ${skipped} skip sentinel via ${resolveEmbeddingProviderName()}`
     );
   }
   return { embedded, skipped };

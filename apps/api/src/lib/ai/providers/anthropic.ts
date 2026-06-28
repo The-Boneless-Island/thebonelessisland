@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { resolveGatewayConfig } from "../gateway.js";
 import { AICompleteOpts, AIMessage, AIProvider, AIResult } from "../provider.js";
 import { recordAiCost } from "../usageTally.js";
 
@@ -18,7 +19,14 @@ export class AnthropicProvider implements AIProvider {
   private model: string;
 
   constructor(apiKey: string, model: string) {
-    this.client = new Anthropic({ apiKey });
+    const gateway = resolveGatewayConfig("anthropic");
+    this.client = new Anthropic({
+      apiKey,
+      ...(gateway ? { baseURL: gateway.baseURL } : {}),
+      ...(gateway && Object.keys(gateway.headers).length > 0
+        ? { defaultHeaders: gateway.headers }
+        : {})
+    });
     this.model = model;
   }
 

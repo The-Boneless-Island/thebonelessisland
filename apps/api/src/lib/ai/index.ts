@@ -26,8 +26,39 @@ export const PROVIDER_DEFAULTS: Record<SupportedProvider, string> = {
 
 export const SUPPORTED_PROVIDERS: SupportedProvider[] = ["anthropic", "openai", "gemini", "bedrock"];
 
-/** Workload-specific routing when ai_provider is bedrock. */
+/** Workload-specific routing for all providers. */
 export type AITask = "default" | "curation" | "chat" | "light";
+
+// ── Provider-agnostic task routing ───────────────────────────────────────────
+
+/**
+ * DB setting keys for provider-agnostic task model overrides.
+ * These work for any provider (gemini, openai, anthropic, bedrock).
+ * Values should be a bare model id understood by the active provider.
+ */
+const TASK_SETTING_KEYS: Record<Exclude<AITask, "default">, string> = {
+  curation: "ai_model_curation",
+  chat: "ai_model_chat",
+  light: "ai_model_light"
+};
+
+/**
+ * Per-provider task model defaults.
+ * Used when no per-task override is set in server_settings.
+ * Bedrock defaults favour Claude for curation and Nova for chat/light.
+ * Gemini defaults favour Flash for curation and Flash-Lite for cheap tasks.
+ */
+const PROVIDER_TASK_DEFAULTS: Partial<Record<SupportedProvider, Record<Exclude<AITask, "default">, string>>> = {
+  gemini: {
+    curation: "gemini-2.5-flash",
+    chat: "gemini-2.5-flash-lite",
+    light: "gemini-2.5-flash-lite"
+  }
+};
+
+// ── Bedrock back-compat ───────────────────────────────────────────────────────
+// The legacy bedrock_model_* keys still work when ai_provider is bedrock.
+// New installs should use the provider-agnostic ai_model_* keys instead.
 
 const BEDROCK_TASK_SETTING_KEYS: Record<Exclude<AITask, "default">, string> = {
   curation: "bedrock_model_curation",
@@ -42,15 +73,41 @@ export const BEDROCK_TASK_DEFAULTS: Record<Exclude<AITask, "default">, string> =
   light: "global.amazon.nova-2-lite-v1:0"
 };
 
-/** Resolve the Bedrock model id for a task. Returns undefined for default/non-Bedrock. */
+/**
+ * Resolve the model id for a task and the active provider.
+ *
+ * Resolution order:
+ *   1. Provider-agnostic override: ai_model_curation / ai_model_chat / ai_model_light
+ *   2. Bedrock legacy override (bedrock only): bedrock_model_curation / …_chat / …_light
+ *   3. Provider-specific task default (PROVIDER_TASK_DEFAULTS)
+ *   4. undefined → caller uses getAIProvider default (ai_model setting or PROVIDER_DEFAULTS)
+ *
+ * Returns undefined for task=="default" (no routing needed).
+ */
 export function resolveModelForTask(task: AITask = "default"): string | undefined {
   if (task === "default") return undefined;
-  const provider = (getAISetting("ai_provider") ?? "").toLowerCase();
-  if (provider !== "bedrock") return undefined;
-  const settingKey = BEDROCK_TASK_SETTING_KEYS[task];
-  const configured = getAISetting(settingKey)?.trim();
-  if (configured) return configured;
-  return BEDROCK_TASK_DEFAULTS[task];
+
+  // 1. Provider-agnostic setting (works for any provider)
+  const agnosticKey = TASK_SETTING_KEYS[task];
+  const agnosticModel = getAISetting(agnosticKey)?.trim();
+  if (agnosticModel) return agnosticModel;
+
+  const provider = (getAISetting("ai_provider") ?? "").toLowerCase() as SupportedProvider;
+
+  // 2. Bedrock back-compat: bedrock_model_* legacy keys
+  if (provider === "bedrock") {
+    const legacyKey = BEDROCK_TASK_SETTING_KEYS[task];
+    const legacyModel = getAISetting(legacyKey)?.trim();
+    if (legacyModel) return legacyModel;
+    return BEDROCK_TASK_DEFAULTS[task];
+  }
+
+  // 3. Provider-specific task default
+  const providerDefaults = PROVIDER_TASK_DEFAULTS[provider];
+  if (providerDefaults) return providerDefaults[task];
+
+  // 4. No per-task override — fall through to the ai_model / PROVIDER_DEFAULTS
+  return undefined;
 }
 
 /**

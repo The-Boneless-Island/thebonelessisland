@@ -1,6 +1,6 @@
 import { db } from "../db/client.js";
-import { AIDisabledError, AINotConfiguredError, getAIProviderForTask, resolveModelForTask } from "./ai/index.js";
-import { getAiCostTotalUsd } from "./ai/usageTally.js";
+import { getAIProviderForTask, resolveModelForTask } from "./ai/index.js";
+import { getAiCostTotalUsd, getMonthToDateCostUsd } from "./ai/usageTally.js";
 import { PROVIDERS } from "./news/providers/index.js";
 import type { FeedItem, NewsSourceRow } from "./news/providers/index.js";
 import {
@@ -16,10 +16,9 @@ import { linkNewsToGame } from "./news/gameLinking.js";
 import {
   backfillMissingNewsImages,
   countLiveCardsMissingImages,
-  persistNewsArticleImage,
-  resolveNewsImagesForIds
+  persistNewsArticleImage
 } from "./news/newsImageResolver.js";
-import { applyPreFilter, looksLikeNonGamingNews } from "./news/newsPreFilter.js";
+import { applyPreFilter, looksLikeNonGamingNews, markPreFiltered, preFilterReason } from "./news/newsPreFilter.js";
 import { isFreshCorpusMode, retireStaleUncuratedBacklog } from "./news/newsBacklog.js";
 import { withNewsPipelineLock } from "./news/newsPipelineLock.js";
 import { getIngestMaxAgeDays } from "./news/newsPipelineDiagnostics.js";
@@ -105,6 +104,10 @@ type ValidationError =
 
 const MAX_RETRIES_PER_ARTICLE = 2;
 const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
+/** Give-up threshold: rows that have been attempted this many total times stay parked forever. */
+const MAX_TOTAL_CURATION_ATTEMPTS = 3;
+/** Fallback monthly budget cap (USD) when the ai_monthly_budget_usd setting is missing or invalid. */
+const AI_MONTHLY_BUDGET_DEFAULT_USD = 10;
 /** Minimum summary length — keep aligned with curator prompt (~3 sentences / 250+ chars). */
 export const MIN_SUMMARY_CHARS = 250;
 /** Default score for salvage/repair/fallback cards so they can appear in the feed. */
@@ -303,127 +306,6 @@ async function fetchRecentPrimaries(): Promise<ExistingPrimary[]> {
   }));
 }
 
-// Cheap AI pre-clustering pass. Assigns a storyFingerprint to every uncurated
-// article BEFORE batching, so siblings about the same news cycle land in the
-// same batch even when the title-regex heuristic would produce divergent keys
-// (e.g. "ARC Raiders Shifts to Six-Month Cadence" vs "Arc Raiders Is Dropping
-// Monthly Updates" — both must end up as `arc-raiders:cadence-shift-2026`).
-// Fingerprints are persisted to DB so they survive a curation crash or a
-// follow-up re-curate.
-async function assignStoryFingerprints(
-  rows: RawGeneral[]
-): Promise<Map<string, string>> {
-  if (rows.length === 0) return new Map();
-  // Cost guard: if the pool fits in a single batch, the main curation prompt
-  // already handles in-batch siblings — pre-clustering adds an AI call with no
-  // batching benefit. Skip and let the main pass handle dedup. (Cross-pass
-  // fingerprint matching still works via DB-persisted prints from earlier
-  // batches in the same run.)
-  if (rows.length <= curationBatchSize()) return new Map();
-
-  const ai = getAIProviderForTask("light");
-  const payload = rows.map((r) => ({ id: r.external_id, title: r.title }));
-
-  const systemPrompt = `You assign a normalized story fingerprint to gaming news articles for downstream clustering.
-
-For every article, emit a \`storyFingerprint\` in lowercase kebab-case format: \`<entity>:<event-topic>\`.
-
-**Construction rules:**
-- \`<entity>\` is the canonical short name of the central game, studio, publisher, platform, or person — lowercase, hyphens for spaces, no version numbers in the name itself: \`poe2\`, \`arc-raiders\`, \`elden-ring\`, \`ea\`, \`bungie\`, \`epic\`, \`nintendo-switch-2\`. Strip "the", articles, and outlet noise.
-- \`<event-topic>\` is the short canonical handle for the news cycle: \`1-0-launch\`, \`cadence-shift-2026\`, \`layoffs-2026q1\`, \`acquisition-by-microsoft\`, \`season-12-patch\`, \`review-bombing\`. Use stable nouns. Same news cycle = same handle across outlets.
-- Two articles about the SAME underlying event MUST produce the SAME fingerprint, even with different headlines, outlets, dates, or angles. Treat follow-up updates, restatements, additional sources, and refined versions as the same fingerprint.
-
-**Examples (these are siblings — same fingerprint):**
-- "ARC Raiders Shifts to Twice-Yearly Major Updates" → \`arc-raiders:cadence-shift-2026\`
-- "Arc Raiders Is Dropping Monthly Updates in Favor of Longer Development Cycles" → \`arc-raiders:cadence-shift-2026\`
-- "ARC Raiders Shifts to Six-Month Update Cadence" → \`arc-raiders:cadence-shift-2026\`
-- "Path of Exile 2's Final Early Access Update Targets End-of-Year 1.0 Launch" → \`poe2:1-0-launch\`
-- "Path of Exile 2 Director Confirms 1.0 Launch Won't Dodge Other Releases" → \`poe2:1-0-launch\`
-- "Path of Exile 2 Is Streamlining Its Campaign" → \`poe2:1-0-launch\` (same launch news cycle even though aspect differs)
-
-**Distinct events (different fingerprints):**
-- "Embracer Lays Off 30%" → \`embracer:layoffs-2026\`
-- "Former Embracer Devs Found New Studio" → \`embracer:ex-devs-new-studio\`
-
-Return ONLY a JSON array, one object per input article, in the same order:
-
-[
-  { "id": "<exact input id>", "storyFingerprint": "<entity:event-topic>" }
-]
-
-No markdown fences. No commentary.`;
-
-  const userContent = `## Articles\n\n${JSON.stringify(payload, null, 2)}\n\nReturn the JSON array.`;
-
-  // Each item emits ~120 chars of JSON (~30 tokens). Scale max tokens to fit
-  // the full batch with overhead, capped to avoid silly costs on huge pools.
-  const maxTokens = Math.min(16384, Math.max(2048, rows.length * 60));
-
-  let result;
-  try {
-    result = await ai.complete(
-      [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent }
-      ],
-      { maxTokens, temperature: 0 }
-    );
-  } catch (err) {
-    if (err instanceof AIDisabledError || err instanceof AINotConfiguredError) {
-      return new Map();
-    }
-    console.warn("[generalNews] pre-cluster AI call failed:", err);
-    return new Map();
-  }
-
-  let parsed: Array<{ id: string; storyFingerprint: string }>;
-  try {
-    parsed = parseAiJsonArray(result.text.trim()) as Array<{ id: string; storyFingerprint: string }>;
-  } catch (err) {
-    console.warn("[generalNews] pre-cluster JSON parse failed:", err);
-    return new Map();
-  }
-  if (!Array.isArray(parsed)) return new Map();
-
-  const map = new Map<string, string>();
-  const byExt = new Map(rows.map((r) => [r.external_id, r]));
-  for (const entry of parsed) {
-    if (!entry || typeof entry.id !== "string") continue;
-    const fp = (entry.storyFingerprint ?? "").trim().toLowerCase();
-    if (!fp || !/^[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/.test(fp)) continue;
-    const row = byExt.get(entry.id);
-    if (!row) continue;
-    map.set(entry.id, fp);
-  }
-
-  // Persist fingerprints to DB so they outlast a curation crash and so
-  // future re-curate passes start from a known cluster signal.
-  if (map.size > 0) {
-    const ids: number[] = [];
-    const fps: string[] = [];
-    for (const r of rows) {
-      const fp = map.get(r.external_id);
-      if (fp) {
-        ids.push(r.id);
-        fps.push(fp);
-      }
-    }
-    await db.query(
-      `UPDATE general_news AS gn
-          SET ai_story_fingerprint = u.fp
-         FROM (SELECT UNNEST($1::int[]) AS id, UNNEST($2::text[]) AS fp) AS u
-        WHERE gn.id = u.id`,
-      [ids, fps]
-    );
-  }
-
-  const distinctFps = new Set(map.values()).size;
-  console.log(
-    `[generalNews] pre-clustered ${map.size}/${rows.length} articles into ${distinctFps} cluster(s)`
-  );
-  return map;
-}
-
 // Group rows by cluster key then pack into batches of <= batchSize, keeping
 // each cluster intact when possible. Big clusters (>= batchSize) get their own
 // batch(es); small clusters share. Sibling articles thus always land together,
@@ -554,7 +436,23 @@ async function upsertGeneralNews(items: FeedItem[]): Promise<number[]> {
         ]
       );
       if (result.rows[0]) {
-        insertedIds.push(result.rows[0].id);
+        const newId = result.rows[0].id;
+        // Pre-filter at upsert: stamp parked rows immediately so they never
+        // enter a curation pool. applyPreFilter() in the curate path is a cheap
+        // safety net but should be a near-no-op for freshly-inserted rows.
+        const pfReason = preFilterReason({
+          id: newId,
+          external_id: item.externalId,
+          title: item.title,
+          url: item.url,
+          contents: item.contents
+        });
+        if (pfReason) {
+          await markPreFiltered(newId, pfReason);
+          console.log(`[generalNews] upsert pre-filter id=${newId} (${pfReason})`);
+        } else {
+          insertedIds.push(newId);
+        }
       }
     } catch (err) {
       console.error("[generalNews] upsert failed for", item.externalId, err);
@@ -578,22 +476,38 @@ export async function backfillMissingImages(
 }
 
 /**
- * For freshly-inserted rows, run the cover fallback ladder (og → body → sibling → game → default).
+ * Soft monthly spend cap check (3c).
+ *
+ * Returns true when the month-to-date AI spend meets or exceeds the
+ * `ai_monthly_budget_usd` setting (default $10). Fails OPEN on any error
+ * so a DB hiccup never blocks curation — the Cloudflare gateway spend limit
+ * is the real hard backstop.
  */
-async function resolveMissingImages(newIds: number[]): Promise<{ scanned: number; resolved: number }> {
-  const { scanned, resolved } = await resolveNewsImagesForIds(newIds);
-  if (scanned > 0) {
-    console.log(`[generalNews] cover resolve — updated ${resolved}/${scanned} row(s)`);
+async function isCurationBudgetExceeded(): Promise<boolean> {
+  try {
+    const rawBudget = getAISetting("ai_monthly_budget_usd");
+    const budgetUsd = rawBudget ? parseFloat(rawBudget) : AI_MONTHLY_BUDGET_DEFAULT_USD;
+    if (!Number.isFinite(budgetUsd) || budgetUsd <= 0) return false;
+    const spentUsd = await getMonthToDateCostUsd();
+    return spentUsd >= budgetUsd;
+  } catch (err) {
+    console.warn("[generalNews] isCurationBudgetExceeded check failed (failing open):", err instanceof Error ? err.message : err);
+    return false;
   }
-  return { scanned, resolved };
 }
 
 /**
  * For each freshly-inserted row: embed it, then check whether an existing
  * curated primary already covers the same story via cosine similarity. If
  * yes, absorb (fold URL into primary's sources, mark sibling) — that row
- * never reaches the LLM curator, saving the largest cost item. Returns the
- * subset of input IDs that were NOT absorbed and still need curation.
+ * never reaches the LLM curator, saving the largest cost item.
+ *
+ * Reddit rows (source_type = 'reddit') are enrichment-only (3a): they embed +
+ * absorb as normal, but if no similar primary is found — or embedding fails —
+ * they are PARKED (markPreFiltered) rather than forwarded to the curator.
+ * Reddit posts never spawn their own AI-curated card.
+ *
+ * Returns the subset of input IDs that were NOT absorbed and still need curation.
  */
 async function embedAndCluster(newIds: number[]): Promise<{ embedded: number; absorbed: number }> {
   if (newIds.length === 0) return { embedded: 0, absorbed: 0 };
@@ -604,8 +518,9 @@ async function embedAndCluster(newIds: number[]): Promise<{ embedded: number; ab
     title: string;
     url: string;
     contents: string | null;
+    source_type: string;
   }>(
-    `SELECT id, title, url, contents
+    `SELECT id, title, url, contents, source_type
        FROM general_news
       WHERE id = ANY($1::int[]) AND embedding IS NULL`,
     [newIds]
@@ -613,12 +528,21 @@ async function embedAndCluster(newIds: number[]): Promise<{ embedded: number; ab
 
   let absorbed = 0;
   let embedded = 0;
+  let parked = 0;
   const remaining: number[] = [];
   for (const row of rows.rows) {
+    const isReddit = row.source_type === "reddit";
     const text = `${row.title}\n\n${(row.contents ?? "").slice(0, 1500)}`;
     const vec = await embedText(text);
     if (!vec) {
-      remaining.push(row.id);
+      if (isReddit) {
+        // Reddit with no embedding → park, never curate
+        await markPreFiltered(row.id, "reddit_embed_failed");
+        parked++;
+        console.log(`[generalNews] reddit park (embed failed) row=${row.id}`);
+      } else {
+        remaining.push(row.id);
+      }
       continue;
     }
     await setEmbedding(row.id, vec);
@@ -633,12 +557,21 @@ async function embedAndCluster(newIds: number[]): Promise<{ embedded: number; ab
       );
       continue;
     }
+
+    if (isReddit) {
+      // Reddit with no matching story → park, never curate
+      await markPreFiltered(row.id, "reddit_no_story_match");
+      parked++;
+      console.log(`[generalNews] reddit park (no story match) row=${row.id}`);
+      continue;
+    }
+
     remaining.push(row.id);
   }
 
-  if (absorbed > 0 || embedded > 0) {
+  if (absorbed > 0 || embedded > 0 || parked > 0) {
     console.log(
-      `[generalNews] embed-cluster: ${embedded} embedded, ${absorbed} absorbed as siblings, ${remaining.length} sent to curator`
+      `[generalNews] embed-cluster: ${embedded} embedded, ${absorbed} absorbed as siblings, ${parked} reddit parked, ${remaining.length} sent to curator`
     );
   }
   return { embedded, absorbed };
@@ -1769,7 +1702,6 @@ export async function ingestAndCurateGeneralNews(
   let totalFetched = 0;
   let totalCurated = 0;
   let totalEmbedded = 0;
-  let batchFailed = 0;
   let errorSummary: string | null = null;
 
   try {
@@ -1780,8 +1712,8 @@ export async function ingestAndCurateGeneralNews(
       await retireStaleUncuratedBacklog();
     }
 
-    const [crewTags, gameNames, crewEntityNames] = await Promise.all([
-      getCrewGameTags(), getCrewGameNames(), getCrewEntityNames()
+    const [crewTags, gameNames] = await Promise.all([
+      getCrewGameTags(), getCrewGameNames()
     ]);
 
     // Rebuild the outlet-name blocklist from the registry so the AI curator
@@ -1794,86 +1726,25 @@ export async function ingestAndCurateGeneralNews(
     const insertedIds = await upsertGeneralNews(allItems);
     totalFetched = insertedIds.length;
 
-    // Scrape a large og:image for rows the feed left imageless (esp. Reddit).
-    // Isolated so a scrape failure never blocks clustering/curation.
-    try {
-      await resolveMissingImages(insertedIds);
-    } catch (err) {
-      console.warn("[generalNews] image resolution step failed:", err);
-    }
-
     // Deterministic clustering pass: embed each new row, fold cosine-similar
     // articles into existing primary cards as siblings (no LLM curation). Big
-    // cost win — only NEW stories reach the curator.
+    // cost win — only NEW stories reach the curator. Images are resolved
+    // post-curation per live card via persistNewsArticleImage (in
+    // persistCurationOutcome), and the auto image backfill in the finally block
+    // catches any remaining gaps — no pre-curation image scrape needed.
     const { embedded } = await embedAndCluster(insertedIds);
     totalEmbedded = embedded;
 
-    // Curate new rows (cluster-aware batching: pull wider pool, group siblings,
-    // then pack into batches preserving cluster boundaries).
-    const freshCorpus = await isFreshCorpusMode();
-    const uncurated = await db.query<RawGeneral>(
-      freshCorpus
-        ? `
-        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
-        FROM general_news
-        WHERE ai_curated_at IS NULL
-        ORDER BY published_at DESC
-        LIMIT $1
-      `
-        : `
-        SELECT id, external_id, title, url, contents, source_name, matched_tags, ai_retry_count
-        FROM general_news
-        WHERE ai_curated_at IS NULL
-          AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
-        ORDER BY published_at DESC
-        LIMIT $1
-      `,
-      [curationPoolSize()]
-    );
-
-    const filteredRows = await applyPreFilter(uncurated.rows);
-
-    if (filteredRows.length > 0) {
-      try {
-        const crewContext = await buildCrewContext();
-        // Pre-cluster every uncurated article with a cheap AI fingerprint
-        // pass. Ensures siblings about the same story land in the same batch
-        // even when the title-regex heuristic would scatter them.
-        const fingerprintMap = await assignStoryFingerprints(filteredRows);
-        const batches = groupAndPack(filteredRows, curationBatchSize(), fingerprintMap);
-        for (const batch of batches) {
-          // Re-fetch per batch so later batches see primaries persisted by
-          // earlier batches in this same pass (critical during re-curate of
-          // the whole corpus when all rows start uncurated).
-          const existingPrimaries = await fetchRecentPrimaries();
-          if (existingPrimaries.length > 0) {
-            console.log(
-              `[generalNews] batch start: ${existingPrimaries.length} recent primary card(s) supplied as merge candidates`
-            );
-          }
-          const outcomes = await curateBatchWithValidation(batch, crewContext, existingPrimaries);
-          for (const outcome of outcomes) {
-            const persisted = await persistCurationOutcome(outcome, crewEntityNames);
-            if (persisted.failed) batchFailed++;
-            if (
-              persisted.persisted &&
-              !persisted.failed &&
-              !outcome.result.duplicate &&
-              !persisted.merged
-            ) {
-              totalCurated++;
-            }
-          }
-        }
-      } catch (err) {
-        if (err instanceof AIDisabledError || err instanceof AINotConfiguredError) {
-          errorSummary = err.message;
-          console.warn("[generalNews] AI unavailable, skipping curation:", err.message);
-        } else {
-          errorSummary = err instanceof Error ? err.message : String(err);
-          console.error("[generalNews] Curation error:", err);
-        }
-      }
+    // Delegate curation to the single unified curation path. Runs inside the
+    // existing pipeline lock (skipLock:true avoids deadlock), with reportRun:false
+    // so the ingest run report (below) remains the single persistence point.
+    // The give-up guard, spend-cap check, pool query, applyPreFilter,
+    // groupAndPack, and batch loop all live there.
+    try {
+      totalCurated = await curateUncuratedGeneralNews({ reportRun: false }, { skipLock: true });
+    } catch (err) {
+      errorSummary = err instanceof Error ? err.message : String(err);
+      console.error("[generalNews] Curation error:", err);
     }
   } catch (err) {
     errorSummary = err instanceof Error ? err.message : String(err);
@@ -1913,7 +1784,6 @@ export async function ingestAndCurateGeneralNews(
       fetched: totalFetched,
       curated: totalCurated,
       embedded: totalEmbedded,
-      batchFailed,
       errorSummary,
       costUsdStart: costAtStart
     });
@@ -2011,7 +1881,25 @@ export async function curateUncuratedGeneralNews(
       "[generalNews] skipping validation-failure re-queue — last batch had empty AI response (fix provider first)"
     );
   } else {
-    // Re-queue recent validation failures so a fix deploy can re-curate them.
+    // Give-up guard (3b): permanently park rows that have already been
+    // attempted MAX_TOTAL_CURATION_ATTEMPTS times. They will never re-enter
+    // the curator. Rows below the cap are reset so a fix deploy can retry them.
+    await db.query(
+      `
+        UPDATE general_news
+           SET ai_curated_at = NOW(),
+               ai_relevance_score = 0,
+               ai_summary = NULL,
+               ai_validation_failed = FALSE,
+               ai_last_validation_errors = NULL,
+               pre_filter_reason = 'curation_giveup'
+         WHERE ai_validation_failed = TRUE
+           AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
+           AND COALESCE(ai_retry_count, 0) >= $1
+      `,
+      [MAX_TOTAL_CURATION_ATTEMPTS]
+    );
+    // Re-queue recent validation failures that are still under the give-up cap.
     await db.query(
       `
         UPDATE general_news
@@ -2020,7 +1908,9 @@ export async function curateUncuratedGeneralNews(
                ai_last_validation_errors = NULL
          WHERE ai_validation_failed = TRUE
            AND published_at > NOW() - INTERVAL '${CLUSTER_WINDOW}'
-      `
+           AND COALESCE(ai_retry_count, 0) < $1
+      `,
+      [MAX_TOTAL_CURATION_ATTEMPTS]
     );
   }
 
@@ -2066,6 +1956,14 @@ export async function curateUncuratedGeneralNews(
   if (uncurated.rows.length === 0) return 0;
 
   const runCurate = async (): Promise<number> => {
+  // Soft monthly spend cap (3c): skip curation gracefully when budget is
+  // reached. Ingest/embed/absorb still run; only the LLM curator is paused.
+  if (await isCurationBudgetExceeded()) {
+    const rawBudget = getAISetting("ai_monthly_budget_usd") ?? String(AI_MONTHLY_BUDGET_DEFAULT_USD);
+    console.warn(`[generalNews] monthly AI budget $${rawBudget} reached — pausing curation`);
+    return 0;
+  }
+
   const costAtStart = getAiCostTotalUsd();
   let batchFailed = 0;
 
@@ -2073,16 +1971,22 @@ export async function curateUncuratedGeneralNews(
     const [crewContext, crewEntityNames] = await Promise.all([buildCrewContext(), getCrewEntityNames()]);
     const filteredRows = await applyPreFilter(uncurated.rows);
     if (filteredRows.length === 0) return 0;
-    const fingerprintMap = await assignStoryFingerprints(filteredRows);
-    const batches = groupAndPack(filteredRows, curationBatchSize(), fingerprintMap);
+    // groupAndPack falls back to extractClusterKey when no fingerprintMap is
+    // supplied. The curator prompt assigns storyFingerprint per-article and
+    // embeddings handle cross-pass dedup — the Nova pre-cluster pass is removed.
+    const batches = groupAndPack(filteredRows, curationBatchSize());
+    // Fetch recent primaries once before the loop: the merge-candidate set is
+    // stable for the duration of this pass (new primaries from earlier batches
+    // in the same pass are still covered because persistCurationOutcome sets
+    // ai_curated_at=NOW() and fetchRecentPrimaries reads from DB).
+    const existingPrimaries = await fetchRecentPrimaries();
+    if (existingPrimaries.length > 0) {
+      console.log(
+        `[generalNews] curation pass: ${existingPrimaries.length} recent primary card(s) as merge candidates`
+      );
+    }
     let count = 0;
     for (const batch of batches) {
-      const existingPrimaries = await fetchRecentPrimaries();
-      if (existingPrimaries.length > 0) {
-        console.log(
-          `[generalNews] manual batch start: ${existingPrimaries.length} recent primary card(s) supplied as merge candidates`
-        );
-      }
       const outcomes = await curateBatchWithValidation(batch, crewContext, existingPrimaries);
       for (const outcome of outcomes) {
         const result = await persistCurationOutcome(outcome, crewEntityNames);

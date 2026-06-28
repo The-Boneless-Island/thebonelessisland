@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { resolveGatewayConfig } from "../gateway.js";
 import { AICompleteOpts, AIMessage, AIProvider, AIResult } from "../provider.js";
 import { recordAiCost } from "../usageTally.js";
 
@@ -31,7 +32,23 @@ export class GeminiProvider implements AIProvider {
   private model: string;
 
   constructor(apiKey: string, model: string) {
-    this.client = new GoogleGenAI({ apiKey });
+    const gateway = resolveGatewayConfig("google-ai-studio");
+    // @google/genai routes through the gateway via httpOptions.baseUrl.
+    // The gateway slug is google-ai-studio; the SDK appends /v1/models/… itself.
+    // Headers (cf-aig-authorization) go in httpOptions.headers.
+    this.client = new GoogleGenAI({
+      apiKey,
+      ...(gateway
+        ? {
+            httpOptions: {
+              baseUrl: gateway.baseURL,
+              ...(Object.keys(gateway.headers).length > 0
+                ? { headers: gateway.headers }
+                : {})
+            }
+          }
+        : {})
+    });
     this.model = model;
   }
 

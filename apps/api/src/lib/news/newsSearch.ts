@@ -1,5 +1,5 @@
 import { db } from "../../db/client.js";
-import { embedText, EMBEDDING_DIM, isEmbeddingColumnAvailable } from "./embeddings.js";
+import { embedText, EMBEDDING_DIM, getEmbeddingCast, isEmbeddingColumnAvailable } from "./embeddings.js";
 
 export type NewsSearchHit = {
   id: number;
@@ -117,6 +117,7 @@ export async function searchGeneralNews(query: string, limit = 20): Promise<News
     const vec = await embedText(q);
     if (vec) {
       const v = `[${vec.join(",")}]`;
+      const cast = await getEmbeddingCast(1);
       const sem = await db.query<{
         id: number;
         title: string;
@@ -132,14 +133,14 @@ export async function searchGeneralNews(query: string, limit = 20): Promise<News
         `
           SELECT gn.id, gn.title, gn.ai_title, gn.ai_summary, gn.ai_subtitle,
                  gn.published_at, gn.url, gn.image_url, gn.ai_relevance_score,
-                 1 - (gn.embedding <=> $1::vector) AS similarity
+                 1 - (gn.embedding <=> ${cast}) AS similarity
             FROM general_news gn
            WHERE gn.embedding IS NOT NULL
              AND gn.retention_tier IN ('hot', 'warm')
              AND COALESCE(gn.ai_relevance_score, 0) > 0
              AND gn.ai_validation_failed = FALSE
              AND vector_dims(gn.embedding) = $3
-           ORDER BY gn.embedding <=> $1::vector
+           ORDER BY gn.embedding <=> ${cast}
            LIMIT $2
         `,
         [v, capped, EMBEDDING_DIM]
@@ -184,6 +185,7 @@ export async function findSimilarArticles(
   if (!embedding) return [];
 
   const capped = Math.min(12, Math.max(1, limit));
+  const cast = await getEmbeddingCast(1);
   const r = await db.query<{
     id: number;
     title: string;
@@ -199,7 +201,7 @@ export async function findSimilarArticles(
     `
       SELECT gn.id, gn.title, gn.ai_title, gn.ai_summary, gn.ai_subtitle,
              gn.published_at, gn.url, gn.image_url, gn.ai_relevance_score,
-             1 - (gn.embedding <=> $1::vector) AS similarity
+             1 - (gn.embedding <=> ${cast}) AS similarity
         FROM general_news gn
        WHERE gn.embedding IS NOT NULL
          AND gn.id <> $2
@@ -207,7 +209,7 @@ export async function findSimilarArticles(
          AND COALESCE(gn.ai_relevance_score, 0) > 0
          AND gn.ai_validation_failed = FALSE
          AND vector_dims(gn.embedding) = $4
-       ORDER BY gn.embedding <=> $1::vector
+       ORDER BY gn.embedding <=> ${cast}
        LIMIT $3
     `,
     [embedding, newsId, capped, EMBEDDING_DIM]
