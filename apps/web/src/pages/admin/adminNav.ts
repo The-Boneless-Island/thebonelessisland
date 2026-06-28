@@ -286,6 +286,7 @@ const SETTING_PAGE_OVERRIDES: Record<string, { page: AdminPageId; anchor: string
   anthropic_api_key: { page: "ai", anchor: "ai-keys" },
   openai_api_key: { page: "ai", anchor: "ai-keys" },
   gemini_api_key: { page: "ai", anchor: "ai-keys" },
+  ai_gateway_token: { page: "ai", anchor: "ai-keys" },
   news_general_enabled: { page: "news", anchor: "news-status" },
   newsapi_key: { page: "news", anchor: "news-keys" },
   news_curation_alert_webhook_url: { page: "news", anchor: "news-keys" },

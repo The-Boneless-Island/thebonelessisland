@@ -209,6 +209,110 @@ const RAW: SettingMeta[] = [
     type: "string"
   },
 
+  // ── System · Cloudflare AI Gateway ──────────────────────────────────────
+  {
+    key: "ai_gateway_enabled",
+    label: "Cloudflare AI Gateway",
+    description: "When on, all AI calls route through a Cloudflare AI Gateway — giving you a unified cost dashboard, request caching, and an edge spend limit. Your own provider keys are used as-is; there is no token markup. Off = direct calls to the provider.",
+    whenToChange: "Turn on once you have a gateway configured (account ID + gateway ID set below). Toggle off to bypass the gateway temporarily without touching any keys.",
+    tags: ["ai", "cloudflare", "gateway", "cost", "cache", "toggle"],
+    dangerLevel: "medium",
+    domain: "system",
+    type: "boolean"
+  },
+  {
+    key: "ai_gateway_token",
+    label: "Cloudflare AI Gateway token",
+    description: "The cf-aig-authorization bearer token for an Authenticated Gateway. Stored encrypted; never shown after saving. Required only when your gateway has authentication enabled.",
+    whenToChange: "When first enabling gateway authentication, or when rotating a compromised token.",
+    ifWrong: "Authenticated gateway calls will be rejected with 401. Disable auth on the gateway or provide a valid token.",
+    tags: ["ai", "cloudflare", "gateway", "token", "secret", "credential", "bearer"],
+    dangerLevel: "high",
+    domain: "system",
+    type: "password",
+    confirmPhrase: "rotate-key"
+  },
+  {
+    key: "ai_gateway_account_id",
+    label: "Cloudflare account ID",
+    description: "Cloudflare account ID used to build the AI Gateway base URL. Find it on the Cloudflare dashboard overview page. Pre-filled on first deploy; rarely needs changing.",
+    whenToChange: "Only if you migrate the gateway to a different Cloudflare account.",
+    example: "3764b4b090876b4293200d6b5d5e3e8c",
+    tags: ["ai", "cloudflare", "gateway", "account", "id"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+  {
+    key: "ai_gateway_id",
+    label: "AI Gateway name / ID",
+    description: "The AI Gateway name as shown in the Cloudflare dashboard. Used alongside the account ID to construct the gateway base URL.",
+    whenToChange: "If you rename the gateway in Cloudflare or point to a different gateway slug.",
+    example: "boneless-news",
+    tags: ["ai", "cloudflare", "gateway", "id", "slug", "name"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+
+  // ── System · Provider-agnostic model overrides ───────────────────────────
+  {
+    key: "ai_embedding_model",
+    label: "Embedding model",
+    description: "Model used for article embeddings (semantic dedup and Reddit enrichment). Blank defaults to text-embedding-3-large via OpenAI (3072 dims). The active model MUST emit 3072 dimensions — text-embedding-3-large and gemini-embedding-001 qualify; Titan v2 (1024 dims) does not. Changing this invalidates stored vectors and requires a full re-embed run.",
+    whenToChange: "Only when switching embedding providers intentionally. Mismatched dims will corrupt similarity search until all vectors are re-embedded.",
+    example: "text-embedding-3-large",
+    ifWrong: "Stored vectors become incompatible with new embeddings. Semantic dedup and enrichment degrade or fail until a full re-embed completes.",
+    tags: ["ai", "embedding", "model", "semantic", "dedup", "reddit", "vector", "dims"],
+    dangerLevel: "medium",
+    domain: "system",
+    type: "string"
+  },
+  {
+    key: "ai_monthly_budget_usd",
+    label: "Monthly AI budget (USD)",
+    description: "Soft cap on estimated AI spend per calendar month. When month-to-date spend hits this amount, news curation pauses gracefully — the feed still serves existing cards. Fail-open: a budget tracking error will not block calls. The Cloudflare gateway Spend Limit is the harder backstop if you need a hard ceiling.",
+    whenToChange: "Raise after a corpus expansion or if curation stalls early in the month. Lower to tighten cost discipline. Default 10.",
+    example: "10",
+    tags: ["ai", "budget", "cost", "monthly", "cap", "spend", "limit"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "number"
+  },
+  {
+    key: "ai_model_curation",
+    label: "Curation model override",
+    description: "Provider-agnostic model for news curation (long JSON summaries). Blank uses the active provider's default — for Gemini that is gemini-2.5-flash. For provider-specific tuning, prefer the Bedrock curation model slot when Bedrock is active.",
+    whenToChange: "When tuning curation quality or cost across providers without editing the per-provider slot.",
+    example: "gemini-2.5-flash",
+    tags: ["ai", "curation", "model", "news", "provider", "override"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+  {
+    key: "ai_model_chat",
+    label: "Chat model override",
+    description: "Provider-agnostic model for Nuggie AI chat. Blank uses the active provider's default — for Gemini that is gemini-2.5-flash-lite.",
+    whenToChange: "When you want the chat model to differ from whatever the provider default is.",
+    example: "gemini-2.5-flash-lite",
+    tags: ["ai", "chat", "nuggie", "model", "provider", "override"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+  {
+    key: "ai_model_light",
+    label: "Light tasks model override",
+    description: "Provider-agnostic model for light workloads: validation repair, taglines, and blurbs. Blank uses the active provider's default — for Gemini that is gemini-2.5-flash-lite.",
+    whenToChange: "When you want light repair passes on a different model than the provider default.",
+    example: "gemini-2.5-flash-lite",
+    tags: ["ai", "model", "repair", "tagline", "blurb", "light", "provider", "override"],
+    dangerLevel: "low",
+    domain: "system",
+    type: "string"
+  },
+
   // ── Content · News pipeline ──────────────────────────────────────────────
   {
     key: "news_general_enabled",

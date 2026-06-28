@@ -248,6 +248,15 @@ export function AiAdminPage({ settings, onUpdate, onTest }: AiPageProps) {
                 isSet={getSetting("gemini_api_key") === "••••••••"}
                 onSave={(v) => saveKey("gemini_api_key", v)}
               />
+              <ProviderKeyRow
+                settingKey="ai_gateway_token"
+                label="Cloudflare AI Gateway token"
+                placeholder="cf-aig-..."
+                saved={keySaved["ai_gateway_token"]}
+                isSet={getSetting("ai_gateway_token") === "••••••••"}
+                onSave={(v) => saveKey("ai_gateway_token", v)}
+                hint="Required only when your Cloudflare AI Gateway has authentication enabled (cf-aig-authorization header)."
+              />
 
               {/* Legacy single-key slot — kept visible so existing installs can see
                   it and migrate. Hidden once cleared. */}
