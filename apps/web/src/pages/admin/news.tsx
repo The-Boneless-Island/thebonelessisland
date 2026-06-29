@@ -460,6 +460,8 @@ export function NewsAdminPage(props: NewsPageProps) {
               <NewsAutopilotPanel />
               <SectionLabel title="AI Validation Failures" />
               <ValidationFailuresStats />
+              <SectionLabel title="Fallback art" />
+              <FallbackArtCardsPanel />
             </>
           )
         }
@@ -997,7 +999,7 @@ function ManualTriggersCard({
             variant="secondary"
             onClick={async () => {
               setCurateState("running");
-              setCurateHint("Scoring and writing summaries for uncurated rows. May take a few minutes on Bedrock.");
+              setCurateHint("Scoring and writing summaries for uncurated rows. May take a few minutes on large backlogs.");
               setCurateMsg("Running AI curation pass…");
               const result = await onCurate();
               if (result.ok) {
@@ -1153,7 +1155,7 @@ function ManualTriggersCard({
       <div style={{ borderTop: `1px solid ${islandTheme.color.cardBorder}`, paddingTop: 12 }}>
         <div style={{ marginBottom: 8, fontSize: 13, fontWeight: 600 }}>Embedding Backfill</div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-          Generate Titan/OpenAI vectors for every article missing one. One click runs until done (or you cancel) — runs on the server so it won&apos;t time out. Safe to leave the tab.
+          Generate OpenAI text-embedding-3-large vectors for every article missing one. One click runs until done (or you cancel) — runs on the server so it won&apos;t time out. Safe to leave the tab.
         </div>
         <EmbedBackfillButton
           onEmbedBackfill={onEmbedBackfill}
@@ -1279,7 +1281,7 @@ function EmbedBackfillButton({
   function applySnap(snap: EmbedBackfillProgressSnap) {
     if (snap.state === "running") {
       setState("running");
-      setHint("Runs on the server — safe to leave this tab. Titan embed calls take a while on large backlogs.");
+      setHint("Runs on the server — safe to leave this tab. OpenAI embed calls take a while on large backlogs.");
       setMsg(embedProgressMsg(snap));
       if (snap.total > 0) {
         setProgress({ value: snap.total - snap.remaining, max: snap.total });
@@ -1384,6 +1386,9 @@ type NewsPipelineHealth = {
   liveCards: number;
   validationFailures: number;
   uncuratedBacklog: number;
+  liveCardsMissingImages: number;
+  /** Cards whose cover resolved to island fallback art — informational, not an error. */
+  liveCardsOnFallbackArt: number;
   lastRun: {
     at: string;
     kind: string;
@@ -1485,11 +1490,14 @@ function NewsPipelineHealthPanel() {
         failures · {health.uncuratedBacklog.toLocaleString()} uncurated backlog ·{" "}
         embeddings via {health.embeddingBackend}
         {health.embeddingsMissing > 0 ? ` (${health.embeddingsMissing.toLocaleString()} missing)` : ""}
+        {(health.liveCardsOnFallbackArt ?? 0) > 0
+          ? ` · ${(health.liveCardsOnFallbackArt ?? 0).toLocaleString()} on island fallback art`
+          : ""}
       </div>
       <div style={{ fontSize: 11, color: islandTheme.color.textMuted, lineHeight: 1.4 }}>
         Last run{lastRun ? ` (${new Date(lastRun.at).toLocaleString()})` : ""}: {lastRun?.kind ?? ""}{lastRun ? " · " : ""}{lastRunLine}
       </div>
-      {(health.embeddingsMissing > 0 || health.validationFailures > 0 || health.uncuratedBacklog > 0) && (
+      {(health.embeddingsMissing > 0 || health.validationFailures > 0 || health.uncuratedBacklog > 0 || (health.liveCardsMissingImages ?? 0) > 0 || (health.liveCardsOnFallbackArt ?? 0) > 0) && (
         <div
           style={{
             fontSize: 11,
@@ -1501,9 +1509,9 @@ function NewsPipelineHealthPanel() {
         >
           {health.embeddingsMissing > 0 && (
             <div>
-              Missing embeddings ({health.embeddingsMissing.toLocaleString()}) — expected after switching to
-              Bedrock Titan (vectors were reset). Run <strong>Embed Missing Articles</strong> on the Triggers tab
-              until this reaches zero.
+              Missing embeddings ({health.embeddingsMissing.toLocaleString()}) — run{" "}
+              <strong>Embed All Missing</strong> on the Triggers tab until this reaches zero.
+              Backend: {health.embeddingBackend}.
             </div>
           )}
           {health.validationFailures > 0 && (
@@ -1519,13 +1527,26 @@ function NewsPipelineHealthPanel() {
               or Scrub the archive.
             </div>
           )}
+          {(health.liveCardsMissingImages ?? 0) > 0 && (
+            <div style={{ marginTop: 6, color: islandTheme.color.warnAccent }}>
+              {(health.liveCardsMissingImages ?? 0).toLocaleString()} live cards have no cover at all (null URL or
+              never resolved) — run <strong>Cover Image Backfill</strong> on the Triggers tab.
+            </div>
+          )}
+          {(health.liveCardsOnFallbackArt ?? 0) > 0 && (
+            <div style={{ marginTop: (health.liveCardsMissingImages ?? 0) > 0 ? 4 : 6, color: islandTheme.color.textMuted }}>
+              {(health.liveCardsOnFallbackArt ?? 0).toLocaleString()} cards on island fallback art — no real cover
+              could be found (long-tail industry / no-game posts). This is expected, not a pipeline error.
+              See the <strong>Fallback art</strong> list below.
+            </div>
+          )}
         </div>
       )}
       <NewsPipelineDiagnosticsPanel />
       {health.lastBatch && health.lastBatch.parsedCount === 0 && health.lastBatch.batchSize > 0 && (
         <div style={{ fontSize: 11, color: islandTheme.color.dangerText, lineHeight: 1.4 }}>
-          Last batch: Bedrock returned empty curation JSON (parsed 0). Fallback cards will apply on the next pass
-          after deploy — also verify Admin → Nuggie AI model/region, or use Debug AI below.
+          Last batch: AI returned empty curation JSON (parsed 0). Fallback cards will apply on the next pass
+          after deploy — verify the active AI provider/model in Admin → Settings, or use Debug AI below.
         </div>
       )}
       {health.lastBatch && (health.lastBatch.matchCounts.lock_busy ?? 0) > 0 && (
@@ -1661,7 +1682,7 @@ function NewsDebugCuratePanel() {
       } else if (!d?.rawAiResult) {
         setOutput(
           d?.article
-            ? `Empty AI response for "${d.article.title}" (${d.article.source_name}). Check Bedrock model + region.`
+            ? `Empty AI response for "${d.article.title}" (${d.article.source_name}). Check the active AI provider/model in Admin → Settings.`
             : "No articles in corpus to test."
         );
       } else {
@@ -1678,7 +1699,7 @@ function NewsDebugCuratePanel() {
     <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${islandTheme.color.border}` }}>
       <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Debug AI (newest article, no DB write)</div>
       <IslandButton variant="secondary" className="island-btn--sm" disabled={state === "running"} onClick={() => void runDebug()}>
-        {state === "running" ? "Calling Bedrock…" : "Test curation on newest article"}
+        {state === "running" ? "Calling AI…" : "Test curation on newest article"}
       </IslandButton>
       {output && (
         <pre
@@ -1960,6 +1981,134 @@ function ValidationFailuresStats() {
           ))}
         </div>
       ) : null}
+    </IslandCard>
+  );
+}
+
+// ── Fallback art diagnostic panel ────────────────────────────────────────────
+
+type FallbackArtCardRow = {
+  id: number;
+  title: string;
+  url: string;
+  source_name: string;
+  ai_game_title: string | null;
+  image_source: string;
+  published_at: string;
+};
+
+function FallbackArtCardsPanel() {
+  const [cards, setCards] = useState<FallbackArtCardRow[] | null>(null);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    apiFetch("/news/general/fallback-art-cards")
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const payload = (await res.json()) as { cards?: FallbackArtCardRow[] };
+        if (!cancelled) setCards(payload.cards ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  return (
+    <IslandCard style={{ padding: 16, marginBottom: 12 }}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          all: "unset",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          width: "100%"
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600 }}>
+          Cards on island fallback art
+        </span>
+        <span style={{ fontSize: 11, color: islandTheme.color.textMuted, marginLeft: "auto" }}>
+          {open ? "hide" : "show"}
+        </span>
+      </button>
+      {!open && (
+        <p style={{ margin: "6px 0 0", fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+          Live cards where the image ladder found no real cover and fell back to island art.
+          These are correct — not broken. Mostly industry/no-game posts with no OG image or game link.
+        </p>
+      )}
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <p style={{ margin: "0 0 10px", fontSize: 12, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+            These cards resolved all the way through the cover ladder (feed → OG → body → sibling → game art → entity
+            logo) without finding a real image. Island fallback art was set correctly. This is not a pipeline error —
+            it is expected for industry news and posts with no linked game.
+          </p>
+          {error ? (
+            <span style={{ fontSize: 12, color: islandTheme.color.dangerText }}>{error}</span>
+          ) : cards === null ? (
+            <span style={{ fontSize: 12, color: islandTheme.color.textMuted }}>Loading…</span>
+          ) : cards.length === 0 ? (
+            <span style={{ fontSize: 12, color: islandTheme.color.successAccent }}>
+              No cards on fallback art right now.
+            </span>
+          ) : (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ fontSize: 11, color: islandTheme.color.textMuted, marginBottom: 2 }}>
+                {cards.length} card{cards.length === 1 ? "" : "s"} (newest first):
+              </div>
+              {cards.map((card) => (
+                <div
+                  key={card.id}
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "baseline",
+                    flexWrap: "wrap",
+                    fontSize: 12,
+                    color: islandTheme.color.textSubtle,
+                    lineHeight: 1.45
+                  }}
+                >
+                  <a
+                    href={card.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: islandTheme.color.primaryGlow, fontWeight: 500, flexShrink: 0 }}
+                  >
+                    ↗
+                  </a>
+                  <span style={{ color: islandTheme.color.textPrimary }}>{card.title}</span>
+                  <span style={{ color: islandTheme.color.textMuted }}>
+                    {card.source_name}
+                    {card.ai_game_title ? ` · ${card.ai_game_title}` : " · no game"}
+                    {" · "}
+                    <span
+                      style={{
+                        color:
+                          card.image_source === "none"
+                            ? islandTheme.color.warnAccent
+                            : islandTheme.color.textMuted
+                      }}
+                    >
+                      {card.image_source}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </IslandCard>
   );
 }

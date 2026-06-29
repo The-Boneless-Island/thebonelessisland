@@ -4,7 +4,7 @@ import { Sentry } from "../sentry.js";
 import { log } from "../structuredLog.js";
 import { getAISetting } from "../serverSettings.js";
 import { countMissingEmbeddings, resolveEmbeddingBackend } from "./embeddings.js";
-import { countLiveCardsMissingImages } from "./newsImageResolver.js";
+import { countLiveCardsMissingImages, countLiveCardsOnFallbackArt } from "./newsImageResolver.js";
 import { isNewsCurationAlertConfigured, sendNewsCurationAlert } from "./newsCurationAlert.js";
 
 export type BatchDiagnostics = {
@@ -39,6 +39,8 @@ export type NewsPipelineHealth = {
   validationFailures: number;
   uncuratedBacklog: number;
   liveCardsMissingImages: number;
+  /** Cards that resolved all the way to island fallback art — fine, just informational. */
+  liveCardsOnFallbackArt: number;
   queuePending: number;
   queueRunning: number;
   queueOldestPendingAt: string | null;
@@ -121,10 +123,11 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     ? await getPipelineQueueCounts()
     : { pending: 0, running: 0, oldestPendingAt: null as string | null };
 
-  const [counts, embeddingsMissing, liveCardsMissingImages, lastRunRow] = await Promise.all([
+  const [counts, embeddingsMissing, liveCardsMissingImages, liveCardsOnFallbackArt, lastRunRow] = await Promise.all([
     snapshotPipelineCounts(),
     countMissingEmbeddings(),
     countLiveCardsMissingImages(),
+    countLiveCardsOnFallbackArt(),
     db.query<{
       started_at: string;
       run_kind: string;
@@ -190,8 +193,10 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     status = "degraded";
     reason = `${embeddingsMissing.toLocaleString()} live cards missing embeddings — run Embed All Missing`;
   } else if (liveCardsMissingImages > 5) {
+    // Truly missing — null URL or never resolved. Normally 0 since the ladder always
+    // sets at least the island default. liveCardsOnFallbackArt never triggers degraded.
     status = "degraded";
-    reason = `${liveCardsMissingImages.toLocaleString()} live cards missing cover images — run Cover Image Backfill`;
+    reason = `${liveCardsMissingImages.toLocaleString()} live cards have no cover at all — run Cover Image Backfill`;
   } else {
     // Healthy — a quiet run (0 new due to dedup/Reddit-park) is NOT degraded
     const n = counts.liveCards;
@@ -207,6 +212,7 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     validationFailures: counts.validationFailures,
     uncuratedBacklog: counts.uncuratedBacklog,
     liveCardsMissingImages,
+    liveCardsOnFallbackArt,
     queuePending: queueCounts.pending,
     queueRunning: queueCounts.running,
     queueOldestPendingAt: queueCounts.oldestPendingAt,
