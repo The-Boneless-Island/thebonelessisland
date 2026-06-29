@@ -210,6 +210,7 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   const [searchInput, setSearchInput] = useState("");
   const [searchResults, setSearchResults] = useState<GeneralNewsItem[] | null>(null);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [mutedKeys, setMutedKeys] = useState<Set<string>>(new Set());
 
   function muteKey(kind: string, value: string) {
@@ -255,14 +256,19 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
     const q = searchInput.trim();
     if (q.length < 2) {
       setSearchResults(null);
+      setSearchError(null);
       return;
     }
     setSearchBusy(true);
+    setSearchError(null);
     try {
       const res = await apiFetch(`/news/general/search?q=${encodeURIComponent(q)}&limit=24`, {
         credentials: "include"
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        setSearchError(`Search hit a snag (HTTP ${res.status}). Try again in a moment.`);
+        return;
+      }
       const data = (await res.json()) as {
         results?: Array<{
           id: number;
@@ -301,6 +307,13 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
           downvotes: 0
         }))
       );
+      // Search spans the whole archive — drop any tab/genre filter that would
+      // otherwise hide the hits (search rows carry no aiLabel / aiTags).
+      setTab("all");
+      setActiveTags(new Set());
+      setShowAll(false);
+    } catch {
+      setSearchError("Couldn't reach search. Check your connection and try again.");
     } finally {
       setSearchBusy(false);
     }
@@ -309,6 +322,7 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   function clearSearch() {
     setSearchInput("");
     setSearchResults(null);
+    setSearchError(null);
   }
 
   const feedSource = searchResults ?? news;
@@ -482,6 +496,11 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
             </button>
           ) : null}
         </form>
+        {searchError ? (
+          <div role="alert" style={{ fontSize: 12, color: islandTheme.color.dangerAccent }}>
+            {searchError}
+          </div>
+        ) : null}
         {searchResults ? (
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
             {searchResults.length} result{searchResults.length === 1 ? "" : "s"} in the archive
