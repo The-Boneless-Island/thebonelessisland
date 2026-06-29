@@ -59,3 +59,16 @@ npm run db:migrate   # apply API migrations
   The primary checkout's local `main` is often stale — branch off `upstream/main`.
 - **Migrations** are sequential numbered SQL in `apps/api/src/db/migrations/`.
   Take the next free number; never reuse one. Applied-state is tracked in the DB.
+
+## CI security scanning (already in place)
+
+The `lint-build-scan` CI gate (`.github/workflows/ci.yml`) builds all three app
+images and runs a **Trivy** image scan on each. It **fails the PR** on any
+`HIGH`/`CRITICAL` CVE that has a fix available (`ignore-unfixed: true`, so
+unpatchable base-image noise doesn't block). So image vulnerability scanning is
+**done** — don't re-add it.
+
+Accepted-risk exceptions live in **`.trivyignore`** (repo root). Each entry must
+carry a reason *and* a revisit condition; only genuinely-unfixable findings get
+waived. Re-check it on every dependency-update sweep and remove entries once the
+upstream fix ships.
