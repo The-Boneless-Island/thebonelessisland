@@ -457,7 +457,7 @@ gameNightRouter.delete("/:id", requireParentRole, async (req, res) => {
     return;
   }
 
-  // game_night_attendees + game_night_votes cascade; activity_events set null.
+  // game_night_attendees cascade; activity_events set null.
   await db.query(`DELETE FROM game_nights WHERE id = $1`, [id]);
 
   void recordEvent({
