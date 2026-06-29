@@ -47,18 +47,25 @@ bonelessisland.com {
 	# API's /csp-reports endpoint instead of being blocked. Flip the header name
 	# to `Content-Security-Policy` (enforcing) once a week of prod reports comes
 	# back clean. Notes on the non-obvious sources:
-	#   script-src   stays strict ('self' + Cloudflare's Web Analytics beacon).
-	#                The SPA ships no inline scripts (the index.html font loader
-	#                no longer uses an inline onload handler). If Rocket Loader is
-	#                enabled in the CF dashboard it injects un-noncedable inline
-	#                scripts that violate this — keep Rocket Loader OFF.
+	#   script-src   'self' (our external bundle) + a per-request nonce +
+	#                Cloudflare's Web Analytics beacon. The SPA ships no inline
+	#                scripts of its own. The nonce is there so Cloudflare can
+	#                stamp it onto the inline scripts IT injects — JavaScript
+	#                Detections (Bot Fight Mode) can't be disabled on the free
+	#                plan, and CF parses this CSP response header and applies the
+	#                nonce to its injected scripts. {http.request.uuid} is a
+	#                per-request random UUID; browsers match nonces by literal
+	#                string compare so the hyphens are fine. Keep Rocket Loader
+	#                OFF (its inline scripts are injected too late to be nonced).
+	#                NOTE: still Report-Only — we're soaking to confirm CF nonces
+	#                the JSD scripts before flipping this to enforcing.
 	#   connect-src  adds cloudflareinsights.com so the beacon can POST metrics.
 	#   img-src      Discord + Steam art hosts + www.google.com (news-card source
 	#                favicons via Google's s2 favicon proxy).
 	#   media-src    'self' for the self-hosted scene + auth cinematic videos.
 	#   style-src    'unsafe-inline' is required for React inline styles.
 	header {
-		Content-Security-Policy-Report-Only "default-src 'none'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.discordapp.com https://steamcdn-a.akamaihd.net https://*.steamstatic.com https://store.steampowered.com https://media.steampowered.com https://api.bonelessisland.com https://www.google.com; media-src 'self'; connect-src 'self' https://api.bonelessisland.com https://cloudflareinsights.com; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; report-uri https://api.bonelessisland.com/csp-reports; report-to csp"
+		Content-Security-Policy-Report-Only "default-src 'none'; script-src 'self' 'nonce-{http.request.uuid}' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.discordapp.com https://steamcdn-a.akamaihd.net https://*.steamstatic.com https://store.steampowered.com https://media.steampowered.com https://api.bonelessisland.com https://www.google.com; media-src 'self'; connect-src 'self' https://api.bonelessisland.com https://cloudflareinsights.com; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; report-uri https://api.bonelessisland.com/csp-reports; report-to csp"
 		Reporting-Endpoints `csp="https://api.bonelessisland.com/csp-reports"`
 	}
 
