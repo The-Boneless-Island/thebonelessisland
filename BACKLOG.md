@@ -11,6 +11,12 @@ For the *why* behind shipped decisions see [`DESIGN_NOTES.md`].
 
 ---
 
+## Recently shipped
+
+- **News AI cost overhaul** *(shipped 2026-06-28, PRs #61-#64)* — moved news curation off Bedrock/Haiku to **Gemini 2.5 Flash** via **Cloudflare AI Gateway** (~$10/day → pennies/day); chat + light tasks use Gemini 2.5 Flash-Lite. Reddit is now enrichment-only (embed + attach to existing stories; no LLM call, no standalone card). Embeddings switched to **OpenAI `text-embedding-3-large` @3072** behind an `EmbeddingProvider` interface (migration 080: auto-detect `halfvec(3072)`+hnsw or `vector(3072)` seq-scan). Pipeline structurally unified: ingest delegates to a single `curateUncuratedGeneralNews` function; the old duplicate inline curation loop and Nova pre-cluster fingerprint pass removed. Validation give-up caps re-curation at 3 attempts then parks the row permanently. Spend controls: soft monthly app cap (`ai_monthly_budget_usd`, fail-open) + Cloudflare gateway $10/mo edge Spend Limit. Honest health observability: plain-English `reason`, last-run funnel, fallback-art count as informational-only (not "degraded"), new `GET /news/general/fallback-art-cards` endpoint.
+
+---
+
 ## Game nights
 
 - **Host self-serve edit / cancel a night** *(partial)* — PATCH/DELETE exist but are

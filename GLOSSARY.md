@@ -120,6 +120,9 @@ Themed building blocks. Prefer these over raw elements.
 | **Nuggie Persona** | DB-driven AI voice config (system prompt, tone rules, emoji palette). |
 | **`server_settings`** | Key-value admin settings table; "one control per fact" colocated on feature pages. |
 | **Parent role** | The Discord role (`PARENT_ROLE_NAME`) that gates admin/mod endpoints (`requireParentRole`). |
+| **AI Gateway** | Optional Cloudflare AI Gateway layer (`ai_gateway_enabled` setting). Routes all provider calls through `gateway.ai.cloudflare.com` instead of hitting OpenAI/Gemini/Anthropic directly. BYOK — provider API keys stay in the app; adds `cf-aig-authorization` header for gateway auth. Gives a unified cost dashboard, request logs, and an edge **Spend Limit** (hard monthly cap). No token markup. See `apps/api/src/lib/ai/gateway.ts`. |
+| **Enrichment-only (Reddit)** | Reddit posts are embedded and, if a cosine-similar curated story exists, absorbed as an additional source on that story's card. If no match is found, the row is parked and never curated. Reddit never triggers an LLM call and never spawns its own card. |
+| **Fallback art** | The branded island cover (`/art/trail/tbi_island_overhead_mstrail_1.webp`) used when a news card's image ladder finds no article image, no OG/Twitter image, no sibling cover, and no game/entity logo. `image_source = 'default'`. Cards on fallback art have valid cover art and are never "degraded" — `GET /news/general/fallback-art-cards` lists them for admin diagnostics. |
 
 ---
 

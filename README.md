@@ -53,7 +53,7 @@ First time in? A guided, server-tracked tour walks new islanders through the pla
 
 ## The Nuggie AI layer
 
-AI runs through the whole island and it's **provider-agnostic**: swap between Anthropic Claude, OpenAI, Google Gemini, or AWS Bedrock at runtime from the admin panel. No code, no redeploy.
+AI runs through the whole island and it's **provider-agnostic**: swap between Anthropic Claude, OpenAI, Google Gemini, or AWS Bedrock at runtime from the admin panel. No code, no redeploy. All AI calls can optionally route through a **Cloudflare AI Gateway** for unified cost visibility and an edge spend limit.
 
 - **Curated Gaming News:** pulls from real outlets (PC Gamer, RPS, Eurogamer, Kotaku, IGN) plus live Steam news, scores every story for relevance to *your* crew's actual libraries and playtime, dedupes the same event across sources, labels it (For You / Crew Trending / Top Gaming News), and gates spoilers. The curation is the feature.
 - **Session recommendations:** island-flavored one-liners on the top pick, aware of who owns it and who's played it this week.
