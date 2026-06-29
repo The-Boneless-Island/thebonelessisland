@@ -1,5 +1,25 @@
 # News AI Overhaul — Cost, Quality & Foundation Plan
 
+---
+
+## STATUS: SHIPPED 2026-06-28 (PRs #61-#64)
+
+All four phases 0-2 shipped and deployed. Phase 3 (tuning) intentionally deferred — better informed by real prod numbers on Gemini.
+
+### What shipped
+
+- **PR #61 — Embedding subsystem:** `EmbeddingProvider` interface; OpenAI `text-embedding-3-large` @3072 dims; migration 080 (auto-detect `halfvec(3072)`+hnsw or `vector(3072)` seq-scan); `EMBEDDING_DIM=3072`.
+- **PR #62 — Provider/gateway:** Cloudflare AI Gateway opt-in (`ai_gateway_enabled`, BYOK, `cf-aig-authorization` header); provider-agnostic task routing (`ai_model_curation/chat/light`); migration 081.
+- **PR #63 — Reddit enrichment-only + loop give-up + soft spend cap + honest health:** Reddit posts park if no matching curated story found (no LLM call, no standalone card); validation give-up at `MAX_TOTAL_CURATION_ATTEMPTS = 3`; soft monthly app cap (`ai_monthly_budget_usd`, fail-open); health status gains a plain-English `reason` + last-run funnel (fetched/embedded/new/duplicates); migration 082.
+- **PR #64 — Image fallback-art honesty + diagnostic:** cards on island fallback art (`image_source = 'default'`) are informational-only and never trigger "degraded" status; `countLiveCardsOnFallbackArt` exposed in health; new `GET /news/general/fallback-art-cards` endpoint for admin diagnostics.
+- **Structural:** one unified ingest → curate path (ingest delegates to `curateUncuratedGeneralNews` via `skipLock`); Nova pre-cluster pass (`assignStoryFingerprints`) removed; pre-filter stamped at upsert; images resolved only for surviving primary cards post-curation.
+
+### Post-deploy spend-cap nuance
+
+`ai_monthly_budget_usd` was set to **0** in production (app soft cap disabled). This was intentional: the setting double-counted June's pre-switch Bedrock spend, which would have immediately halted curation on first check. The **Cloudflare gateway $10/mo Spend Limit is the real monthly budget**, running clean from 2026-06-28. Re-enable the app soft cap once a clean month's Gemini spend is tracked in the ledger.
+
+---
+
 **Status:** Planning (Opus). Build phase next (Sonnet).
 **Owner:** matt
 **Created:** 2026-06-28
