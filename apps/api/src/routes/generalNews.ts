@@ -14,6 +14,7 @@ import {
   CORPUS_RESET_CONFIRM_PHRASE,
   resetGeneralNewsCorpus
 } from "../lib/news/newsCorpusReset.js";
+import { listLiveCardsOnFallbackArt } from "../lib/news/newsImageResolver.js";
 import { retireStaleUncuratedBacklog } from "../lib/news/newsBacklog.js";
 import { getNewsPipelineDiagnostics } from "../lib/news/newsPipelineDiagnostics.js";
 import { getAutopilotStatus, runNewsAutopilot } from "../lib/news/newsAutopilot.js";
@@ -708,6 +709,23 @@ generalNewsRouter.get("/general/validation-failures", requireSession, requirePar
       preFilterReason: r.pre_filter_reason
     }))
   });
+});
+
+/**
+ * GET /news/general/fallback-art-cards
+ * Admin — list live cards whose cover resolved to the island fallback art (image_source = 'default')
+ * or are otherwise unresolved. These are informational only — the ladder ran correctly; these are
+ * just long-tail posts where no real cover could be found. Not a pipeline error.
+ */
+generalNewsRouter.get("/general/fallback-art-cards", requireSession, requireParentRole, async (req, res) => {
+  try {
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "100"), 10) || 100));
+    const cards = await listLiveCardsOnFallbackArt(limit);
+    res.json({ ok: true, cards });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/fallback-art-cards error:", err);
+    res.status(500).json({ ok: false, error: "Failed to load fallback art cards" });
+  }
 });
 
 /**

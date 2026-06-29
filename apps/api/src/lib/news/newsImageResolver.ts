@@ -271,7 +271,12 @@ export async function countNewsImagesMissing(): Promise<number> {
   return parseInt(r.rows[0]?.c ?? "0", 10);
 }
 
-/** Live feed cards still on the generic island placeholder or unresolved. */
+/**
+ * Live feed cards with a genuinely missing cover — null URL or never resolved.
+ * Cards on island fallback art (image_source = 'default') are NOT counted here;
+ * those resolved correctly (fallback is the last rung of the ladder).
+ * This count should normally be ~0 since the ladder always sets at least a default.
+ */
 export async function countLiveCardsMissingImages(): Promise<number> {
   const r = await db.query<{ c: string }>(
     `
@@ -283,11 +288,79 @@ export async function countLiveCardsMissingImages(): Promise<number> {
          AND (
            image_url IS NULL
            OR image_resolved_at IS NULL
-           OR image_source = 'default'
          )
     `
   );
   return parseInt(r.rows[0]?.c ?? "0", 10);
+}
+
+/**
+ * Live feed cards that fell all the way through the image ladder to the branded
+ * island default art. These are fine — they have art — but the count is useful
+ * diagnostic information for the admin (long-tail industry/no-game posts).
+ */
+export async function countLiveCardsOnFallbackArt(): Promise<number> {
+  const r = await db.query<{ c: string }>(
+    `
+      SELECT COUNT(*)::text AS c
+        FROM general_news
+       WHERE ai_curated_at IS NOT NULL
+         AND ai_relevance_score > 0
+         AND ai_validation_failed = FALSE
+         AND image_source = 'default'
+    `
+  );
+  return parseInt(r.rows[0]?.c ?? "0", 10);
+}
+
+export type FallbackArtCard = {
+  id: number;
+  title: string;
+  url: string;
+  source_name: string;
+  ai_game_title: string | null;
+  image_source: string;
+  published_at: string;
+};
+
+/**
+ * Diagnostic listing: live cards on island fallback art (image_source = 'default')
+ * plus any that somehow have no image_source (labeled 'none').
+ * Ordered newest-first. Used by the admin fallback-art panel.
+ */
+export async function listLiveCardsOnFallbackArt(limit = 100): Promise<FallbackArtCard[]> {
+  const r = await db.query<{
+    id: number;
+    title: string;
+    ai_title: string | null;
+    url: string;
+    source_name: string;
+    ai_game_title: string | null;
+    image_source: string | null;
+    published_at: string;
+  }>(
+    `
+      SELECT id, title, ai_title, url, source_name, ai_game_title, image_source,
+             published_at::text
+        FROM general_news
+       WHERE ai_curated_at IS NOT NULL
+         AND ai_relevance_score > 0
+         AND ai_validation_failed = FALSE
+         AND (image_source = 'default' OR image_source IS NULL OR image_resolved_at IS NULL)
+       ORDER BY published_at DESC
+       LIMIT $1
+    `,
+    [limit]
+  );
+  return r.rows.map((row) => ({
+    id: row.id,
+    title: row.ai_title ?? row.title,
+    url: row.url,
+    source_name: row.source_name,
+    ai_game_title: row.ai_game_title,
+    image_source: row.image_source ?? "none",
+    published_at: row.published_at
+  }));
 }
 
 /**
