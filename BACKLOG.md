@@ -9,10 +9,27 @@ Legend: **unbuilt** = no implementation found · **partial** = some pieces exist
 out per item. File:line pointers were accurate on 2026-06-17; re-verify before editing.
 For the *why* behind shipped decisions see [`DESIGN_NOTES.md`].
 
+Three more plan docs retired 2026-06-28 once their work shipped and was verified
+against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
+`SITE_MODERNIZATION_PLAN.md` (see "Recently shipped" below).
+
 ---
 
 ## Recently shipped
 
+- **Forums v2** *(shipped, verified 2026-06-12)* — full community-forum overhaul:
+  post types (memory/rec/resource), image uploads (migration 058, served from the
+  local `/uploads` volume), full-text search (059), engagement/trending (060), and
+  forum polls (061). `forums.ts` grew to ~89KB. Security-probed (markdown XSS inert,
+  SSRF block matrix, EXIF strip, MIME-spoof reject). Remaining = live-smoke only
+  (two-account browser pass, Discord webhook test, EXPLAIN on prod data); optional
+  later refactor: split the large `Forums.tsx` per-view.
+- **Site modernization** *(shipped, verified 2026-06-12)* — real routing
+  (**react-router v8**, `RouterProvider` in `main.tsx`; replaced `useState` page
+  switching, fixes refresh/back-forward), **server-side Postgres sessions**
+  (migration 062, enables revocation; one-time forced re-login accepted), and a
+  **CSP** plus hardened headers in `server.ts`. Non-goals held: no SSR, no list
+  virtualization, no feature/visual changes.
 - **News AI cost overhaul** *(shipped 2026-06-28, PRs #61-#64)* — moved news curation off Bedrock/Haiku to **Gemini 2.5 Flash** via **Cloudflare AI Gateway** (~$10/day → pennies/day); chat + light tasks use Gemini 2.5 Flash-Lite. Reddit is now enrichment-only (embed + attach to existing stories; no LLM call, no standalone card). Embeddings switched to **OpenAI `text-embedding-3-large` @3072** behind an `EmbeddingProvider` interface (migration 080: auto-detect `halfvec(3072)`+hnsw or `vector(3072)` seq-scan). Pipeline structurally unified: ingest delegates to a single `curateUncuratedGeneralNews` function; the old duplicate inline curation loop and Nova pre-cluster fingerprint pass removed. Validation give-up caps re-curation at 3 attempts then parks the row permanently. Spend controls: soft monthly app cap (`ai_monthly_budget_usd`, fail-open) + Cloudflare gateway $10/mo edge Spend Limit. Honest health observability: plain-English `reason`, last-run funnel, fallback-art count as informational-only (not "degraded"), new `GET /news/general/fallback-art-cards` endpoint.
 
 ---

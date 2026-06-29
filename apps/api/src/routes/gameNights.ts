@@ -457,7 +457,7 @@ gameNightRouter.delete("/:id", requireParentRole, async (req, res) => {
     return;
   }
 
-  // game_night_attendees + game_night_votes cascade; activity_events set null.
+  // game_night_attendees cascade; activity_events set null.
   await db.query(`DELETE FROM game_nights WHERE id = $1`, [id]);
 
   void recordEvent({
@@ -721,20 +721,7 @@ gameNightRouter.post("/:id/recommendations", async (req, res) => {
   }
 
   if (memberIds.length === 0) {
-    const voters = await db.query<{ discord_user_id: string }>(
-      `
-        SELECT DISTINCT u.discord_user_id
-        FROM game_night_votes gnv
-        INNER JOIN users u ON u.id = gnv.user_id
-        WHERE gnv.game_night_id = $1
-      `,
-      [id]
-    );
-    memberIds = voters.rows.map((row) => row.discord_user_id);
-  }
-
-  if (memberIds.length === 0) {
-    res.status(400).json({ error: "No member IDs provided and no attendees/voters found for this game night" });
+    res.status(400).json({ error: "No member IDs provided and no attendees found for this game night" });
     return;
   }
 
@@ -756,7 +743,7 @@ gameNightRouter.post("/:id/recommendations", async (req, res) => {
   }));
 
   res.json({
-    source: body.memberIds?.length ? "request-member-ids" : "night-attendees-or-voters",
+    source: body.memberIds?.length ? "request-member-ids" : "night-attendees",
     memberIds,
     recommendations: enriched
   });

@@ -23,3 +23,9 @@ ds-bundle/
 # NOTE: apps/web/.ds-entry.tsx and apps/web/.ds-tokens.css are committed sync
 # inputs (the scoped bundle entry + materialized tokens). They are .ds-* dotfiles
 # the app never imports; re-sync needs them, so they are NOT ignored.
+.design-sync/handoff/
+
+# Raw media editing sources — only the encoded outputs in apps/web/public/auth/
+# (.webm/.mp4) and apps/web/public/art/trail/ (.webp) are committed + served.
+apps/web/media-source/
+apps/web/public/art/trail/*.png
