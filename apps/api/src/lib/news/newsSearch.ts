@@ -113,40 +113,49 @@ export async function searchGeneralNews(query: string, limit = 20): Promise<News
     similarity: number;
   }> = [];
 
-  if ((await isEmbeddingColumnAvailable()) && q.length >= 3) {
-    const vec = await embedText(q);
-    if (vec) {
-      const v = `[${vec.join(",")}]`;
-      const cast = await getEmbeddingCast(1);
-      const sem = await db.query<{
-        id: number;
-        title: string;
-        ai_title: string | null;
-        ai_summary: string | null;
-        ai_subtitle: string | null;
-        published_at: string;
-        url: string;
-        image_url: string | null;
-        ai_relevance_score: number | null;
-        similarity: number;
-      }>(
-        `
-          SELECT gn.id, gn.title, gn.ai_title, gn.ai_summary, gn.ai_subtitle,
-                 gn.published_at, gn.url, gn.image_url, gn.ai_relevance_score,
-                 1 - (gn.embedding <=> ${cast}) AS similarity
-            FROM general_news gn
-           WHERE gn.embedding IS NOT NULL
-             AND gn.retention_tier IN ('hot', 'warm')
-             AND COALESCE(gn.ai_relevance_score, 0) > 0
-             AND gn.ai_validation_failed = FALSE
-             AND vector_dims(gn.embedding) = $3
-           ORDER BY gn.embedding <=> ${cast}
-           LIMIT $2
-        `,
-        [v, capped, EMBEDDING_DIM]
-      );
-      semanticRows = sem.rows.filter((r) => r.similarity >= 0.72);
+  // Semantic search is a best-effort enhancement layered on top of keyword
+  // search. An embedding-provider error or a pgvector type/dimension mismatch
+  // must never take down the whole endpoint — degrade to keyword-only and log
+  // the real cause so it stays diagnosable from the box.
+  try {
+    if ((await isEmbeddingColumnAvailable()) && q.length >= 3) {
+      const vec = await embedText(q);
+      if (vec) {
+        const v = `[${vec.join(",")}]`;
+        const cast = await getEmbeddingCast(1);
+        const sem = await db.query<{
+          id: number;
+          title: string;
+          ai_title: string | null;
+          ai_summary: string | null;
+          ai_subtitle: string | null;
+          published_at: string;
+          url: string;
+          image_url: string | null;
+          ai_relevance_score: number | null;
+          similarity: number;
+        }>(
+          `
+            SELECT gn.id, gn.title, gn.ai_title, gn.ai_summary, gn.ai_subtitle,
+                   gn.published_at, gn.url, gn.image_url, gn.ai_relevance_score,
+                   1 - (gn.embedding <=> ${cast}) AS similarity
+              FROM general_news gn
+             WHERE gn.embedding IS NOT NULL
+               AND gn.retention_tier IN ('hot', 'warm')
+               AND COALESCE(gn.ai_relevance_score, 0) > 0
+               AND gn.ai_validation_failed = FALSE
+               AND vector_dims(gn.embedding) = $3
+             ORDER BY gn.embedding <=> ${cast}
+             LIMIT $2
+          `,
+          [v, capped, EMBEDDING_DIM]
+        );
+        semanticRows = sem.rows.filter((r) => r.similarity >= 0.72);
+      }
     }
+  } catch (err) {
+    console.warn("[newsSearch] semantic stage degraded to keyword-only:", err);
+    semanticRows = [];
   }
 
   const keywordRows = (await keywordPromise).rows;
