@@ -1,4 +1,4 @@
-import { getFeedFreshnessDays } from "./newsRetention.js";
+import { getFeedDecayHalfLifeDays, getFeedFreshnessDays } from "./newsRetention.js";
 
 type FeedQueryParts = {
   sql: string;
@@ -29,6 +29,9 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
 
   params.push(String(freshnessDays));
   const freshnessParam = `$${params.length}`;
+
+  params.push(getFeedDecayHalfLifeDays());
+  const halfLifeParam = `$${params.length}`;
 
   const sql = `
     WITH ranked AS (
@@ -115,9 +118,22 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
     WHERE r.rk = 1
       AND (
         r.published_at > NOW() - (${freshnessParam}::text || ' days')::interval
-        OR COALESCE(r.ai_relevance_score, 0) >= 0.85
+        OR (
+          COALESCE(r.ai_relevance_score, 0) >= 0.85
+          AND r.published_at > NOW() - ((${freshnessParam}::int * 2)::text || ' days')::interval
+        )
       )
-    ORDER BY (COALESCE(r.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes) * 0.2) DESC, r.published_at DESC
+    -- Recency-decayed rank: relevance+vote weight halves every
+    -- news_feed_decay_half_life_days days, so the hero (feed[0]) rotates to fresh
+    -- high-quality stories instead of pinning to one high-score card forever.
+    ORDER BY (
+      (COALESCE(r.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes) * 0.2)
+      * POWER(
+          0.5::double precision,
+          GREATEST(EXTRACT(EPOCH FROM (NOW() - r.published_at)), 0)::double precision
+            / (86400.0::double precision * ${halfLifeParam}::double precision)
+        )
+    ) DESC, r.published_at DESC
     LIMIT 50
   `;
 

@@ -11,6 +11,16 @@ export function getFeedFreshnessDays(): number {
   return intSetting("news_feed_freshness_days", 45);
 }
 
+/**
+ * Half-life (in days) for the feed's recency decay. The feed ORDER BY multiplies
+ * each card's relevance+vote score by 0.5^(ageDays / halfLife), so a story's
+ * ranking weight halves every `halfLife` days. Lower = the hero rotates to fresh
+ * stories faster; higher = relevance/votes dominate longer. Default 2 days.
+ */
+export function getFeedDecayHalfLifeDays(): number {
+  return intSetting("news_feed_decay_half_life_days", 2);
+}
+
 export function getHotRetentionDays(): number {
   return intSetting("news_retention_hot_days", 90);
 }

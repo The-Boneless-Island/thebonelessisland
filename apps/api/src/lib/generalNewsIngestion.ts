@@ -916,7 +916,7 @@ The user message contains a separate \`existingStories\` array. These are alread
   - \`mergesIntoExistingId\`: the \`existingId\` of the parent story
   - \`updatedTitle\`: refreshed headline reflecting BOTH the existing summary and the new info
   - \`updatedSubtitle\`: refreshed subheadline (10–20 words)
-  - \`updatedSummary\`: fresh 3–5 paragraph synthesis (~300–500 words, prose + bullets) that integrates ALL details from the existing summary AND every new fact, quote, date, or angle introduced by the new article. The synthesis should be richer than either input alone. Lead with the most recent / most-confirmed information.
+  - \`updatedSummary\`: fresh synthesis (as long as completeness needs — typically 400–900 words, up to the 1350-word hard cap; prose + bullets) that integrates ALL details from the existing summary AND every new fact, quote, date, or angle introduced by the new article. The synthesis should be richer than either input alone. Lead with the most recent / most-confirmed information.
   - \`updatedWhyMatters\`: refreshed Why This Matters paragraph (1–2 sentences) reflecting the combined picture
   - \`updatedSources\`: full source list = every URL from the existing story PLUS the new article's URL
   - \`updatedStoryFingerprint\`: the canonical fingerprint to lock the parent card to (typically the existing fingerprint when present, or your new canonical fingerprint when the existing card had \`null\`)
@@ -1037,7 +1037,7 @@ Return a JSON array — one object per input article, in the same order. Every f
   {
     "id": "<string — must match input id exactly>",
     "title": "<rewritten headline, plain direct language, no clickbait>",
-    "summary": "<3–5 paragraphs, ~300–500 words, prose + bullets, article-only facts; empty string for duplicates or mergers>",
+    "summary": "<complete summary per the Section 2 rules — include EVERY unique fact, figure, quote, date, and source angle; typically 400–900 words, up to the 1350-word hard cap; prose + bullets, article-only facts; empty string for duplicates or mergers>",
     "whyMatters": "<1–2 sentences, concrete crew connection, never generic; empty string for duplicates or mergers>",
     "sources": ["<url1 from batch>", "<url2 from batch>"],
     "subtitle": "<one sharp subheadline sentence, 10–20 words; always include>",
