@@ -1,0 +1,6 @@
+# Shell scripts under scripts/ops/ run on the prod box (Amazon Linux 2023)
+# via cron and direct invocation. A CRLF line ending breaks the `#!/usr/bin/env
+# bash` shebang (`bad interpreter: ...bash^M`) and can corrupt heredocs. Force
+# LF regardless of a contributor's local `core.autocrlf` setting so a Windows
+# checkout can't silently reintroduce CRLF into these files.
+scripts/ops/*.sh text eol=lf
