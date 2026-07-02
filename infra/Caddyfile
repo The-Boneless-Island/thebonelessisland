@@ -60,12 +60,16 @@ bonelessisland.com {
 	#                NOTE: still Report-Only — we're soaking to confirm CF nonces
 	#                the JSD scripts before flipping this to enforcing.
 	#   connect-src  adds cloudflareinsights.com so the beacon can POST metrics.
-	#   img-src      Discord + Steam art hosts + www.google.com (news-card source
-	#                favicons via Google's s2 favicon proxy).
+	#   img-src      'https:' allows any HTTPS image. News cards hotlink cover art
+	#                and source favicons from arbitrary outlet CDNs that can't be
+	#                enumerated (plus Discord/Steam art + Google's s2 favicon
+	#                proxy). Images can't execute, so a scheme-level https relax is
+	#                acceptable here; every other directive stays strict. data:/blob:
+	#                cover inline + generated (canvas) images.
 	#   media-src    'self' for the self-hosted scene + auth cinematic videos.
 	#   style-src    'unsafe-inline' is required for React inline styles.
 	header {
-		Content-Security-Policy-Report-Only "default-src 'none'; script-src 'self' 'nonce-{http.request.uuid}' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cdn.discordapp.com https://steamcdn-a.akamaihd.net https://*.steamstatic.com https://store.steampowered.com https://media.steampowered.com https://api.bonelessisland.com https://www.google.com; media-src 'self'; connect-src 'self' https://api.bonelessisland.com https://cloudflareinsights.com; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; report-uri https://api.bonelessisland.com/csp-reports; report-to csp"
+		Content-Security-Policy-Report-Only "default-src 'none'; script-src 'self' 'nonce-{http.request.uuid}' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self'; connect-src 'self' https://api.bonelessisland.com https://cloudflareinsights.com; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; report-uri https://api.bonelessisland.com/csp-reports; report-to csp"
 		Reporting-Endpoints `csp="https://api.bonelessisland.com/csp-reports"`
 	}
 
