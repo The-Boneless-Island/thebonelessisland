@@ -31,6 +31,17 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
   **CSP** plus hardened headers in `server.ts`. Non-goals held: no SSR, no list
   virtualization, no feature/visual changes.
 - **News AI cost overhaul** *(shipped 2026-06-28, PRs #61-#64)* — moved news curation off Bedrock/Haiku to **Gemini 2.5 Flash** via **Cloudflare AI Gateway** (~$10/day → pennies/day); chat + light tasks use Gemini 2.5 Flash-Lite. Reddit is now enrichment-only (embed + attach to existing stories; no LLM call, no standalone card). Embeddings switched to **OpenAI `text-embedding-3-large` @3072** behind an `EmbeddingProvider` interface (migration 080: auto-detect `halfvec(3072)`+hnsw or `vector(3072)` seq-scan). Pipeline structurally unified: ingest delegates to a single `curateUncuratedGeneralNews` function; the old duplicate inline curation loop and Nova pre-cluster fingerprint pass removed. Validation give-up caps re-curation at 3 attempts then parks the row permanently. Spend controls: soft monthly app cap (`ai_monthly_budget_usd`, fail-open) + Cloudflare gateway $10/mo edge Spend Limit. Honest health observability: plain-English `reason`, last-run funnel, fallback-art count as informational-only (not "degraded"), new `GET /news/general/fallback-art-cards` endpoint.
+- **News feed rescue + tuning** *(shipped 2026-07-02, PRs #75/#76)* — fixed a ~24h feed
+  freeze: the soft monthly spend cap `ai_monthly_budget_usd` had tripped at month-end and
+  silently paused the LLM curator (health still read "healthy" — old live cards masked it),
+  now disabled on prod (Cloudflare gateway Spend Limit is the backstop). Then tuned the feed:
+  recency-decayed hero ranking — `(ai_relevance + 0.35·ln(1+coverage) + 0.2·netVotes) ×
+  0.5^(ageHours / news_feed_decay_half_life_hours)`, default 8h → hero rotates ~3×/day to the
+  freshest big story (migration 084, tunable); `coverage` = how many outlets cluster into a
+  story; the `>= 0.85` freshness exemption is bounded to 2× the window; and the curator
+  summary hint aligned to 500–1000 words (was silently capped ~300–500 by a stale schema
+  hint). CSP `img-src` broadened to `https:` so news-card covers stop violating (still
+  Report-Only). Why in [`DESIGN_NOTES.md`].
 
 ---
 
@@ -135,6 +146,13 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 - **Flip `API_BASE_URL` to `http://api:3000` on the live box** *(operational)* — code and
   `DEPLOY.md` already expect the internal docker-compose hostname (Caddy 403s `/internal*`
   from public); the production `.env` value is the only remaining manual step.
+- **Flip the SPA CSP from report-only to enforcing** *(operational + 1-line code)* —
+  `infra/Caddyfile` ships `Content-Security-Policy-Report-Only`; while report-only it gives
+  no protection. Blocked on validating Cloudflare's JS-Detections nonce propagation (likely
+  only testable via a canary flip when enforcing, not during the soak) and confirming Rocket
+  Loader is OFF; then rename the header to `Content-Security-Policy` and deploy in a quiet
+  window, watching `/csp-reports` + console. `img-src` already broadened to `https:` (PR #76).
+  See [`DESIGN_NOTES.md`] → "Content Security Policy".
 
 ---
 

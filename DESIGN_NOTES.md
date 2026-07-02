@@ -107,6 +107,53 @@ The single most important invariant in the app. Implemented in migration `054`.
   syncs, daily slow paths). Batch wherever possible; cache static data (achievement
   schema) with a long TTL. No new infrastructure.
 
+## News feed ranking & curation
+
+- **Hero = the freshest big story, and it must rotate.** The Gaming News feed
+  orders by a recency-decayed signal score and the SPA takes `feed[0]` as the
+  hero. Signal = AI relevance + coverage + net votes, where **coverage** (how
+  many feed-eligible articles cluster into one story) is the "lots of outlets =
+  big story" heuristic — the story almost every member will click. That score is
+  multiplied by `0.5^(ageHours / news_feed_decay_half_life_hours)` (default 8h),
+  so weight halves every ~8h and the hero turns over ~3×/day instead of camping
+  on one high-score card. A developing story that keeps gaining coverage/votes
+  resists the decay; a quiet one falls off. The `ai_relevance_score >= 0.85`
+  freshness-window exemption is bounded (2× the window) so nothing pins forever.
+  Half-life is a tunable setting, not a constant, because the right rotation
+  cadence is editorial. (PR #75, migration 084, `newsFeed.ts`.)
+- **Summaries: completeness over word count — but the schema hint must agree.**
+  The curator prompt tells the model to include every unique fact up to a
+  1350-word hard cap. A stale JSON-schema example ("~300–500 words") silently
+  overrode that (models obey the concrete schema over prose) and truncated
+  summaries, dropping key points. Lesson: when a prompt carries both a prose
+  directive and a schema example, they must state the same length or the schema
+  wins. Target is now 500–1000 words; forward-only. (PR #75.)
+- **The soft spend cap is a foot-gun when it's silent.** `ai_monthly_budget_usd`
+  pauses only the LLM curator once month-to-date `ai_cost_ledger` spend ≥ cap,
+  but health still reads "healthy" (existing live cards mask the stall) and no
+  alert fires — so a tripped cap silently froze the feed for ~24h at the
+  2026-06-30 month-end. Disabled on prod (set to 0); the Cloudflare gateway
+  Spend Limit is the real backstop. If the app-layer cap is ever re-enabled,
+  first make a budget-pause surface as a distinct health status, not "healthy".
+
+## Content Security Policy (report-only → enforcing)
+
+- **Ships `Content-Security-Policy-Report-Only` first, in `infra/Caddyfile`**
+  (apex block); violations POST to `/csp-reports` (logged, not stored). It does
+  nothing security-wise until enforcing, so finishing it is hardening, not a
+  fire — but don't flip it without validating the two hard parts below.
+- **The inline scripts are Cloudflare's, not ours.** `apps/web/index.html` ships
+  zero inline scripts. The only ones are Cloudflare's JS Detections (Bot Fight
+  Mode, undisable-able on the free plan). The CSP carries a per-request nonce so
+  CF stamps its injected scripts — but CF often applies the nonce only under an
+  *enforcing* CSP, so the report-only soak can never show scripts clean. Real
+  validation is a careful **canary flip** in a quiet window. Rocket Loader must
+  stay OFF (its scripts inject too late to be nonced).
+- **`img-src` is the `https:` scheme source on purpose.** News cards hotlink
+  cover art and source favicons from arbitrary outlet CDNs — an unbounded host
+  set that can't be allowlisted. Images can't execute, so scheme-level `https:`
+  is the accepted relaxation while every other directive stays strict. (PR #76.)
+
 ## Admin panel information architecture
 
 The admin reorg that shipped to `apps/web/src/pages/admin/`. The reasoning:
