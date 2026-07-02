@@ -1,8 +1,17 @@
 name: CI
 
-# Pull-request gate: typecheck, build all three images, and scan them for
-# known CVEs. Nothing is pushed or deployed here — this just has to pass
-# before a PR can merge to main (enforce via branch protection).
+# Pull-request gate: typecheck, build all three images, scan them for known
+# CVEs, and boot-smoke the api image against a fresh Postgres. Nothing is
+# pushed or deployed here — this just has to pass before a PR can merge to
+# main.
+#
+# Branch protection's required status check is the JOB name `lint-build-scan`
+# (confirmed via the repo's branch-protection API — it lists the context as
+# `lint-build-scan`, not the workflow name `CI`), so that job must never be
+# renamed. `boot-smoke` below is an ADDED job, not a replacement — it runs as
+# an extra (currently non-required) check. If it should also gate merges,
+# that's a separate manual step: add `boot-smoke` to the required-checks list
+# in the branch protection settings.
 
 on:
   pull_request:
@@ -33,9 +42,35 @@ jobs:
             --build-arg VITE_API_BASE_URL=https://api.bonelessisland.com \
             -t boneless-web:ci .
 
+      # Save the already-built api image so the boot-smoke job (below) can
+      # load it without rebuilding — jobs run on fresh runners/daemons, so a
+      # locally-built image doesn't otherwise carry over even with `needs:`.
+      # Short retention: this artifact only needs to survive to the next job
+      # in the same workflow run.
+      - name: Save api image for boot-smoke
+        run: docker save boneless-api:ci | gzip > /tmp/boneless-api-ci.tar.gz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: boneless-api-ci-image
+          path: /tmp/boneless-api-ci.tar.gz
+          retention-days: 1
+
       # Block the merge on HIGH/CRITICAL CVEs that have a fix available
       # (exit-code 1). ignore-unfixed:true means unpatchable base-image noise
       # won't block — only CVEs you can actually act on do.
+      #
+      # Accepted-risk note (arch mismatch): these scans run on amd64
+      # GitHub-hosted runners, but prod runs arm64 images (deploy.yml builds
+      # natively on an arm64 runner — see that workflow's `runs-on:
+      # ubuntu-24.04-arm` comment). Trivy's CVE matching is keyed on package
+      # name + version, not architecture, and both builds resolve the same
+      # base-image tags (node:26-alpine, caddy:2-alpine) and the same
+      # package-lock.json, so in practice the installed package versions are
+      # identical across arches — this scan's results transfer. Revisit if an
+      # arm64-specific CVE (a flaw only reachable on that architecture, e.g.
+      # in an arch-specific compiled artifact) ever shows up; that class of
+      # finding wouldn't be caught here and would need a native arm64 scan.
       - name: Trivy scan — api
         uses: aquasecurity/trivy-action@master
         with:
@@ -86,3 +121,85 @@ jobs:
           # Accepted-risk waivers live in .trivyignore, each with a documented
           # reason + revisit condition. Real, fixable CVEs still block merges.
           trivyignores: .trivyignore
+
+  # Boots the just-built api image against a fresh Postgres and waits for
+  # /health/ready. This is the only thing in CI that proves migrations apply
+  # cleanly and the server actually starts — lint only typechecks, and the
+  # Trivy scans never run the image. Catches a bad dependency bump (the
+  # original motivation: an unreviewed express/pg/etc. minor auto-merging via
+  # Dependabot with zero runtime verification) on every PR, not just
+  # hand-reviewed ones.
+  boot-smoke:
+    needs: lint-build-scan
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_PASSWORD: boot-smoke-only-password
+          POSTGRES_DB: boneless
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d boneless"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: boneless-api-ci-image
+          path: /tmp
+
+      - name: Load api image
+        run: docker load < /tmp/boneless-api-ci.tar.gz
+
+      # Minimal env: apps/api/src/config.ts zod-defaults everything except
+      # what's overridden here. DATABASE_URL/WEB_ORIGIN/SESSION_SECRET are
+      # the only values that can't just use their (dev-oriented) defaults —
+      # the rest (Discord/Steam/IGDB/AI keys, BOT_API_SHARED_SECRET) default
+      # to "" and are never read during boot or migrations.
+      #   - DATABASE_URL points at the postgres service container via the
+      #     runner's own localhost (api container runs with --network host
+      #     below, since GH Actions service containers publish to the
+      #     runner's localhost, not to arbitrary sibling containers).
+      #   - SESSION_SECRET is a fixed 64-char dummy (>=32 chars): today the
+      #     api only warns below that length (server.ts), but a forthcoming
+      #     hardening PR makes prod refuse to boot under 32 chars, so this
+      #     stays valid either way.
+      #   - WEB_ORIGIN must satisfy config.ts's no-wildcard http(s) refine.
+      - name: Boot api container
+        run: |
+          docker run -d \
+            --name boot-smoke-api \
+            --network host \
+            -e NODE_ENV=production \
+            -e API_PORT=3000 \
+            -e DATABASE_URL="postgresql://postgres:boot-smoke-only-password@localhost:5432/boneless" \
+            -e SESSION_SECRET="VhWc4gdm5fmKdWLsJP4ww7oKJIz7_PkiXqyNzBJBoYHpASHE2wXLBttXfEcb-DtK" \
+            -e WEB_ORIGIN="https://example.com" \
+            boneless-api:ci
+
+      # Fresh DB, so this exercises the exact same path a real deploy does:
+      # runMigrations() applies 001..latest, then the server starts listening.
+      # Cap at 90s — migrations + boot normally take a few seconds locally,
+      # so this is generous headroom for a colder CI runner without letting a
+      # genuinely hung boot drag out the PR gate.
+      - name: Wait for /health/ready
+        run: |
+          for i in $(seq 1 90); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health/ready || echo "000")
+            if [ "$code" = "200" ]; then
+              echo "api is ready (took ${i}s)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::api never became ready within 90s (last HTTP code: $code)"
+          echo "--- docker logs boot-smoke-api ---"
+          docker logs boot-smoke-api
+          exit 1
+
+      - name: Dump api logs
+        if: always()
+        run: docker logs boot-smoke-api
