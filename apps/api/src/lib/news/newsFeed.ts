@@ -1,4 +1,4 @@
-import { getFeedDecayHalfLifeDays, getFeedFreshnessDays } from "./newsRetention.js";
+import { getFeedDecayHalfLifeHours, getFeedFreshnessDays } from "./newsRetention.js";
 
 type FeedQueryParts = {
   sql: string;
@@ -30,7 +30,7 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
   params.push(String(freshnessDays));
   const freshnessParam = `$${params.length}`;
 
-  params.push(getFeedDecayHalfLifeDays());
+  params.push(getFeedDecayHalfLifeHours());
   const halfLifeParam = `$${params.length}`;
 
   const sql = `
@@ -56,7 +56,19 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
               ELSE gn.external_id
             END
           ORDER BY gn.ai_relevance_score DESC NULLS LAST, gn.published_at DESC
-        ) AS rk
+        ) AS rk,
+        -- Coverage = how many feed-eligible articles cluster into this story.
+        -- Lots of outlets covering it = a big story most members will click.
+        COUNT(*) OVER (
+          PARTITION BY
+            CASE
+              WHEN gn.ai_story_fingerprint IS NOT NULL AND gn.ai_story_fingerprint <> ''
+                THEN LOWER(split_part(gn.ai_story_fingerprint, ':', 1))
+                  || '::'
+                  || to_char(DATE_TRUNC('week', gn.published_at), 'YYYY-MM-DD')
+              ELSE gn.external_id
+            END
+        ) AS cluster_size
       FROM general_news gn
       WHERE gn.ai_curated_at IS NOT NULL
         AND gn.ai_relevance_score > 0
@@ -123,15 +135,22 @@ export function buildGeneralNewsFeedQuery(userId?: string): FeedQueryParts {
           AND r.published_at > NOW() - ((${freshnessParam}::int * 2)::text || ' days')::interval
         )
       )
-    -- Recency-decayed rank: relevance+vote weight halves every
-    -- news_feed_decay_half_life_days days, so the hero (feed[0]) rotates to fresh
-    -- high-quality stories instead of pinning to one high-score card forever.
+    -- Recency-decayed signal rank. Base signal = AI relevance + coverage
+    -- (how many outlets cover the story) + net member votes. That base is then
+    -- halved every news_feed_decay_half_life_hours hours, so the hero (feed[0])
+    -- rotates ~3x/day to the freshest BIG story and never camps on one card.
+    -- A story that keeps gaining coverage/votes resists the decay; a stale one
+    -- falls away.
     ORDER BY (
-      (COALESCE(r.ai_relevance_score, 0.5) + (fb.upvotes - fb.downvotes) * 0.2)
+      (
+        COALESCE(r.ai_relevance_score, 0.5)
+        + LN(1 + r.cluster_size::double precision) * 0.35
+        + (fb.upvotes - fb.downvotes) * 0.2
+      )
       * POWER(
           0.5::double precision,
           GREATEST(EXTRACT(EPOCH FROM (NOW() - r.published_at)), 0)::double precision
-            / (86400.0::double precision * ${halfLifeParam}::double precision)
+            / (3600.0::double precision * ${halfLifeParam}::double precision)
         )
     ) DESC, r.published_at DESC
     LIMIT 50
