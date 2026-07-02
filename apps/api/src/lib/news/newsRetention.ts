@@ -11,6 +11,17 @@ export function getFeedFreshnessDays(): number {
   return intSetting("news_feed_freshness_days", 45);
 }
 
+/**
+ * Half-life (in HOURS) for the feed's recency decay. The feed ORDER BY multiplies
+ * each card's signal score by 0.5^(ageHours / halfLife), so a story's ranking
+ * weight halves every `halfLife` hours. Lower = the hero rotates to fresh stories
+ * faster. Default 8h → the hero turns over roughly 3x/day, so it stays reserved
+ * for the freshest big stories rather than camping on one card.
+ */
+export function getFeedDecayHalfLifeHours(): number {
+  return intSetting("news_feed_decay_half_life_hours", 8);
+}
+
 export function getHotRetentionDays(): number {
   return intSetting("news_retention_hot_days", 90);
 }
