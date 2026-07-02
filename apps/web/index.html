@@ -4,12 +4,34 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>The Boneless Island™</title>
+    <meta
+      name="description"
+      content="A private island for the crew. Games, game nights, and nuggies."
+    />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
     <link rel="shortcut icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="theme-color" content="#0c4a6e" />
+    <!-- Paired light/dark theme-color: browsers pick whichever matches the
+         user's OS color scheme. Dark keeps the existing value so nothing
+         changes for the common case; light is the day-theme equivalent. -->
+    <meta name="theme-color" content="#0284c7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c4a6e" media="(prefers-color-scheme: dark)" />
+    <!-- Discord/social unfurl tags. Static (not per-route) — the SPA is a
+         members-only hub, not a set of shareable content pages, so one
+         consistent card for every link is the right tradeoff. og:image must
+         be an absolute URL — Discord will not resolve a relative one. -->
+    <meta property="og:title" content="The Boneless Island" />
+    <meta property="og:site_name" content="The Boneless Island" />
+    <meta
+      property="og:description"
+      content="A private island for the crew. Games, game nights, and nuggies."
+    />
+    <meta property="og:image" content="https://bonelessisland.com/og-image.png" />
+    <meta property="og:url" content="https://bonelessisland.com" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Plain stylesheet link, no inline `onload` handler: the old

@@ -1,5 +1,7 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client.js";
+import { appQueryKeys } from "../lib/queryClient.js";
 import { IslandCard, IslandTag } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { PageId } from "../types.js";
@@ -42,38 +44,22 @@ function memberInitials(name: string): string {
   return (name || "??").trim().slice(0, 2).toUpperCase();
 }
 
-function CrewAchievementsPageImpl({ onNavigate }: CrewAchievementsPageProps) {
-  const [games, setGames] = useState<CrewAchievementGame[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [errored, setErrored] = useState(false);
+async function fetchCrewAchievements(): Promise<CrewAchievementGame[]> {
+  const res = await apiFetch("/steam/crew-achievements");
+  if (!res.ok) throw new Error(`Crew achievements load failed (${res.status})`);
+  const body = (await res.json().catch(() => null)) as { games?: CrewAchievementGame[] } | null;
+  return Array.isArray(body?.games) ? body.games : [];
+}
 
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const res = await apiFetch("/steam/crew-achievements");
-        if (!active) return;
-        if (!res.ok) {
-          setErrored(true);
-          setGames([]);
-          return;
-        }
-        const body = (await res.json().catch(() => null)) as { games?: CrewAchievementGame[] } | null;
-        if (!active) return;
-        setGames(Array.isArray(body?.games) ? body.games : []);
-      } catch {
-        if (active) {
-          setErrored(true);
-          setGames([]);
-        }
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+function CrewAchievementsPageImpl({ onNavigate }: CrewAchievementsPageProps) {
+  const gamesQuery = useQuery({
+    queryKey: appQueryKeys.steamCrewAchievements,
+    queryFn: fetchCrewAchievements,
+    staleTime: 60_000,
+  });
+  const games = gamesQuery.data ?? null;
+  const loading = gamesQuery.isLoading;
+  const errored = gamesQuery.isError;
 
   const totals = useMemo(() => {
     if (!games || games.length === 0) return null;

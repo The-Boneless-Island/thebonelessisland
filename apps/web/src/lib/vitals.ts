@@ -9,35 +9,44 @@ import { API_BASE_URL } from "../api/client.js";
 // can't do; text/plain is a "simple request" and goes through. The API parses
 // it as text. The same-site session cookie rides along, so /vitals can stay
 // behind requireSession.
-function report(metric: Metric) {
-  try {
-    const body = JSON.stringify({
-      name: metric.name,
-      value: Math.round(metric.value * 1000) / 1000,
-      rating: metric.rating,
-      id: metric.id,
-      navigationType: metric.navigationType,
-      path: typeof location !== "undefined" ? location.pathname : null
-    });
-    const url = `${API_BASE_URL}/vitals`;
-    if (typeof navigator !== "undefined" && navigator.sendBeacon) {
-      navigator.sendBeacon(url, new Blob([body], { type: "text/plain" }));
-    } else {
-      void fetch(url, {
-        method: "POST",
-        body,
-        headers: { "content-type": "text/plain" },
-        credentials: "include",
-        keepalive: true
+//
+// `path` is captured once, when the observers are registered (this is an SPA
+// — reportWebVitals() runs once at boot), not when a metric actually fires.
+// CLS/INP in particular can settle well after the initial navigation; reading
+// location.pathname at report time would mis-attribute a score to whatever
+// page the user has since routed to instead of the page that produced it.
+function report(path: string | null) {
+  return (metric: Metric) => {
+    try {
+      const body = JSON.stringify({
+        name: metric.name,
+        value: Math.round(metric.value * 1000) / 1000,
+        rating: metric.rating,
+        id: metric.id,
+        navigationType: metric.navigationType,
+        path
       });
+      const url = `${API_BASE_URL}/vitals`;
+      if (typeof navigator !== "undefined" && navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body], { type: "text/plain" }));
+      } else {
+        void fetch(url, {
+          method: "POST",
+          body,
+          headers: { "content-type": "text/plain" },
+          credentials: "include",
+          keepalive: true
+        });
+      }
+    } catch {
+      // best-effort
     }
-  } catch {
-    // best-effort
-  }
+  };
 }
 
 export function reportWebVitals() {
-  onCLS(report);
-  onINP(report);
-  onLCP(report);
+  const path = typeof location !== "undefined" ? location.pathname : null;
+  onCLS(report(path));
+  onINP(report(path));
+  onLCP(report(path));
 }

@@ -19,4 +19,12 @@ export const appQueryKeys = {
   gameNews: ["game-news"] as const,
   generalNews: ["general-news"] as const,
   newsCards: ["news-cards"] as const,
+  nuggiesMe: ["nuggies-me"] as const,
+  nuggiesAchievements: ["nuggies-achievements"] as const,
+  digestLatest: ["digest-latest"] as const,
+  steamCrewAchievements: ["steam-crew-achievements"] as const,
+  islanderProfile: (discordUserId: string) => ["islander-profile", discordUserId] as const,
+  nuggiesLeaderboard: ["nuggies-leaderboard"] as const,
+  forumThreadFeed: (sort: string, category: string | null, type: string | null) =>
+    ["forum-thread-feed", sort, category, type] as const,
 };
