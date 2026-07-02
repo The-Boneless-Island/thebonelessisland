@@ -16,7 +16,7 @@ installRedactor();
 initSentry("api");
 installProcessFatalHandlers("api");
 import { isValidBotSecret, requireSession } from "./lib/auth.js";
-import { addSubscriber, removeSubscriber, broadcast } from "./lib/eventBus.js";
+import { addSubscriber, removeSubscriber, broadcast, closeAllSubscribers } from "./lib/eventBus.js";
 import { activityRouter } from "./routes/activity.js";
 import { aiChatRouter } from "./routes/aiChat.js";
 import { authRouter } from "./routes/auth.js";
@@ -151,17 +151,42 @@ const sessionSecrets = [env.SESSION_SECRET];
 if (process.env.SESSION_SECRET_PREVIOUS) {
   sessionSecrets.push(process.env.SESSION_SECRET_PREVIOUS);
 }
-if (env.SESSION_SECRET.length < 32) {
+// Fail-closed in production: a weak session secret means every cookie this
+// process signs is forgeable (dev-secret is public — it's in this repo) or
+// brute-forceable (short). config.ts keeps a zod default so `npm run dev`
+// works with zero setup, but that same default reaching prod would silently
+// leave every member's session forgeable. This runs after secrets hydration
+// (loadSecrets() in config.ts completes at module-evaluation time, before
+// `env` — imported above — is ever readable here) and before the session
+// middleware is installed a few lines down, so a bad secret is caught before
+// a single cookie can be signed with it.
+if (isProd && (env.SESSION_SECRET === "dev-secret" || env.SESSION_SECRET.length < 32)) {
+  log.fatal("boot", "refusing to start: SESSION_SECRET is missing or too weak for production", {
+    length: env.SESSION_SECRET.length,
+  });
+  console.error(
+    "[boot] FATAL: SESSION_SECRET is the dev default or under 32 chars in production. " +
+      "Set a strong random value (SSM /boneless/prod/SESSION_SECRET or .env) before deploying. Refusing to boot."
+  );
+  process.exit(1);
+} else if (env.SESSION_SECRET.length < 32) {
   console.warn("[security] SESSION_SECRET shorter than 32 chars — rotate to a strong random value before prod.");
 }
 const PgSessionStore = connectPgSimple(session);
+// Named so graceful shutdown can call sessionStore.close() — it stops the
+// store's internal prune timer. It does NOT end `db`: the store was handed
+// our shared pool (`pool: db`) rather than a conString to open its own, so
+// connect-pg-simple never takes ownership of it (verified against the
+// installed connect-pg-simple source) and db.end() below stays the only
+// thing that actually closes the pool.
+const sessionStore = new PgSessionStore({
+  pool: db,
+  tableName: "session",
+  createTableIfMissing: false // table is owned by migration 062
+});
 app.use(
   session({
-    store: new PgSessionStore({
-      pool: db,
-      tableName: "session",
-      createTableIfMissing: false // table is owned by migration 062
-    }),
+    store: sessionStore,
     name: isProd ? "__Host-island_session" : "island_session",
     secret: sessionSecrets,
     resave: false,
@@ -397,6 +422,27 @@ async function revokeDepartedSessions() {
   );
 }
 
+// Every background job scheduled during boot (news refresh, sweeps, syncs,
+// etc.) goes through trackedInterval/trackedTimeout instead of the raw
+// timer functions, so graceful shutdown can find and clear all of them.
+// Without this, SIGTERM would stop accepting new requests but the process
+// would keep waking up every few seconds/minutes to run jobs against a db
+// pool that's mid-teardown, and Node would never consider the event loop
+// empty enough to exit on its own — the 10s force-exit timer would fire on
+// every single deploy instead of being the rare failsafe it's meant to be.
+const bootTimers: NodeJS.Timeout[] = [];
+function trackedInterval(fn: () => void, ms: number): void {
+  bootTimers.push(setInterval(fn, ms));
+}
+function trackedTimeout(fn: () => void, ms: number): void {
+  bootTimers.push(setTimeout(fn, ms));
+}
+
+// Set inside bootstrap() once app.listen() resolves; read by the
+// SIGTERM/SIGINT handler below. Only one boot ever happens per process, so
+// a module-scope let is simpler here than threading the handle through.
+let server: import("node:http").Server | null = null;
+
 // Run migrations + load settings before accepting requests
 async function bootstrap() {
   // Migrations are load-bearing: serving with a drifted schema turns missing
@@ -457,7 +503,7 @@ async function bootstrap() {
     console.error("[boot] tagline refresh failed:", err);
   }
 
-  setInterval(() => {
+  trackedInterval(() => {
     void isTaglineStale().then((stale) => {
       if (stale) {
         return refreshTaglines().catch((err) => {
@@ -469,12 +515,12 @@ async function bootstrap() {
 
   // Forum orphan-upload sweep: drops never-attached images (composer abandoned)
   // older than 24h, freeing disk. Runs shortly after boot, then every 6 hours.
-  setTimeout(() => {
+  trackedTimeout(() => {
     sweepOrphanUploads()
       .then((n) => { if (n > 0) console.log(`[forums] swept ${n} orphan upload(s)`); })
       .catch((err) => console.error("[forums] orphan upload sweep failed:", err));
   }, 45_000);
-  setInterval(() => {
+  trackedInterval(() => {
     sweepOrphanUploads()
       .then((n) => { if (n > 0) console.log(`[forums] swept ${n} orphan upload(s)`); })
       .catch((err) => console.error("[forums] orphan upload sweep failed:", err));
@@ -482,7 +528,7 @@ async function bootstrap() {
 
   // Register Nuggies game handlers + sweep expired sessions every 30s
   registerAllGames();
-  setInterval(() => {
+  trackedInterval(() => {
     sweepExpiredGames().catch((err) => {
       console.error("[nuggies-games] sweep failed:", err);
     });
@@ -493,14 +539,14 @@ async function bootstrap() {
   processDefaultedLoans().catch((err) => {
     console.error("[nuggies-loans] initial sweep failed:", err);
   });
-  setInterval(() => {
+  trackedInterval(() => {
     processDefaultedLoans().catch((err) => {
       console.error("[nuggies-loans] sweep failed:", err);
     });
   }, 5 * 60 * 1000);
 
   // Background news refresh — enqueue serial pipeline work (ingest + curate).
-  setInterval(() => {
+  trackedInterval(() => {
     void (async () => {
       try {
         const { isPipelineQueueEnabled, enqueueOrRunIngest } = await import("./lib/news/newsPipelineQueue.js");
@@ -515,9 +561,19 @@ async function bootstrap() {
     })();
   }, 4 * 60 * 60 * 1000);
 
-  startPipelineQueueWorker();
+  // startPipelineQueueWorker's own poll interval isn't created by a plain
+  // setInterval call here — it's returned (async) from that function — so it
+  // can't go through trackedInterval. Push its handle in directly once the
+  // promise resolves; if shutdown already started by then (SIGTERM during
+  // boot), bootTimers has already been drained, so clear the interval
+  // immediately instead of parking it where nothing will ever stop it.
+  void startPipelineQueueWorker().then((handle) => {
+    if (!handle) return;
+    if (shuttingDown) clearInterval(handle);
+    else bootTimers.push(handle);
+  });
 
-  setTimeout(() => {
+  trackedTimeout(() => {
     void (async () => {
       try {
         const { isPipelineQueueEnabled, enqueueOrRunResolveImages } = await import(
@@ -541,16 +597,16 @@ async function bootstrap() {
     runNewsPipelineHealthSweep().catch((err) => {
       console.error("[generalNews] pipeline health sweep failed:", err);
     });
-  setTimeout(runHealthSweep, 3 * 60 * 1000);
-  setInterval(runHealthSweep, 6 * 60 * 60 * 1000);
+  trackedTimeout(runHealthSweep, 3 * 60 * 1000);
+  trackedInterval(runHealthSweep, 6 * 60 * 60 * 1000);
 
   // Nightly retention: tier assignment, warm-tier stripping, prune dead rows.
   const runRetentionSweep = () =>
     runNewsRetentionSweep().catch((err) => {
       console.error("[news-retention] sweep failed:", err);
     });
-  setTimeout(runRetentionSweep, 7 * 60 * 1000);
-  setInterval(runRetentionSweep, 24 * 60 * 60 * 1000);
+  trackedTimeout(runRetentionSweep, 7 * 60 * 1000);
+  trackedInterval(runRetentionSweep, 24 * 60 * 60 * 1000);
 
   // Crew-library patch alerts: poll Steam/RSS sources on a tighter cadence than
   // the lazy page-load ingest so Discord alerts land within ~20 minutes.
@@ -569,12 +625,12 @@ async function bootstrap() {
         }
       });
 
-  setTimeout(() => {
+  trackedTimeout(() => {
     runPatchAlertIngest().catch((err) => {
       console.error("[patchAlerts] initial ingest failed:", err);
     });
   }, 105_000);
-  setInterval(() => {
+  trackedInterval(() => {
     runPatchAlertIngest().catch((err) => {
       console.error("[patchAlerts] scheduled ingest failed:", err);
     });
@@ -582,7 +638,7 @@ async function bootstrap() {
 
   // Member sync: server is now the sole driver (the web client no longer
   // POSTs /members/sync per tab). Run shortly after boot, then every 60s.
-  setTimeout(() => {
+  trackedTimeout(() => {
     syncGuildMembers()
       .then(() => broadcast("members-changed"))
       .then(() => revokeDepartedSessions())
@@ -590,7 +646,7 @@ async function bootstrap() {
         console.error("[members] initial sync failed:", err);
       });
   }, 12_000);
-  setInterval(() => {
+  trackedInterval(() => {
     syncGuildMembers()
       .then(() => broadcast("members-changed"))
       .then(() => revokeDepartedSessions())
@@ -602,12 +658,12 @@ async function bootstrap() {
   // Wishlist price sync: refreshes sale prices on wishlisted games via
   // CheapShark so the Games wishlist card can flag active discounts. Runs
   // shortly after boot, then daily.
-  setTimeout(() => {
+  trackedTimeout(() => {
     syncWishlistPrices().catch((err) => {
       console.error("[priceSync] initial wishlist price sync failed:", err);
     });
   }, 10_000);
-  setInterval(() => {
+  trackedInterval(() => {
     syncWishlistPrices().catch((err) => {
       console.error("[priceSync] scheduled wishlist price sync failed:", err);
     });
@@ -617,7 +673,7 @@ async function bootstrap() {
   // without requiring a manual click. Each user is internally gated by a
   // per-user cooldown inside syncAllOwnedGames, so a frequent sweep is safe
   // and cheap. Runs shortly after boot, then every 30 minutes.
-  setTimeout(() => {
+  trackedTimeout(() => {
     syncAllOwnedGames()
       .then(({ usersSynced }) => {
         console.log(`[steam] auto owned-games sync: ${usersSynced} user(s)`);
@@ -626,7 +682,7 @@ async function bootstrap() {
         console.error("[steam] initial owned-games sync failed:", err);
       });
   }, 20_000);
-  setInterval(() => {
+  trackedInterval(() => {
     syncAllOwnedGames()
       .then(({ usersSynced }) => {
         console.log(`[steam] auto owned-games sync: ${usersSynced} user(s)`);
@@ -640,12 +696,12 @@ async function bootstrap() {
   // the home page can show "up/down vs last fortnight" deltas. Cheap single
   // upsert; runs after the first owned-games sync settles, then twice daily
   // (same-day re-runs just refresh today's row).
-  setTimeout(() => {
+  trackedTimeout(() => {
     snapshotCrewTrending()
       .then(({ apps }) => console.log(`[trending] snapshot: ${apps} app(s)`))
       .catch((err) => console.error("[trending] initial snapshot failed:", err));
   }, 60_000);
-  setInterval(() => {
+  trackedInterval(() => {
     snapshotCrewTrending()
       .catch((err) => console.error("[trending] scheduled snapshot failed:", err));
   }, 12 * 60 * 60 * 1000);
@@ -654,12 +710,12 @@ async function bootstrap() {
   // every linked member's persona/avatar/in-game status/account age, plus a
   // per-user Steam level pass. Runs shortly after boot, then every 15 minutes
   // (in-game status is the freshness-sensitive field).
-  setTimeout(() => {
+  trackedTimeout(() => {
     syncSteamPlayerSummaries()
       .then(({ synced }) => console.log(`[steam] player-summary sync: ${synced} player(s)`))
       .catch((err) => console.error("[steam] initial player-summary sync failed:", err));
   }, 25_000);
-  setInterval(() => {
+  trackedInterval(() => {
     syncSteamPlayerSummaries()
       .then(({ synced }) => console.log(`[steam] player-summary sync: ${synced} player(s)`))
       .catch((err) => console.error("[steam] scheduled player-summary sync failed:", err));
@@ -700,12 +756,12 @@ async function bootstrap() {
     );
     lastPostedDigestWeek = digest.weekStart;
   };
-  setTimeout(() => {
+  trackedTimeout(() => {
     runWeeklyDigest().catch((err) => {
       console.error("[tide] initial weekly digest failed:", err);
     });
   }, 15_000);
-  setInterval(() => {
+  trackedInterval(() => {
     runWeeklyDigest().catch((err) => {
       console.error("[tide] scheduled weekly digest failed:", err);
     });
@@ -718,7 +774,7 @@ async function bootstrap() {
   // refresh it daily, and run a bounded sweep that fixes any game row still
   // holding the 'app-<id>' placeholder (e.g. wishlist items, whose Steam API
   // returns appids only). Lookups are in-memory, so the sweep is cheap.
-  setTimeout(() => {
+  trackedTimeout(() => {
     refreshSteamAppList(true)
       .then((count) => {
         console.log(`[steam] app-list cached: ${count} app(s)`);
@@ -729,7 +785,7 @@ async function bootstrap() {
       })
       .catch((err) => console.error("[steam] initial app-list warm / name repair failed:", err));
   }, 8_000);
-  setInterval(() => {
+  trackedInterval(() => {
     refreshSteamAppList()
       .then(() => repairMissingGameNames(200))
       .then((fixed) => {
@@ -738,9 +794,84 @@ async function bootstrap() {
       .catch((err) => console.error("[steam] scheduled name repair failed:", err));
   }, 30 * 60 * 1000);
 
-  app.listen(Number(env.API_PORT), () => {
+  server = app.listen(Number(env.API_PORT), () => {
     console.log(`API listening on ${env.API_PORT}`);
   });
 }
 
 void bootstrap();
+
+// ── Graceful shutdown ───────────────────────────────────────────────────────
+// docker stop sends SIGTERM and waits (compose default: 10s) before SIGKILL;
+// Ctrl-C under `tsx watch` / a bare terminal sends SIGINT. Both need the same
+// clean-exit sequence: stop taking new work, let in-flight work finish, then
+// release every long-lived handle explicitly rather than relying on the
+// process dying to do it — an unclean exit against Postgres leaves the
+// session-store pool's connections in a half-open state until the server
+// notices the TCP RST, and mid-flight SSE responses would otherwise just
+// vanish on the client as a network error instead of a clean stream end.
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return; // A second signal during shutdown shouldn't restart the sequence.
+  shuttingDown = true;
+  log.info("boot", "graceful shutdown starting", { signal });
+
+  // Failsafe: if any step below hangs (a wedged query, a socket that never
+  // emits 'close'), force-exit rather than leaving the container running but
+  // unresponsive. 8s, not 10s: docker's default stop_grace_period SIGKILLs
+  // at 10s, and this only counts as a clean self-exit if it fires first.
+  // unref() so the timer itself never keeps the process alive once
+  // everything else is done.
+  const forceExitTimer = setTimeout(() => {
+    console.error("[shutdown] graceful shutdown exceeded 8s — forcing exit");
+    process.exit(1);
+  }, 8_000);
+  forceExitTimer.unref();
+
+  // Stop every boot-scheduled background job first — no point starting a new
+  // news ingest or member sync while we're on our way out.
+  for (const timer of bootTimers) {
+    clearInterval(timer); // clearInterval also clears timeout handles (same underlying Timeout type in Node).
+  }
+
+  // Stop accepting new connections and wait for in-flight requests to
+  // finish. server.close()'s callback only fires once every *existing*
+  // connection has ended — for ordinary requests that happens fast on its
+  // own, but an SSE client holds its connection open indefinitely and would
+  // otherwise stall this callback forever. So: register close() first (stops
+  // new connections immediately, synchronously) and end every SSE stream
+  // right after — but before awaiting the close-completion promise — so
+  // those sockets actually close and the callback below is able to fire.
+  if (server) {
+    const closingServer = server;
+    await new Promise<void>((resolvePromise) => {
+      closingServer.close((err) => {
+        if (err) console.error("[shutdown] server.close error:", err);
+        resolvePromise();
+      });
+      closeAllSubscribers();
+    });
+  } else {
+    closeAllSubscribers();
+  }
+
+  try {
+    await sessionStore.close();
+  } catch (err) {
+    console.error("[shutdown] session store close failed:", err);
+  }
+
+  try {
+    await db.end();
+  } catch (err) {
+    console.error("[shutdown] db pool close failed:", err);
+  }
+
+  log.info("boot", "graceful shutdown complete", { signal });
+  clearTimeout(forceExitTimer);
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

@@ -227,6 +227,13 @@ docker compose -f infra/docker-compose.yml --profile prod up -d --build
 - Editing `infra/Caddyfile` or the SPA requires a **web image rebuild** (above).
 - Changing `VITE_API_BASE_URL` requires a rebuild (it's baked in).
 - `.env`-only changes: `... up -d` (no `--build`) is enough.
+- **Before deploying the hardening-02-lifecycle PR:** the api now refuses to
+  boot in production if `SESSION_SECRET` is the `dev-secret` default or under
+  32 chars (see `server.ts`). Confirm the prod value (SSM
+  `/boneless/prod/SESSION_SECRET` or `.env`) is a strong generated secret
+  **before** merging that PR — generate one with the same one-liner as
+  step 4 if unsure. This is intentional fail-closed behavior, not a bug: a
+  weak session secret means every login cookie is forgeable.
 
 ---
 

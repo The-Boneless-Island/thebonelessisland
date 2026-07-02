@@ -38,3 +38,22 @@ export function broadcast(event: string, data?: unknown): void {
     }
   }
 }
+
+/**
+ * End every open /events stream and clear the registry. Called during
+ * graceful shutdown: server.close() alone only stops *new* connections from
+ * being accepted, it doesn't end long-lived streams that are already open,
+ * so without this an SSE tab would hang until the client's own timeout
+ * instead of getting a clean disconnect (and the process would keep the
+ * response sockets open, delaying exit).
+ */
+export function closeAllSubscribers(): void {
+  for (const res of subscribers) {
+    try {
+      res.end();
+    } catch {
+      // Socket may already be half-closed — nothing to do.
+    }
+  }
+  subscribers.clear();
+}
