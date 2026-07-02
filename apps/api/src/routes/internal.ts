@@ -11,8 +11,9 @@ export const internalRouter = Router();
 
 /**
  * GET /internal/bot/announcements/pending
- * Bot-only. Returns up to 50 unprocessed bot_announcements rows. Bot polls
- * this every 30s to drive milestone announcements + role assignment.
+ * Bot-only. Returns up to 50 unprocessed bot_announcements rows that haven't
+ * exhausted their delivery attempts. Bot polls this every 30s to drive
+ * milestone announcements + role assignment.
  */
 internalRouter.get(
   "/bot/announcements/pending",
@@ -23,6 +24,7 @@ internalRouter.get(
         `SELECT id, kind, payload, created_at
          FROM bot_announcements
          WHERE processed_at IS NULL
+           AND attempts < 5
          ORDER BY created_at ASC
          LIMIT 50`
       );
@@ -41,9 +43,16 @@ internalRouter.get(
   }
 );
 
+const ANNOUNCEMENT_MAX_ATTEMPTS = 5;
+
 /**
  * POST /internal/bot/announcements/:id/processed
- * Bot-only. Marks an announcement as processed so it isn't re-served.
+ * Bot-only. Reports one row's delivery outcome: `{ ok: true }` marks it
+ * processed immediately; `{ ok: false, error }` bumps `attempts` and stores
+ * `error` in `last_error`, retried on the next poll (see the `attempts < 5`
+ * filter above) until the 5th failed attempt, at which point the row is
+ * also marked processed — a dead letter: it stops being retried, but
+ * `last_error` stays as the tombstone for admin visibility.
  */
 internalRouter.post(
   "/bot/announcements/:id/processed",
@@ -55,14 +64,32 @@ internalRouter.post(
         res.status(400).json({ error: "Invalid id" });
         return;
       }
-      await db.query(
-        "UPDATE bot_announcements SET processed_at = NOW() WHERE id = $1 AND processed_at IS NULL",
-        [id]
-      );
+      const body = z
+        .object({
+          ok: z.boolean().optional().default(true),
+          error: z.string().max(2000).optional(),
+        })
+        .parse(req.body ?? {});
+
+      if (body.ok) {
+        await db.query(
+          "UPDATE bot_announcements SET processed_at = NOW() WHERE id = $1 AND processed_at IS NULL",
+          [id]
+        );
+      } else {
+        await db.query(
+          `UPDATE bot_announcements
+           SET attempts = attempts + 1,
+               last_error = $2,
+               processed_at = CASE WHEN attempts + 1 >= $3 THEN NOW() ELSE processed_at END
+           WHERE id = $1 AND processed_at IS NULL`,
+          [id, body.error ?? "Unknown error", ANNOUNCEMENT_MAX_ATTEMPTS]
+        );
+      }
       res.json({ ok: true });
     } catch (err) {
       console.error("[internal] POST /bot/announcements/:id/processed error:", err);
-      res.status(500).json({ error: "Failed to mark processed" });
+      res.status(500).json({ error: "Failed to record announcement outcome" });
     }
   }
 );
