@@ -136,7 +136,8 @@ settingsRouter.get("/ai-models", requireSession, requireParentRole, async (req, 
     }
   } catch (err) {
     models = [];
-    error = err instanceof Error ? err.message : "Unknown error";
+    console.error("[settings] GET /ai-models failed:", err);
+    error = "Failed to load models";
   }
 
   res.json({ provider, models, ...(error ? { error } : {}) });
@@ -157,7 +158,7 @@ settingsRouter.post("/ai/test", requireSession, requireParentRole, async (req, r
       res.status(400).json({ ok: false, error: err.message });
       return;
     }
-    const message = err instanceof Error ? err.message : "Unknown error";
-    res.status(502).json({ ok: false, error: `Provider error: ${message}` });
+    console.error("[settings] POST /ai/test failed:", err);
+    res.status(502).json({ ok: false, error: "Provider test failed. Check the server logs for details." });
   }
 });

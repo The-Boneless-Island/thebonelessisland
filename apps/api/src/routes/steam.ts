@@ -217,22 +217,13 @@ steamRouter.post("/link", async (req, res) => {
 const STEAM_OPENID_ENDPOINT = "https://steamcommunity.com/openid/login";
 const STEAM_CLAIMED_ID_REGEX = /^https?:\/\/steamcommunity\.com\/openid\/id\/(\d{17})$/;
 
-function apiBaseUrlFromRequest(req: express.Request): string {
-  const forwardedProto = (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim();
-  const forwardedHost = (req.headers["x-forwarded-host"] as string | undefined)?.split(",")[0]?.trim();
-  const protocol = forwardedProto || req.protocol;
-  const host = forwardedHost || req.get("host");
-  return `${protocol}://${host}`;
-}
-
 steamRouter.get("/openid/start", (req, res) => {
   if (!req.session?.userId) {
     res.redirect(buildWebRedirect("error", "not_authenticated"));
     return;
   }
-  const apiBase = apiBaseUrlFromRequest(req);
-  const returnTo = `${apiBase}/steam/openid/return`;
-  const realm = apiBase;
+  const returnTo = `${env.API_PUBLIC_URL}/steam/openid/return`;
+  const realm = env.API_PUBLIC_URL;
   const params = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
     "openid.mode": "checkid_setup",
@@ -665,32 +656,54 @@ export async function syncOwnedGamesForUser(
     return { ok: false, reason: "Steam API response format was invalid" };
   }
 
-  const games = steamJson.response.games ?? [];
+  const rawGames = steamJson.response.games ?? [];
   // When "Game details" privacy is not Public, Steam omits game_count and games
   // entirely (response is {}). Detect that so callers can explain the empty
   // library instead of silently succeeding with 0 games.
-  const privateLibrary = steamJson.response.game_count === undefined && games.length === 0;
+  const privateLibrary = steamJson.response.game_count === undefined && rawGames.length === 0;
 
-  for (const game of games) {
+  // Dedupe by appid before batching: a multi-row INSERT ... ON CONFLICT errors
+  // outright ("cannot affect row a second time") if the same key appears twice
+  // in one statement, whereas the old per-game loop silently tolerated the
+  // occasional duplicate entry in a Steam payload. Last occurrence wins.
+  const games = [...new Map(rawGames.map((g) => [g.appid, g])).values()];
+
+  if (games.length > 0) {
+    // Batched UNNEST upserts (same pattern as syncWishlistForUser above)
+    // instead of a per-game double round-trip loop. IS DISTINCT FROM guards
+    // skip the write (no new row version) when synced data hasn't changed —
+    // the common case on every re-sync of an already-known library.
     await db.query(
       `
         INSERT INTO games (app_id, name)
-        VALUES ($1, $2)
+        SELECT t.appid, t.name
+        FROM UNNEST($1::int[], $2::text[]) AS t(appid, name)
         ON CONFLICT (app_id) DO UPDATE SET name = EXCLUDED.name
+        WHERE games.name IS DISTINCT FROM EXCLUDED.name
       `,
-      [game.appid, game.name]
+      [games.map((g) => g.appid), games.map((g) => g.name)]
     );
+
     await db.query(
       `
         INSERT INTO user_games (user_id, app_id, playtime_minutes, playtime_2weeks)
-        VALUES ($1, $2, $3, $4)
+        SELECT $1::bigint, t.appid, t.playtime_minutes, t.playtime_2weeks
+        FROM UNNEST($2::int[], $3::int[], $4::int[]) AS t(appid, playtime_minutes, playtime_2weeks)
         ON CONFLICT (user_id, app_id)
         DO UPDATE SET
           playtime_minutes = EXCLUDED.playtime_minutes,
           playtime_2weeks  = EXCLUDED.playtime_2weeks,
           last_played_at   = CASE WHEN EXCLUDED.playtime_2weeks > 0 THEN NOW() ELSE user_games.last_played_at END
+        WHERE EXCLUDED.playtime_2weeks > 0
+           OR user_games.playtime_minutes IS DISTINCT FROM EXCLUDED.playtime_minutes
+           OR user_games.playtime_2weeks IS DISTINCT FROM EXCLUDED.playtime_2weeks
       `,
-      [userIdInternal, game.appid, game.playtime_forever ?? 0, game.playtime_2weeks ?? 0]
+      [
+        userIdInternal,
+        games.map((g) => g.appid),
+        games.map((g) => g.playtime_forever ?? 0),
+        games.map((g) => g.playtime_2weeks ?? 0)
+      ]
     );
   }
 
