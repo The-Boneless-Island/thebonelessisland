@@ -736,10 +736,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
       `
         SELECT
           nb.balance,
-          COALESCE((
-            SELECT SUM(amount) FROM nuggies_transactions
-            WHERE user_id = $1 AND amount > 0
-          ), 0)::text AS lifetime_earned,
+          COALESCE(nb.lifetime_earned, 0)::text AS lifetime_earned,
           t.name AS title_name
         FROM (SELECT $1::bigint AS uid) _
         LEFT JOIN nuggies_balances nb ON nb.user_id = _.uid

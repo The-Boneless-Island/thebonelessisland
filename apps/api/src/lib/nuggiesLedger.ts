@@ -1,6 +1,7 @@
 import { db } from "../db/client.js";
 import { formatNuggiesReason, NUGGIES_TX_TYPE } from "@island/shared";
 import { broadcast } from "./eventBus.js";
+import { log } from "./structuredLog.js";
 import { ensureSettingsLoaded, getAISetting } from "./serverSettings.js";
 import {
   checkBankRun,
@@ -408,8 +409,11 @@ export async function executeTrade(opts: {
       "UPDATE nuggies_balances SET balance = balance - $1, updated_at = NOW() WHERE user_id = $2",
       [opts.amount, fromId]
     );
+    // Recipient credit is outside applyTransaction, so lifetime_earned needs
+    // its own increment here (mirrors applyTransaction's GREATEST(amount, 0)
+    // rule) to keep the denormalized column in sync with the ledger.
     await client.query(
-      "UPDATE nuggies_balances SET balance = balance + $1, updated_at = NOW() WHERE user_id = $2",
+      "UPDATE nuggies_balances SET balance = balance + $1, lifetime_earned = lifetime_earned + $1, updated_at = NOW() WHERE user_id = $2",
       [received, toId]
     );
 
@@ -489,15 +493,32 @@ export async function processDefaultedLoans(): Promise<void> {
     const client = await db.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        "UPDATE nuggies_loans SET status = 'defaulted', resolved_at = NOW() WHERE id = $1",
+
+      // Status-guarded UPDATE with RETURNING is the concurrency guard: two
+      // overlapping sweeps (e.g. a slow prior run still in flight when the
+      // next 5-min interval fires) now race on this single atomic UPDATE.
+      // The loser gets 0 rows back and skips the collateral credit below
+      // entirely instead of double-crediting the lender.
+      const flipped = await client.query<{ id: string }>(
+        "UPDATE nuggies_loans SET status = 'defaulted', resolved_at = NOW() WHERE id = $1 AND status = 'active' RETURNING id",
         [loan.id]
       );
+      if (flipped.rowCount === 0) {
+        await client.query("ROLLBACK");
+        continue;
+      }
+
       const collateral = parseInt(loan.collateral, 10);
       if (collateral > 0) {
-        // Collateral goes to lender
+        // Collateral goes to lender. Outside applyTransaction, so
+        // lifetime_earned needs its own increment (mirrors
+        // applyTransaction's GREATEST(amount, 0) rule) to stay in sync with
+        // the ledger. No matching loan_forfeit_out row on the borrower side:
+        // the loan_out row recorded at accept time already captured that
+        // outflow, so a second "forfeit" debit here would double-count it
+        // and make SUM(ledger) != balance for the borrower.
         await client.query(
-          "UPDATE nuggies_balances SET balance = balance + $1, updated_at = NOW() WHERE user_id = $2",
+          "UPDATE nuggies_balances SET balance = balance + $1, lifetime_earned = lifetime_earned + $1, updated_at = NOW() WHERE user_id = $2",
           [collateral, loan.lender_user_id]
         );
         await client.query(
@@ -511,21 +532,14 @@ export async function processDefaultedLoans(): Promise<void> {
             `loan:${loan.id}`,
           ]
         );
-        await client.query(
-          `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [
-            loan.borrower_user_id,
-            -collateral,
-            NUGGIES_TX_TYPE.loan_forfeit_out,
-            formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_forfeit_out, amount: -collateral }),
-            `loan:${loan.id}`,
-          ]
-        );
       }
       await client.query("COMMIT");
-    } catch {
+    } catch (err) {
       await client.query("ROLLBACK");
+      log.error("nuggies-loans", "default_sweep_loan_failed", {
+        loanId: loan.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       client.release();
     }
