@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { useSearchParams } from "react-router";
 import { apiFetch } from "../api/client.js";
+import { SharePopover } from "../components/SharePopover.js";
 import { IslandCard, IslandTag, islandTagStyle, getTagColor } from "../islandUi.js";
 import { useDayNight } from "../scene/useDayNight.js";
 import { islandTheme } from "../theme.js";
@@ -217,6 +219,29 @@ function GamingNewsFeed({ news }: { news: GeneralNewsItem[] }) {
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [mutedKeys, setMutedKeys] = useState<Set<string>>(new Set());
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Deep-link support: a shared Discord embed points at /games/news?item=<id>.
+  // Opens the article modal for that id once it shows up in the live feed,
+  // then clears the param so it doesn't re-trigger on subsequent state changes.
+  useEffect(() => {
+    const raw = searchParams.get("item");
+    const id = raw ? Number(raw) : NaN;
+    if (!Number.isInteger(id) || id <= 0) return;
+    const match = news.find((n) => n.id === id);
+    if (match) {
+      setActiveArticle(match);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("item");
+          return next;
+        },
+        { replace: true }
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [news, searchParams]);
 
   function muteKey(kind: string, value: string) {
     return `${kind}:${value.toLowerCase()}`;
@@ -832,15 +857,6 @@ function NewsHeroCard({
   const displayTags = (item.aiTags ?? []).slice(0, 3);
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
 
-  function handleShare(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (navigator.share) {
-      navigator.share({ title: item.title, url: item.url }).catch(() => {});
-    } else {
-      navigator.clipboard?.writeText(item.url).catch(() => {});
-    }
-  }
-
   function handleVote(e: React.MouseEvent, dir: 1 | -1) {
     e.stopPropagation();
     onVote(dir);
@@ -934,25 +950,13 @@ function NewsHeroCard({
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 2 }}>
           <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} />
-          <button
-            type="button"
-            onClick={handleShare}
-            aria-label="Share article"
-            title="Share article"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "rgba(255,255,255,0.82)",
-              cursor: "pointer",
-              padding: "2px 4px",
-              borderRadius: 6,
-              display: "flex",
-              alignItems: "center",
-              font: "inherit"
-            }}
-          >
-            <ShareIcon />
-          </button>
+          <SharePopover
+            contentType="news_item"
+            contentId={item.id}
+            fallbackTitle={item.title}
+            fallbackUrl={item.url}
+            triggerColor="rgba(255,255,255,0.82)"
+          />
         </div>
       </div>
     </article>
@@ -981,15 +985,6 @@ function NewsCard({
   const labelColor = LABEL_COLORS[item.aiLabel ?? ""] ?? islandTheme.color.textMuted;
   const labelText = LABEL_LABELS[item.aiLabel ?? ""] ?? null;
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
-
-  function handleShare(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (navigator.share) {
-      navigator.share({ title: item.title, url: item.url }).catch(() => {});
-    } else {
-      navigator.clipboard?.writeText(item.url).catch(() => {});
-    }
-  }
 
   function handleVote(e: React.MouseEvent, dir: 1 | -1) {
     e.stopPropagation();
@@ -1097,29 +1092,12 @@ function NewsCard({
             paddingTop: 4
           }}
         >
-          <button
-            type="button"
-            onClick={handleShare}
-            aria-label="Share article"
-            title="Share article"
-            style={{
-              background: "transparent",
-              border: "none",
-              color: islandTheme.color.textMuted,
-              cursor: "pointer",
-              padding: "2px 4px",
-              borderRadius: 6,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              font: "inherit",
-              transition: `color ${islandTheme.motion.dur.fast} ease`
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = islandTheme.color.textSubtle; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = islandTheme.color.textMuted; }}
-          >
-            <ShareIcon />
-          </button>
+          <SharePopover
+            contentType="news_item"
+            contentId={item.id}
+            fallbackTitle={item.title}
+            fallbackUrl={item.url}
+          />
 
           <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} size="compact" />
         </div>
@@ -1147,15 +1125,6 @@ function NewsListRow({
   const isSpoiler = item.aiSpoilerWarning && !spoilerRevealed;
   const netVotes = ((item.upvotes ?? 0) - (item.downvotes ?? 0)) + userVote;
   const ago = relativeAgo(item.publishedAt);
-
-  function handleShare(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (navigator.share) {
-      navigator.share({ title: item.title, url: item.url }).catch(() => {});
-    } else {
-      navigator.clipboard?.writeText(item.url).catch(() => {});
-    }
-  }
 
   function handleVote(e: React.MouseEvent, dir: 1 | -1) {
     e.stopPropagation();
@@ -1238,29 +1207,12 @@ function NewsListRow({
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
-        <button
-          type="button"
-          onClick={handleShare}
-          aria-label="Share article"
-          title="Share article"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: islandTheme.color.textMuted,
-            cursor: "pointer",
-            padding: "2px 3px",
-            borderRadius: 6,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            font: "inherit",
-            transition: `color ${islandTheme.motion.dur.fast} ease`
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = islandTheme.color.textSubtle; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = islandTheme.color.textMuted; }}
-        >
-          <ShareIcon />
-        </button>
+        <SharePopover
+          contentType="news_item"
+          contentId={item.id}
+          fallbackTitle={item.title}
+          fallbackUrl={item.url}
+        />
         <VoteControls userVote={userVote} netVotes={netVotes} onVote={handleVote} size="compact" />
       </div>
     </article>
@@ -1586,7 +1538,7 @@ function NewsArticleModal({
           </span>
         </div>
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16, alignItems: "center" }}>
           <button
             type="button"
             onClick={() => void loadSimilar()}
@@ -1605,6 +1557,14 @@ function NewsArticleModal({
           >
             {similarBusy ? "Finding similar…" : "More like this"}
           </button>
+          <SharePopover
+            contentType="news_item"
+            contentId={item.id}
+            fallbackTitle={item.title}
+            fallbackUrl={item.url}
+            variant="label"
+            align="left"
+          />
           {item.sourceName ? (
             <button
               type="button"
@@ -1816,16 +1776,6 @@ function SpoilerBlock({ onReveal }: { onReveal: (e: React.MouseEvent) => void })
 }
 
 // ── Icons ─────────────────────────────────────────────────────────────────────
-
-function ShareIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M8 1v9" />
-      <polyline points="5 4 8 1 11 4" />
-      <path d="M2 9v5h12V9" />
-    </svg>
-  );
-}
 
 function ThumbUpIcon() {
   return (

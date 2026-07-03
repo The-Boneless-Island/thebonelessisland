@@ -9,6 +9,7 @@ import { ActionCard, IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, Pr
 import { NuggieShowcase } from "../components/NuggieShowcase.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
 import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
+import { SharePopover } from "../components/SharePopover.js";
 import { islandTheme } from "../theme.js";
 import { GameCover, steamArt } from "../steamArt.js";
 import { useRefetchActivity } from "../system/activityContext.js";
@@ -2123,22 +2124,25 @@ function ActivityRow({
           {rendered.metaText}
         </div>
       </div>
-      <span
-        aria-hidden="true"
+      <div
+        onClick={(e) => e.stopPropagation()}
         style={{
           width: 28,
           height: 28,
           borderRadius: 999,
           border: `1px solid ${islandTheme.color.cardBorder}`,
-          color: islandTheme.color.textMuted,
-          fontSize: 14,
           display: "flex",
           alignItems: "center",
           justifyContent: "center"
         }}
       >
-        ···
-      </span>
+        <SharePopover
+          contentType="activity_event"
+          contentId={Number(event.id)}
+          fallbackTitle="Boneless Island activity"
+          fallbackUrl={href ? `${window.location.origin}${href}` : window.location.origin}
+        />
+      </div>
     </div>
   );
 }

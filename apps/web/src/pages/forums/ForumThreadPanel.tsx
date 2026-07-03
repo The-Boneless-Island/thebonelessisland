@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { apiFetch } from "../../api/client.js";
+import { SharePopover } from "../../components/SharePopover.js";
 import { IslandButton, IslandCard, IslandTag } from "../../islandUi.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 import { islandTheme } from "../../theme.js";
@@ -328,10 +329,17 @@ export function ForumThreadPanel({
               {thread.game ? <GameChip game={thread.game} /> : null}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <ModButton onClick={toggleSubscribe}>
               {thread.subscribed ? "🔔 Following" : "🔕 Follow"}
             </ModButton>
+            <SharePopover
+              contentType="forum_thread"
+              contentId={threadId}
+              fallbackTitle={thread.title}
+              fallbackUrl={`${window.location.origin}/forums/thread/${threadId}`}
+              variant="label"
+            />
             {isAdmin ? (
               <>
                 <ModButton onClick={() => modAction("isPinned", !thread.isPinned)}>
@@ -568,6 +576,14 @@ function PostCard({
               {!isOwner ? (
                 <button type="button" className="island-btn" onClick={onReport} style={ghostBtn}>Report</button>
               ) : null}
+              <SharePopover
+                contentType="forum_post"
+                contentId={post.id}
+                fallbackTitle="Boneless Island forum post"
+                fallbackUrl={`${window.location.origin}/forums/thread/${post.threadId}/post/${post.id}`}
+                variant="label"
+                align="left"
+              />
             </div>
           ) : null}
         </div>
