@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
+import { describeActivityFeedEvent } from "@island/shared";
 import { apiFetch } from "../api/client.js";
 import { putClientState } from "../api/clientState.js";
 import { activityHref, pathForGame, pathForIslander } from "../lib/routes.js";
@@ -1427,16 +1428,29 @@ function describeEvent(event: ActivityEvent): ActivityRendered | null {
         )
       };
     }
-    default:
+    default: {
+      const copy = describeActivityFeedEvent({
+        eventType: event.eventType,
+        payload,
+        gameName: game?.name ?? null
+      });
       return {
-        icon: "✨",
+        icon: copy.emoji,
         metaText: ago,
         body: (
           <>
-            {actorNode} · {event.eventType}
+            {actorNode} {copy.action}
+            {copy.target ? (
+              <>
+                {" "}
+                <Target>{copy.target}</Target>
+              </>
+            ) : null}
+            .
           </>
         )
       };
+    }
   }
 }
 

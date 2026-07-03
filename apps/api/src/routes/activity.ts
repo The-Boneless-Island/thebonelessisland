@@ -89,7 +89,9 @@ const USER_ACTIVITY_EXCLUDE_SQL = `
   AND ae.event_type NOT IN (
     'nuggies.admin_adjustment',
     'nuggies.attendance_awarded',
-    'nuggies.shop_item_changed'
+    'nuggies.shop_item_changed',
+    'news.card_updated',
+    'news.card_archived'
   )
 `;
 

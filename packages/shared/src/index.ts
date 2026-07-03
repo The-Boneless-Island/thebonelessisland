@@ -34,6 +34,11 @@ export {
 } from "./nuggiesTransactionCopy.js";
 export { activityEventDetail, activityEventLabel } from "./activityEventCopy.js";
 export {
+  describeActivityFeedEvent,
+  type ActivityFeedCopy,
+  type ActivityFeedEventInput,
+} from "./activityFeedCopy.js";
+export {
   activityAuditDetailFields,
   activityAuditScope,
   activityAuditSummary,

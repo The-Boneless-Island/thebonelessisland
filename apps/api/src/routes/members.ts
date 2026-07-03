@@ -1,4 +1,5 @@
 import express from "express";
+import { describeActivityFeedEvent } from "@island/shared";
 import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { getGuildId } from "../lib/serverSettings.js";
@@ -531,62 +532,12 @@ function nuggieTierFor(lifetimeEarned: number): string | null {
   return tier;
 }
 
-// Short human summary for a recent activity event. No reusable server-side
-// helper exists (routes/activity.ts builds its label client-side), so map the
-// known event-type prefixes to a one-liner.
+// Short human summary for a recent activity event, built from the shared
+// activity-feed formatter (single source of truth also used by the web
+// Community feed and Home feed default arm).
 function summarizeEvent(eventType: string, payload: Record<string, unknown>): string {
-  const gameName = typeof payload.gameName === "string" ? payload.gameName : null;
-  const label = typeof payload.label === "string" ? payload.label : null;
-  if (eventType.startsWith("achievement.")) {
-    return label ? `Unlocked ${label}` : "Unlocked an achievement";
-  }
-  if (eventType.startsWith("milestone.")) {
-    return label ? `Reached ${label}` : "Reached a new milestone";
-  }
-  if (eventType === "game_night.game_picked") {
-    return gameName ? `Picked ${gameName} for game night` : "Picked a game for game night";
-  }
-  if (eventType.startsWith("game_night.")) {
-    return "Joined a game night";
-  }
-  if (eventType.startsWith("steam.")) {
-    return gameName ? `Played ${gameName}` : "Steam activity";
-  }
-  if (eventType.startsWith("news.")) {
-    return gameName ? `${gameName} news` : "Patch notes";
-  }
-  if (eventType === "forum_thread_created") {
-    const title = typeof payload.title === "string" ? payload.title : null;
-    return title ? `Posted "${title}"` : "Posted in the forums";
-  }
-  if (eventType === "forum_reply_created") {
-    const title = typeof payload.threadTitle === "string" ? payload.threadTitle : null;
-    return title ? `Replied to "${title}"` : "Replied in the forums";
-  }
-  if (eventType === "forum.reactions_milestone") {
-    const count = typeof payload.count === "number" ? payload.count : 0;
-    return `A post hit ${count} reactions`;
-  }
-  if (eventType === "member.joined") {
-    return "Joined the island 🌴";
-  }
-  if (eventType === "nuggies.daily_claimed") {
-    const amount = typeof payload.amount === "number" ? payload.amount : 0;
-    return `Claimed daily ₦${amount.toLocaleString()}`;
-  }
-  if (eventType === "casino.big_win") {
-    const net = typeof payload.net === "number" ? payload.net : 0;
-    return `Won big — +₦${net.toLocaleString()}`;
-  }
-  if (eventType === "nuggies.loan_accepted") {
-    const principal = typeof payload.principal === "number" ? payload.principal : 0;
-    return `Took a ₦${principal.toLocaleString()} loan`;
-  }
-  if (eventType === "nuggies.loan_repaid") {
-    const amount = typeof payload.amount === "number" ? payload.amount : 0;
-    return `Repaid a ₦${amount.toLocaleString()} loan`;
-  }
-  return "Activity on the island";
+  const copy = describeActivityFeedEvent({ eventType, payload });
+  return copy.target ? `${copy.action} ${copy.target}` : copy.action;
 }
 
 membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) => {
