@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch } from "../api/client.js";
+import { appQueryKeys } from "../lib/queryClient.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { IslandCard, IslandEmptyState, IslandSkeleton, IslandSkeletonCard } from "../islandUi.js";
 import { NuggieCoin } from "../components/NuggieCoin.js";
@@ -50,53 +52,67 @@ function relTime(iso: string | null): string {
   return `${Math.round(d / 30)}mo ago`;
 }
 
+async function fetchMe(): Promise<MeSnapshot | null> {
+  const res = await apiFetch("/nuggies/me");
+  if (!res.ok) return null;
+  const d = (await res.json()) as { balance: number; lifetimeEarned: number; optedOut: boolean };
+  return { balance: d.balance, lifetimeEarned: d.lifetimeEarned ?? 0, optedOut: d.optedOut };
+}
+
+async function fetchAchievements(): Promise<EarnedAchievement[] | null> {
+  const res = await apiFetch("/nuggies/achievements");
+  if (!res.ok) return null;
+  const d = (await res.json()) as { achievements: EarnedAchievement[] };
+  return d.achievements;
+}
+
 export function MilestonesPage() {
-  const [me, setMe] = useState<MeSnapshot | null>(null);
-  const [achievements, setAchievements] = useState<EarnedAchievement[] | null>(null);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [equipPending, setEquipPending] = useState<number | null>(null);
 
-  const load = useCallback(async () => {
-    const [meRes, achRes] = await Promise.all([
-      apiFetch("/nuggies/me"),
-      apiFetch("/nuggies/achievements"),
+  const meQuery = useQuery({
+    queryKey: appQueryKeys.nuggiesMe,
+    queryFn: fetchMe,
+    staleTime: 60_000,
+  });
+  const achievementsQuery = useQuery({
+    queryKey: appQueryKeys.nuggiesAchievements,
+    queryFn: fetchAchievements,
+    staleTime: 60_000,
+  });
+
+  const me = meQuery.data ?? null;
+  const achievements = achievementsQuery.data ?? null;
+  const loading = meQuery.isLoading || achievementsQuery.isLoading;
+
+  const refetch = useCallback(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: appQueryKeys.nuggiesMe }),
+      queryClient.invalidateQueries({ queryKey: appQueryKeys.nuggiesAchievements }),
     ]);
-    if (meRes.ok) {
-      const d = (await meRes.json()) as { balance: number; lifetimeEarned: number; optedOut: boolean };
-      setMe({ balance: d.balance, lifetimeEarned: d.lifetimeEarned ?? 0, optedOut: d.optedOut });
-    }
-    if (achRes.ok) {
-      const d = (await achRes.json()) as { achievements: EarnedAchievement[] };
-      setAchievements(d.achievements);
-    }
-    setLoading(false);
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     preloadAllRankBadges();
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
-
   // Live balance: refetch when the SSE bus reports this member's Nuggies changed.
   const nuggiesSignal = useNuggiesSignal();
   useEffect(() => {
-    if (nuggiesSignal > 0) void load();
-  }, [nuggiesSignal, load]);
+    if (nuggiesSignal > 0) void refetch();
+  }, [nuggiesSignal, refetch]);
 
   const handleEquipToggle = useCallback(async (itemId: number) => {
     setEquipPending(itemId);
     try {
       const res = await apiFetch(`/nuggies/inventory/${itemId}/equip`, { method: "POST" });
       if (res.ok) {
-        await load();
+        await refetch();
       }
     } finally {
       setEquipPending(null);
     }
-  }, [load]);
+  }, [refetch]);
 
   if (loading) {
     // Render the page silhouette immediately instead of blocking on a spinner.

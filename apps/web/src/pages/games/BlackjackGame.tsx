@@ -31,7 +31,14 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
   const balanceAvail = startBalance ?? 0;
   const validBet = Number.isInteger(bet) && bet >= 1 && bet <= Math.min(maxBet, balanceAvail);
 
-  // Poll for state changes while active (keeps in sync if user also has bot view)
+  // Poll for state changes while active (keeps in sync if user also has bot view).
+  // No document.visibilityState guard here on purpose: this interval only
+  // exists while `phase === "active"` (a hand is in progress, money on the
+  // table) — the effect's own early-return below already IS the "pause when
+  // no hand is active" behavior other pollers get from a visibility check.
+  // Skipping ticks on tab-hide would desync the balance/hand state from the
+  // bot view while a bet is live, which is the one case that must keep
+  // polling regardless of tab visibility.
   useEffect(() => {
     if (phase !== "active") return;
     let cancelled = false;

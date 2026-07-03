@@ -1,5 +1,7 @@
-import { memo, useEffect, useState } from "react";
+import { memo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client.js";
+import { appQueryKeys } from "../lib/queryClient.js";
 import { IslandCard, IslandTag } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type { PageId } from "../types.js";
@@ -68,49 +70,29 @@ function formatHours(minutes: number): string {
   return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
 }
 
-function TideCheckPageImpl({ onNavigate }: TideCheckPageProps) {
-  const [digest, setDigest] = useState<DigestPayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [empty, setEmpty] = useState(false);
-  const [errored, setErrored] = useState(false);
+// `null` is a legitimate "no digest yet" result (204, empty body, or literal
+// null JSON) — not an error. A non-ok response or a JSON parse failure throws
+// so react-query's error state maps to the "errored" UI branch below.
+async function fetchDigest(): Promise<DigestPayload | null> {
+  const res = await apiFetch("/digest/latest");
+  if (res.status === 204) return null;
+  if (!res.ok) throw new Error(`Digest load failed (${res.status})`);
+  const text = await res.text();
+  if (!text.trim()) return null;
+  const body = JSON.parse(text) as DigestPayload | null;
+  return body ?? null;
+}
 
-  useEffect(() => {
-    let active = true;
-    void (async () => {
-      try {
-        const res = await apiFetch("/digest/latest");
-        if (!active) return;
-        if (res.status === 204) {
-          setEmpty(true);
-          return;
-        }
-        if (!res.ok) {
-          setErrored(true);
-          return;
-        }
-        const text = await res.text();
-        if (!active) return;
-        if (!text.trim()) {
-          setEmpty(true);
-          return;
-        }
-        const body = JSON.parse(text) as DigestPayload | null;
-        if (!active) return;
-        if (!body) {
-          setEmpty(true);
-          return;
-        }
-        setDigest(body);
-      } catch {
-        if (active) setErrored(true);
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, []);
+function TideCheckPageImpl({ onNavigate }: TideCheckPageProps) {
+  const digestQuery = useQuery({
+    queryKey: appQueryKeys.digestLatest,
+    queryFn: fetchDigest,
+    staleTime: 60_000,
+  });
+  const digest = digestQuery.data ?? null;
+  const loading = digestQuery.isLoading;
+  const errored = digestQuery.isError;
+  const empty = !loading && !errored && !digest;
 
   return (
     <div style={{ display: "grid", gap: 18 }}>

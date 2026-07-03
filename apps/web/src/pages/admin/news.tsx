@@ -1624,7 +1624,10 @@ function NewsPipelineQueuePanel() {
         });
     };
     load();
-    const handle = window.setInterval(load, 8000);
+    const handle = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      load();
+    }, 8000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);
