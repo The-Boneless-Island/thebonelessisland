@@ -5,8 +5,9 @@ import rateLimit from "express-rate-limit";
 import { userOrIp } from "../middleware/rateLimit.js";
 import { z } from "zod";
 import { db } from "../db/client.js";
+import { env } from "../config.js";
 import { requireParentRole, requireSession } from "../lib/auth.js";
-import { ensureSettingsLoaded, getAISetting } from "../lib/serverSettings.js";
+import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
 import { getOrFetchLinkPreview } from "../lib/forumLinkPreview.js";
@@ -144,15 +145,51 @@ async function isParent(discordUserId: string): Promise<boolean> {
   return (r.rows[0]?.role_names ?? []).includes("Parent");
 }
 
-// The fixed reaction set. Stored verbatim in forum_post_reactions.reaction.
+// The legacy fixed reaction set. Stored verbatim in forum_post_reactions.reaction.
 // Legacy 'like' rows (pre-v2) are mapped to 'nug' at read time below until
-// migration 057 renames them in place.
+// migration 057 renames them in place. Kept as-is for backward compat with
+// existing rows and the quick-react row; WS6 additionally allows arbitrary
+// Unicode emoji and Discord custom-emoji references (see below).
 const REACTIONS = ["nug", "heart", "laugh", "fire", "salute"] as const;
-type ReactionKey = (typeof REACTIONS)[number];
 const REACTION_SET = new Set<string>(REACTIONS);
 
 // Normalize legacy 'like' → 'nug' in aggregations. Reused across queries.
 const REACTION_NORM = "CASE WHEN reaction = 'like' THEN 'nug' ELSE reaction END";
+
+// A single Unicode emoji grapheme — including multi-codepoint ZWJ sequences
+// and skin-tone modifiers — via the RGI_Emoji Unicode property escape (Node 20+,
+// requires the "v" regex flag). Anchored to match the *entire* string exactly
+// once, so "abc" or two emoji glued together are rejected.
+// Built via `new RegExp(...)` rather than a `/.../v` literal: the literal form
+// requires bumping the whole repo's tsconfig `target` to es2024 to typecheck,
+// which is out of scope here — the constructor form typechecks fine under the
+// current ES2022 target and the "v" flag works identically at runtime on Node 20+.
+const UNICODE_EMOJI_RE = new RegExp(String.raw`^\p{RGI_Emoji}$`, "v");
+// Defense-in-depth bound even though the regex above should already constrain
+// length — guards against a pathological/engine-specific edge case.
+const MAX_REACTION_LEN = 32;
+
+// Discord custom-emoji reference: lowercase "c:" prefix + a 17-20 digit snowflake.
+// Existence against guild_emojis is checked separately (needs a DB round-trip).
+const CUSTOM_EMOJI_RE = /^c:(\d{17,20})$/;
+
+// Cap on distinct reaction keys one user may place on a single post — prevents
+// one member spamming arbitrary emoji reactions onto a post.
+const MAX_REACTIONS_PER_USER_PER_POST = 8;
+
+/** True for the fixed legacy keys or a bare Unicode emoji grapheme (length-bounded). */
+function isSimpleReactionKey(value: string): boolean {
+  if (REACTION_SET.has(value)) return true;
+  if (value.length > MAX_REACTION_LEN) return false;
+  return UNICODE_EMOJI_RE.test(value);
+}
+
+/** Extracts the snowflake id from a "c:<id>" custom-emoji key, or null if not that shape. */
+function customEmojiId(value: string): string | null {
+  if (value.length > MAX_REACTION_LEN) return null;
+  const m = CUSTOM_EMOJI_RE.exec(value);
+  return m ? m[1] : null;
+}
 
 type UploadRow = { file_path: string; thumb_path: string; width: number; height: number };
 
@@ -715,6 +752,7 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
   }
 
   const poll = await fetchPoll(threadId, viewerUserId);
+  const customEmoji = await buildCustomEmojiMap(posts);
 
   const row = t.rows[0];
   res.json({
@@ -750,6 +788,7 @@ forumsRouter.get("/threads/:id", requireSession, async (req, res) => {
         : null,
     },
     posts: posts.map((pr) => serializePost(pr, baseUrl)),
+    customEmoji,
   });
 });
 
@@ -1003,17 +1042,137 @@ forumsRouter.delete("/posts/:id", requireSession, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── GET /forums/emojis ──────────────────────────────────────────────────────
+// Discord guild custom emoji, cached in guild_emojis and lazily refreshed (see
+// syncGuildEmojisIfStale below). Powers the web reaction picker's "Island" tab.
+
+const GUILD_EMOJI_SYNC_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
+let guildEmojiSyncInFlight: Promise<void> | null = null;
+
+type DiscordGuildEmoji = { id: string | null; name: string | null; animated?: boolean; available?: boolean };
+
+/** Calls Discord REST to list guild emojis with the bot token and upserts guild_emojis.
+ *  Same direct-fetch pattern as members.ts syncGuildMembersInternal. Previously-known
+ *  emoji missing from the fresh response are marked available = false (not deleted),
+ *  so historical reactions referencing a since-removed emoji can still be looked up. */
+async function syncGuildEmojis(): Promise<void> {
+  const guildId = getGuildId();
+  if (!guildId || !env.DISCORD_BOT_TOKEN) return;
+
+  const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}/emojis`, {
+    headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` }
+  });
+  if (!response.ok) return;
+
+  const data = (await response.json().catch(() => null)) as DiscordGuildEmoji[] | null;
+  if (!Array.isArray(data)) return;
+
+  const fresh = data.filter((e): e is DiscordGuildEmoji & { id: string; name: string } => !!e.id && !!e.name);
+  const freshIds = fresh.map((e) => e.id);
+
+  for (const e of fresh) {
+    await db.query(
+      `INSERT INTO guild_emojis (id, name, animated, available, synced_at)
+       VALUES ($1, $2, $3, TRUE, NOW())
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, animated = EXCLUDED.animated,
+         available = TRUE, synced_at = NOW()`,
+      [e.id, e.name, e.animated === true]
+    );
+  }
+  await db.query(
+    `UPDATE guild_emojis SET available = FALSE, synced_at = NOW()
+     WHERE available = TRUE AND NOT (id = ANY($1::text[]))`,
+    [freshIds]
+  );
+}
+
+/** Lazy refresh-on-read with a cooldown: syncs at most once per GUILD_EMOJI_SYNC_COOLDOWN_MS,
+ *  and de-dupes concurrent callers onto a single in-flight sync. Never throws — a sync
+ *  failure just means the cached rows are served stale. */
+async function syncGuildEmojisIfStale(): Promise<void> {
+  if (guildEmojiSyncInFlight) { await guildEmojiSyncInFlight; return; }
+  const r = await db.query<{ synced_at: string }>(
+    "SELECT MAX(synced_at) AS synced_at FROM guild_emojis"
+  );
+  const lastSync = r.rows[0]?.synced_at ? new Date(r.rows[0].synced_at).getTime() : 0;
+  if (Date.now() - lastSync < GUILD_EMOJI_SYNC_COOLDOWN_MS) return;
+
+  guildEmojiSyncInFlight = syncGuildEmojis().catch(() => undefined);
+  try {
+    await guildEmojiSyncInFlight;
+  } finally {
+    guildEmojiSyncInFlight = null;
+  }
+}
+
+type GuildEmojiRow = { id: string; name: string; animated: boolean };
+
+function guildEmojiCdnUrl(row: GuildEmojiRow): string {
+  const ext = row.animated ? "gif" : "webp";
+  return `https://cdn.discordapp.com/emojis/${row.id}.${ext}?size=48`;
+}
+
+forumsRouter.get("/emojis", requireSession, async (_req, res) => {
+  await syncGuildEmojisIfStale();
+  const r = await db.query<GuildEmojiRow>(
+    "SELECT id, name, animated FROM guild_emojis WHERE available = TRUE ORDER BY name ASC"
+  );
+  res.json({
+    emojis: r.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      animated: row.animated,
+      url: guildEmojiCdnUrl(row)
+    }))
+  });
+});
+
+/** Builds the {"c:<id>": {id, name, url, animated}} lookup map for the distinct
+ *  custom-emoji-prefixed reaction keys present in a set of posts, so the client
+ *  can render them without a second round-trip. */
+async function buildCustomEmojiMap(posts: PostRow[]): Promise<Record<string, { id: string; name: string; url: string; animated: boolean }>> {
+  const ids = new Set<string>();
+  for (const p of posts) {
+    for (const key of Object.keys(p.reactions ?? {})) {
+      const id = customEmojiId(key);
+      if (id) ids.add(id);
+    }
+    for (const key of p.my_reactions ?? []) {
+      const id = customEmojiId(key);
+      if (id) ids.add(id);
+    }
+  }
+  if (ids.size === 0) return {};
+  const r = await db.query<GuildEmojiRow>(
+    "SELECT id, name, animated FROM guild_emojis WHERE id = ANY($1::text[])",
+    [[...ids]]
+  );
+  const out: Record<string, { id: string; name: string; url: string; animated: boolean }> = {};
+  for (const row of r.rows) {
+    out[`c:${row.id}`] = { id: row.id, name: row.name, url: guildEmojiCdnUrl(row), animated: row.animated };
+  }
+  return out;
+}
+
 // ── POST /forums/posts/:id/react ───────────────────────────────────────────
 
-const reactSchema = z.object({ reaction: z.enum(REACTIONS).optional() });
+const reactSchema = z.object({ reaction: z.string().min(1).max(MAX_REACTION_LEN).optional() });
 
 forumsRouter.post("/posts/:id/react", requireSession, async (req, res) => {
   const postId = parseInt(String(req.params.id), 10);
   const parsed = reactSchema.safeParse(req.body ?? {});
   if (!parsed.success) { res.status(400).json({ error: "Invalid reaction" }); return; }
   // Default to 'nug' so a bare POST (legacy client) still toggles the primary.
-  const reaction: ReactionKey = parsed.data.reaction ?? "nug";
-  if (!REACTION_SET.has(reaction)) { res.status(400).json({ error: "Invalid reaction" }); return; }
+  const reaction: string = parsed.data.reaction ?? "nug";
+
+  const customId = customEmojiId(reaction);
+  if (customId) {
+    const known = await db.query("SELECT 1 FROM guild_emojis WHERE id = $1", [customId]);
+    if (known.rows.length === 0) { res.status(400).json({ error: "Unknown custom emoji" }); return; }
+  } else if (!isSimpleReactionKey(reaction)) {
+    res.status(400).json({ error: "Invalid reaction" });
+    return;
+  }
 
   const discordUserId = String(res.locals.userId);
   const userId = await resolveInternalId(discordUserId);
@@ -1037,6 +1196,19 @@ forumsRouter.post("/posts/:id/react", requireSession, async (req, res) => {
     res.json({ reacted: false, reaction });
     return;
   }
+
+  // Cap distinct reaction keys per user per post — prevents one member spamming
+  // arbitrary emoji reactions onto a single post.
+  const distinctCount = await db.query<{ c: string }>(
+    `SELECT COUNT(DISTINCT (${REACTION_NORM}))::text AS c
+     FROM forum_post_reactions WHERE post_id = $1 AND user_id = $2`,
+    [postId, userId]
+  );
+  if (parseInt(distinctCount.rows[0]?.c ?? "0", 10) >= MAX_REACTIONS_PER_USER_PER_POST) {
+    res.status(409).json({ error: `Max ${MAX_REACTIONS_PER_USER_PER_POST} reactions per post` });
+    return;
+  }
+
   await db.query(
     `INSERT INTO forum_post_reactions (post_id, user_id, reaction) VALUES ($1, $2, $3)
      ON CONFLICT DO NOTHING`,
