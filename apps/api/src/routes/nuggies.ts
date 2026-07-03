@@ -1477,8 +1477,11 @@ nuggiesRouter.post("/admin/grant", requireSession, requireParentRole, async (req
       payload: { amount, reason },
     });
 
-    // NERFED earned title — fires on any admin grant or deduct.
-    void checkNerfed(toDiscordUserId);
+    // NERFED earned title — fires only on deductions (a member who was just
+    // GIVEN Nuggies should never get loss-flavored announcement copy).
+    if (amount < 0) {
+      void checkNerfed(toDiscordUserId);
+    }
 
     res.json({ ok: true, newBalance });
   } catch (err) {

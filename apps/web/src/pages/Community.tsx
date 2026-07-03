@@ -1,10 +1,13 @@
 import { useState, useEffect, memo } from "react";
 import { Link, useNavigate } from "react-router";
+import { describeActivityFeedEvent } from "@island/shared";
 import { apiFetch } from "../api/client.js";
-import { IslandCard, IslandSkeletonRow, accentHex, islandTagStyle } from "../islandUi.js";
+import { IslandCard, IslandSkeletonRow, bannerBackground, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
+import { SharePopover } from "../components/SharePopover.js";
 import { islandTheme } from "../theme.js";
 import { activityHref, pathForIslander } from "../lib/routes.js";
+import { presenceTextOf, statusOf } from "../lib/presence.js";
 import type { ActivityActor, ActivityEvent, GameNight, GuildMember, NuggiesLeaderboardEntry, PageId } from "../types.js";
 
 type CommunityPageProps = {
@@ -89,23 +92,6 @@ function Hero() {
   );
 }
 
-function memberStatus(m: GuildMember): { label: string; color: string } {
-  if (m.inVoice) return { label: "live", color: islandTheme.color.dangerAccent };
-  if (m.presenceStatus === "online") return { label: "online", color: islandTheme.color.successAccent };
-  if (m.presenceStatus === "idle") return { label: "idle", color: islandTheme.palette.sandWarmAccent };
-  if (m.presenceStatus === "dnd") return { label: "dnd", color: islandTheme.color.dangerAccent };
-  return { label: "offline", color: islandTheme.color.textMuted };
-}
-
-function memberPresenceText(m: GuildMember): string {
-  if (m.richPresenceText) return m.richPresenceText;
-  if (m.inVoice) return "In voice";
-  if (m.presenceStatus === "online") return "Online";
-  if (m.presenceStatus === "idle") return "Idle";
-  if (m.presenceStatus === "dnd") return "Do not disturb";
-  return "Offline";
-}
-
 function CrewCarousel({
   members,
   isAdmin,
@@ -161,16 +147,11 @@ function CrewCard({
   onNavigate: (page: PageId) => void;
   openProfile: (discordUserId: string) => void;
 }) {
-  const status = memberStatus(member);
+  const status = statusOf(member);
   const color = communityColorFor(member.discordUserId);
   // Real Discord banner > accent-color gradient > hashed-color gradient. The
   // banner makes member cards personal instead of eight identical tints.
-  const accent = accentHex(member.accentColor);
-  const bannerBackground = member.bannerUrl
-    ? `url("${member.bannerUrl}") center/cover`
-    : accent
-      ? `linear-gradient(135deg, ${accent}88, ${islandTheme.color.panelMutedBg})`
-      : `linear-gradient(135deg, ${color}55, ${islandTheme.color.panelMutedBg})`;
+  const banner = bannerBackground(member.bannerUrl, member.accentColor, member.discordUserId);
   return (
     <article
       style={{
@@ -185,7 +166,7 @@ function CrewCard({
         border: `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
-      <div style={{ height: 90, background: bannerBackground, position: "relative" }}>
+      <div style={{ height: 90, background: banner, position: "relative" }}>
         <span
           className="island-mono"
           style={{
@@ -239,7 +220,7 @@ function CrewCard({
           className="island-mono"
           style={{ fontSize: 12, color: islandTheme.color.primaryGlow, marginTop: 4 }}
         >
-          {memberPresenceText(member)}
+          {presenceTextOf(member)}
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
           {isAdmin ? (
@@ -341,114 +322,20 @@ function communityRelativeAgo(iso: string): string {
   return `${Math.round(days / 30)}mo ago`;
 }
 
-type CommunityActivityCopy = { action: string; target: string; detail: string };
-
-function communityCasinoLabel(game: string): string {
-  switch (game) {
-    case "coinflip":
-      return "Coinflip";
-    case "blackjack":
-      return "Blackjack";
-    case "guessnumber":
-      return "Guess the Number";
-    default:
-      return game;
-  }
-}
+type CommunityActivityCopy = { emoji: string; action: string; target: string; detail: string };
 
 function describeCommunityEvent(event: ActivityEvent): CommunityActivityCopy {
-  const payload = event.payload as Record<string, unknown>;
-  const gameName = event.game?.name ?? null;
-  switch (event.eventType) {
-    case "game_night.created":
-      return {
-        action: "scheduled",
-        target: typeof payload.title === "string" ? payload.title : "a game night",
-        detail: "Hosting the next session"
-      };
-    case "game_night.rsvp_joined":
-      return { action: "RSVP'd to", target: "the next game night", detail: "On the invite list" };
-    case "game_night.rsvp_left":
-      return { action: "stepped away from", target: "the next game night", detail: "Off the dock for now" };
-    case "game_night.game_picked":
-      return { action: "picked", target: gameName ?? "a game", detail: "Locked in for the next session" };
-    case "achievement.steam_progress": {
-      const delta = typeof payload.unlockedDelta === "number" ? payload.unlockedDelta : 0;
-      const game = typeof payload.gameName === "string" ? payload.gameName : gameName ?? "a game";
-      return {
-        action: "unlocked",
-        target: `${delta} achievement${delta === 1 ? "" : "s"} in ${game}`,
-        detail: "Steam progress on the island"
-      };
-    }
-    case "steam.linked":
-      return { action: "linked", target: "their Steam account", detail: "Library now visible to the crew" };
-    case "steam.unlinked":
-      return { action: "unlinked", target: "their Steam account", detail: "Library hidden from the crew" };
-    case "steam.synced": {
-      const synced = typeof payload.syncedGames === "number" ? payload.syncedGames : 0;
-      return {
-        action: "resynced",
-        target: "their library",
-        detail: `${synced} game${synced === 1 ? "" : "s"} on the boat`
-      };
-    }
-    case "forum_thread_created":
-      return {
-        action: "posted",
-        target: typeof payload.title === "string" ? payload.title : "in the forums",
-        detail: "Forum post"
-      };
-    case "forum_reply_created":
-      return {
-        action: "replied to",
-        target: typeof payload.threadTitle === "string" ? payload.threadTitle : "a thread",
-        detail: "Forum reply"
-      };
-    case "news.card_published":
-      return {
-        action: "posted",
-        target: typeof payload.title === "string" ? payload.title : "an update",
-        detail: "Drift log"
-      };
-    case "forum.reactions_milestone": {
-      const count = typeof payload.count === "number" ? payload.count : 0;
-      return {
-        action: "earned",
-        target: `${count} reactions`,
-        detail: typeof payload.threadTitle === "string" ? payload.threadTitle : "A popular post"
-      };
-    }
-    case "member.joined":
-      return { action: "joined", target: "the crew", detail: "New islander 🌴 — welcome aboard" };
-    case "nuggies.daily_claimed": {
-      const amount = typeof payload.amount === "number" ? payload.amount : 0;
-      return { action: "claimed their daily", target: `₦${amount.toLocaleString()}`, detail: "Daily Nuggies" };
-    }
-    case "casino.big_win": {
-      const net = typeof payload.net === "number" ? payload.net : 0;
-      const g = typeof payload.game === "string" ? payload.game : "the casino";
-      return { action: "won big at", target: communityCasinoLabel(g), detail: `+₦${net.toLocaleString()}` };
-    }
-    case "nuggies.loan_accepted": {
-      const principal = typeof payload.principal === "number" ? payload.principal : 0;
-      return { action: "took a loan of", target: `₦${principal.toLocaleString()}`, detail: "Loan accepted" };
-    }
-    case "nuggies.loan_repaid": {
-      const amount = typeof payload.amount === "number" ? payload.amount : 0;
-      return { action: "repaid", target: `₦${amount.toLocaleString()}`, detail: "Loan repaid" };
-    }
-    case "nuggies.admin_adjustment": {
-      const amount = typeof payload.amount === "number" ? payload.amount : 0;
-      return {
-        action: "received a crew adjustment of",
-        target: `₦${Math.abs(amount).toLocaleString()}`,
-        detail: typeof payload.reason === "string" ? payload.reason : "Admin adjustment",
-      };
-    }
-    default:
-      return { action: "fired", target: event.eventType, detail: "Crew activity" };
-  }
+  const copy = describeActivityFeedEvent({
+    eventType: event.eventType,
+    payload: event.payload as Record<string, unknown>,
+    gameName: event.game?.name ?? null
+  });
+  return {
+    emoji: copy.emoji,
+    action: copy.action,
+    target: copy.target ?? "the island",
+    detail: copy.detail ?? "Crew activity"
+  };
 }
 
 function ActivitySection({ events }: { events: ActivityEvent[] }) {
@@ -516,6 +403,31 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
       {avatar ? null : communityInitialsFor(actorName)}
     </div>
   );
+  const avatarWithAccent = (
+    <div style={{ position: "relative", width: 36, height: 36 }}>
+      {avatarCircle}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          bottom: -4,
+          right: -4,
+          width: 18,
+          height: 18,
+          borderRadius: 999,
+          background: islandTheme.color.panelBg,
+          border: `1px solid ${islandTheme.color.cardBorder}`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: 11,
+          lineHeight: 1
+        }}
+      >
+        {copy.emoji}
+      </div>
+    </div>
+  );
   return (
     <div
       onClick={href ? () => navigate(href) : undefined}
@@ -553,10 +465,10 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
           aria-label={`${actorName} profile`}
           style={{ display: "block", borderRadius: 999, textDecoration: "none" }}
         >
-          {avatarCircle}
+          {avatarWithAccent}
         </Link>
       ) : (
-        avatarCircle
+        avatarWithAccent
       )}
       <div>
         <div style={{ fontSize: 14 }}>
@@ -564,8 +476,18 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
         </div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>{copy.detail}</div>
       </div>
-      <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-        {ago}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+          {ago}
+        </span>
+        <div onClick={(e) => e.stopPropagation()}>
+          <SharePopover
+            contentType="activity_event"
+            contentId={Number(event.id)}
+            fallbackTitle="Boneless Island activity"
+            fallbackUrl={href ? `${window.location.origin}${href}` : window.location.origin}
+          />
+        </div>
       </div>
     </div>
   );

@@ -713,6 +713,17 @@ const RAW: SettingMeta[] = [
     dangerLevel: "low",
     domain: "people",
     type: "string"
+  },
+  {
+    key: "share_enabled",
+    label: "Sharing: enabled",
+    description: "Turn off the share-to-Discord feature sitewide.",
+    whenToChange: "Toggle off to instantly disable the \"send to a Discord channel\" share picker across the site (news, forum posts, activity feed). Members fall back to the browser share sheet / copy-link.",
+    ifWrong: "Members lose the in-app Discord share picker until re-enabled. No data loss — just a missing feature.",
+    tags: ["share", "discord", "channel", "toggle", "kill", "switch"],
+    dangerLevel: "low",
+    domain: "people",
+    type: "boolean"
   }
 ];
 

@@ -1,128 +1,26 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 import { apiFetch } from "../api/client.js";
-import { IslandTag, SpecStrip, memberColor, type SpecItem } from "../islandUi.js";
+import { IslandTag, SpecStrip, memberColor } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { GameCover } from "../steamArt.js";
 import { useModalFocus } from "../hooks/useModalFocus.js";
-
-type GameStore = {
-  isSinglePlayer: boolean;
-  isOnlineCoop: boolean;
-  isLanCoop: boolean;
-  isSharedSplitCoop: boolean;
-  isOnlinePvp: boolean;
-  isMmo: boolean;
-  mpMaxPlayersApprox: number | null;
-  priceInitialCents: number | null;
-  priceFinalCents: number | null;
-  priceDiscountPct: number | null;
-  isFree: boolean;
-  releaseComingSoon: boolean;
-  releaseDateText: string | null;
-  shortDescription: string | null;
-  screenshots: Array<{ thumb: string; full: string }>;
-  metacriticScore: number | null;
-  metacriticUrl: string | null;
-  platformWindows: boolean | null;
-  platformMac: boolean | null;
-  platformLinux: boolean | null;
-  controllerSupport: string | null;
-  historicalLowCents: number | null;
-};
-
-type CatalogueAchievement = {
-  displayName: string | null;
-  description: string | null;
-  iconUrl: string | null;
-  globalUnlockPct: number | null;
-};
-
-type GameOwner = {
-  discordUserId: string;
-  displayName: string;
-  avatarUrl: string | null;
-  playtimeForever: number;
-  playtime2Weeks: number;
-};
-
-type GameAchievement = {
-  displayName: string;
-  unlocked: number;
-  total: number;
-  completionPct: number;
-};
-
-type GameNews = {
-  title: string;
-  url: string;
-  publishedAt: string;
-};
-
-type GameDetail = {
-  appId: number;
-  name: string;
-  headerImageUrl: string | null;
-  store: GameStore;
-  achievementCatalogue: CatalogueAchievement[];
-  owners: GameOwner[];
-  achievements: GameAchievement[];
-  news: GameNews[];
-};
+import {
+  capabilitySpecItems,
+  clampPct,
+  formatHours,
+  formatNewsDate,
+  formatPrice,
+  memberInitials,
+  metacriticColor,
+  type GameDetail
+} from "../lib/gameDetail.js";
+import { pathForGamePage } from "../lib/routes.js";
 
 type GameDetailDrawerProps = {
   appId: number | null;
   onClose: () => void;
 };
-
-function clampPct(value: number): number {
-  const num = typeof value === "string" ? Number(value) : value;
-  if (!Number.isFinite(num)) return 0;
-  return Math.max(0, Math.min(100, Math.round(num)));
-}
-
-function formatHours(minutes: number): string {
-  if (!Number.isFinite(minutes) || minutes <= 0) return "0h";
-  const hours = minutes / 60;
-  if (hours < 1) return `${Math.round(minutes)}m`;
-  return `${Math.round(hours).toLocaleString()}h`;
-}
-
-function formatPrice(store: GameStore): string {
-  if (store.isFree) return "Free";
-  if (typeof store.priceFinalCents !== "number") return "—";
-  return `$${(store.priceFinalCents / 100).toFixed(2)}`;
-}
-
-function formatNewsDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function metacriticColor(score: number): string {
-  if (score >= 75) return "#a3e635"; // green
-  if (score >= 50) return "#fde047"; // yellow
-  return "#fb7185"; // red
-}
-
-
-function memberInitials(name: string): string {
-  return (name || "??").trim().slice(0, 2).toUpperCase();
-}
-
-function capabilitySpecItems(store: GameStore): SpecItem[] {
-  const items: SpecItem[] = [];
-  if (store.isSinglePlayer) items.push({ icon: "single", label: "Single-player", color: "#2dd4bf" });
-  if (store.isOnlineCoop) items.push({ icon: "coop", label: "Online co-op", color: "#a3e635" });
-  if (store.isLanCoop) items.push({ icon: "coop", label: "LAN co-op", color: "#a3e635" });
-  if (store.isSharedSplitCoop) items.push({ icon: "split", label: "Split-screen", color: "#ffd166" });
-  if (store.isOnlinePvp) items.push({ icon: "pvp", label: "PvP", color: "#ff7a59" });
-  if (store.isMmo) items.push({ icon: "players", label: "MMO", color: "#f472b6" });
-  if (typeof store.mpMaxPlayersApprox === "number" && store.mpMaxPlayersApprox > 1) {
-    items.push({ icon: "players", label: `Up to ${store.mpMaxPlayersApprox}`, color: "#a78bfa" });
-  }
-  return items;
-}
 
 export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerProps) {
   const [detail, setDetail] = useState<GameDetail | null>(null);
@@ -254,6 +152,26 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
         >
           ✕
         </button>
+
+        {appId !== null ? (
+          <Link
+            to={pathForGamePage(appId)}
+            className="island-mono"
+            style={{
+              position: "absolute",
+              top: 12,
+              left: 18,
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.06em",
+              color: islandTheme.color.primaryGlow,
+              textDecoration: "none"
+            }}
+          >
+            Full page ↗
+          </Link>
+        ) : null}
 
         {loading ? (
           <div style={{ padding: "60px 12px", textAlign: "center", color: islandTheme.color.textMuted }}>

@@ -1011,6 +1011,21 @@ type GamePatchPayload = {
   roleIds: string[];
 };
 
+type MemberSharePayload = {
+  channelId: string;
+  sharedBy: {
+    discordUserId: string;
+    displayName: string;
+    avatarUrl: string | null;
+  };
+  contentType: "forum_thread" | "forum_post" | "news_item" | "activity_event";
+  title: string;
+  description: string;
+  imageUrl?: string;
+  deepLink: string;
+  sourceLabel: string;
+};
+
 function buildOfficialAnnouncementEmbed(payload: Pick<OfficialAnnouncementPayload, "title" | "bodyPreview" | "authorName" | "threadUrl">) {
   return new EmbedBuilder()
     .setColor(0xf59e0b)
@@ -1106,6 +1121,35 @@ async function processGamePatch(payload: GamePatchPayload): Promise<void> {
   }
 }
 
+// Member-attributed courier message — NOT the Nuggie persona. Credits the
+// sharing member (author block + avatar), not the bot mascot. Guards throw
+// (rather than silently no-op like the other handlers above) so a bad/
+// deleted channel or a channel outside the configured guild marks this
+// row's delivery attempt failed and the outbox retries/dead-letters it —
+// see the attempts/last_error contract in processPendingAnnouncements.
+async function processMemberShare(payload: MemberSharePayload): Promise<void> {
+  const channel = await client.channels.fetch(payload.channelId);
+  if (!channel?.isSendable()) {
+    throw new Error(`Share target channel ${payload.channelId} is not sendable`);
+  }
+  if ("guildId" in channel && guildId && channel.guildId !== guildId) {
+    throw new Error(`Share target channel ${payload.channelId} is outside the configured guild`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setAuthor({
+      name: `${payload.sharedBy.displayName} shared from the island`,
+      iconURL: payload.sharedBy.avatarUrl ?? undefined
+    })
+    .setTitle(payload.title.slice(0, 256))
+    .setURL(payload.deepLink)
+    .setDescription(payload.description.slice(0, 1000))
+    .setFooter({ text: "bonelessisland.com" });
+  if (payload.imageUrl) embed.setImage(payload.imageUrl);
+
+  await channel.send({ embeds: [embed] });
+}
+
 async function processTideWeekly(payload: TideWeeklyPayload): Promise<void> {
   // The API already built the markdown summary; post it verbatim to the
   // milestone channel (reuse milestone_channel_id like achievement/milestone
@@ -1134,14 +1178,26 @@ async function processAchievementUnlocked(payload: AchievementUnlockedPayload): 
   if (!channelId) return;
 
   const { ok, data } = await internalApi("GET", `/internal/achievement-variants/${encodeURIComponent(payload.key)}`);
-  let text: string;
+  let flavorText: string | null = null;
   if (ok && data && typeof data === "object" && "text" in data) {
-    text = String((data as { text: string }).text);
-  } else {
-    // Fallback for keys without seeded variants — keeps the channel alive
-    // even if a new achievement is added without variant data yet.
-    text = `{{user}} unlocked ${payload.emoji} ${payload.name}`;
+    flavorText = String((data as { text: string }).text);
   }
+
+  // Guard against undefined/malformed name on very old pre-migration-044
+  // rows: fall back to a title-cased rendering of the raw key.
+  const displayName =
+    payload.name && payload.name.trim().length > 0
+      ? payload.name
+      : String(payload.key ?? "").replace(/_/g, " ").toUpperCase();
+  const emoji = payload.emoji || "✨";
+
+  // Always compose the final message ourselves so the achievement name is
+  // guaranteed regardless of whether the seeded flavor text happens to
+  // mention it — roughly half of the seeded variants (migration 044) do
+  // not, which previously produced nameless-looking announcements.
+  const prefix = `${emoji} **${displayName}** unlocked — `;
+  const body = flavorText ?? `{{user}} earned it.`;
+  const text = `${prefix}${body}`;
   const rendered = text.replace(/\{\{user\}\}/g, `<@${payload.discordUserId}>`);
 
   try {
@@ -1329,6 +1385,8 @@ async function processPendingAnnouncements(): Promise<void> {
           await processOfficialAnnouncementUpdated(row.payload as OfficialAnnouncementUpdatedPayload);
         } else if (row.kind === "game.patch") {
           await processGamePatch(row.payload as GamePatchPayload);
+        } else if (row.kind === "member.share") {
+          await processMemberShare(row.payload as MemberSharePayload);
         }
         await ackAnnouncement(row.id, true);
       } catch (err) {

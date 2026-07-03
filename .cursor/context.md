@@ -48,7 +48,7 @@ IDENTITY PHILOSOPHY:
 INFORMATION ARCHITECTURE (current):
 Top nav: a MegaMenu (`MegaMenu.tsx`) with three hover-expand groups — **Games** (Library, Gaming News), **Community** (Members, Sunday Tide Check, Forums, Leaderboard, Crew Achievements), **Nuggies** (Balance & Shop, The Arcade, History, Milestones) — plus an **Admin** link gated to the "Parent" role. There is no "Home" nav item: Home is the root route (`/`), reached via the brand logo. "Crew Achievements" lives nested under Community (route `/achievements`); the Nuggies economy is its own group (route `/nuggies`). Page↔path map lives in `apps/web/src/lib/routes.ts`.
 Topbar uses `position: fixed` (not sticky) so it stays locked to the viewport during overscroll/rubber-band. A 62px spacer div in App.tsx compensates for the removed document-flow space.
-User menu (avatar dropdown): Discord profile + rich presence (Discord activity → Steam in-game → legacy voice text → hidden when null; composed in `/profile/me` via `composePresenceText()` in `lib/presence.ts`) + Steam-linked dot + theme toggle (Day/Night) + Profile + Sign out.
+User menu (avatar dropdown): banner-then-accent-gradient-then-hashed header (`bannerBackground()` in `islandUi.tsx`) + full online/idle/dnd/in-voice/offline status dot (`statusOf()` in `web/src/lib/presence.ts`, shared with the Community crew card) sourced from `selfMember` — the caller's own row in the already-polled `GET /members` list threaded down App.tsx → Topbar → UserMenu, not the once-at-boot `/profile/me` — plus Booster chip + up to 3 role pills + rich presence (Discord activity → Steam in-game → legacy voice text → hidden when null; composed in `/profile/me` via `composePresenceText()` in `apps/api/src/lib/presence.ts`) + Steam-linked dot + theme toggle (Day/Night) + Profile + "View islander card" (own crew-facing profile) + Sign out.
 Sub-pages: Games → Library + Gaming News; Nuggies group → economy page (fully live); Community group → Members, Forums, Leaderboard, Crew Achievements, Sunday Tide Check; Admin → persistent-sidebar operations pages.
 Admin: rebuilt (2026-06) as a persistent left sidebar over 18 deep-linkable `/admin/*` pages (registry in `apps/web/src/pages/admin/adminNav.ts`): dashboard, members, forums, library, game-nights, recommender, news, patch-sources, drift-log, economy, shop, economy-rules, ai, persona, guild, bridge, sync, audit. Settings are colocated on their feature page (one control per fact); high-risk settings sit in a per-page "danger zone" behind a confirm phrase. `Admin.tsx` is now a ~133-line routing shell. See `DESIGN_NOTES.md` for the IA rationale.
 
@@ -75,12 +75,14 @@ CORE FEATURE PILLARS:
 **The voting mechanic is intentionally removed.** Hosts pick the game directly. (The old "Mode bar" Tonight/Weekend/Quick/Cozy/Spicy was dead UI and has been deleted.) The vote HTTP endpoints are gone; only some dead `game_night_votes` *table* references remain (cascade-delete + a voter query in the recommendations path, `gameNights.ts:462,726`), slated for cleanup — see `BACKLOG.md`. Do NOT re-add voting.
 
 3. LIBRARY (sub-page of Games)
-- Steam library list with search, category filter chips, sort, co-ownership avatar stacks, PLAN shortcut
+- Steam library list with search, category filter chips, sorts (owned / title / tonight / most-played / least-played — playtime via `totalPlaytimeMinutes` crew SUM), co-ownership avatar stacks
+- Poster hover overlay: PLAN (deep-links `/games?plan=<appId>` — planner opens with the game preselected + owners seeded) + STORE ↗ (Steam store page); clicking the poster art opens the GameDetailDrawer quick-peek (`/library?game=<appId>`)
+- Per-game landing page at `/library/:appId` (`GameLanding.tsx`, PageId `library-game`): hero + price/capability chips, plan-night + Steam CTAs, screenshots, crew owners (playtime + last-played), wishlisted-by, achievement progress, rarest achievements, patch notes, "Crew talk" (forum threads tagged with the game). `pathForGame()` points here; the drawer stays as the grid quick-peek with a "Full page ↗" link
 
 4. COMMUNITY (now fully wired — `Community.tsx`)
 - Crew carousel (admin button gated to Parent) — LIVE (live guild members)
 - Activity timeline — LIVE (GET /activity)
-- Forums table (channels) — LIVE (GET /forums/categories)
+- Forums table (channels) — LIVE (GET /forums/categories). Forums proper: post types, image uploads, FTS, polls, reactions (any Unicode emoji + synced guild custom emoji via lazy `EmojiPicker`; legacy five stay the quick-react row; `c:<snowflake>` keys resolved through the `guild_emojis` cache), game tagging (`forum_threads.app_id`) with feed/search `?appId` filter + clickable GameChip, OP badge on the thread author's replies
 - Upcoming events with date tiles + RSVP — LIVE (GET /game-nights)
 - Weekly leaderboards — LIVE (Nuggies leaderboard, GET /nuggies/leaderboard)
 - Recent clips & Clubs — deliberately CUT (no data source); not present.
@@ -102,6 +104,7 @@ PRIMARY PROBLEM TO SOLVE:
 - Thin Discord bot ("Nuggie") backed by website logic — single-file discord.js v14 gateway worker, no DB, all via the API
 - 21 slash commands live (game recs, full Nuggies economy: daily/balance/give/shop/buy/equip, 3 gambling games, loans, marketplace, leaderboard/profile/inventory/milestones/activity, opt-in/out, /nuggie ask). Nothing registered-but-unimplemented.
 - Real-time presence sync (PresenceUpdate → POST /members/presence/:id) powers the web Friends Online card; needs privileged GuildPresences + GuildMembers intents
+- Member share-to-Discord: `SharePopover` (news cards, forum posts/threads, activity rows) → `POST /share {contentType, contentId, targetId}` → server re-fetches content, resolves the channel from the admin-curated `share_targets` allowlist (snowflakes never reach the browser) → `member.share` row on the `bot_announcements` outbox → bot posts a member-attributed embed (courier only, no Nuggie voice). Admin manages targets on Admin → Discord Bridge (channel picker via `GET /admin/discord/channels`); `share_enabled` kill-switch; ships with an empty allowlist
 - Automated weekly digest — the **"Sunday Tide Check"** is BUILT (`apps/web/src/pages/TideCheck.tsx` at `/tide-check`, backed by a weekly-digest cron + bot announcement). Reachable from the Community group.
 
 8. ADMIN

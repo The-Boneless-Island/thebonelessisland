@@ -1,11 +1,13 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation, useNavigate } from "react-router";
+import { useLocation, useNavigate, useSearchParams } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { putClientState } from "../api/clientState.js";
 import { appQueryKeys } from "../lib/queryClient.js";
+import { pathForGamePage } from "../lib/routes.js";
 import { IslandButton, IslandCard, IslandEmptyState, islandInputStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
+import { GameCover } from "../steamArt.js";
 import type {
   CrewOwnedGame,
   ForumCategory,
@@ -81,6 +83,7 @@ export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
       {view.mode === "home" ? (
         <ForumHome
           profile={profile}
+          crewGames={crewGames}
           onSelectCategory={(slug) => navigate({ mode: "category", slug })}
           onSelectThread={(threadId) => navigate({ mode: "thread", threadId })}
           onCompose={(slug, type) => navigate({ mode: "compose", categorySlug: slug, type })}
@@ -105,6 +108,7 @@ export function ForumsPage({ profile, isAdmin, crewGames }: ForumsPageProps) {
             onBack={() => navigate({ mode: "home" })}
             onCategory={(slug) => navigate({ mode: "category", slug })}
             onSelectThread={(id) => navigate({ mode: "thread", threadId: id })}
+            onSelectGame={(appId) => routerNavigate(pathForGamePage(appId))}
           />
         </Suspense>
       ) : null}
@@ -166,6 +170,7 @@ async function fetchThreadFeedPage(
   sort: ForumFeedSort,
   categoryFilter: string | null,
   typeFilter: ForumThreadType | null,
+  gameFilter: number | null,
   offset: number
 ): Promise<ForumFeedThread[]> {
   const params = new URLSearchParams();
@@ -174,6 +179,7 @@ async function fetchThreadFeedPage(
   params.set("offset", String(offset));
   if (categoryFilter) params.set("category", categoryFilter);
   if (typeFilter) params.set("type", typeFilter);
+  if (gameFilter) params.set("appId", String(gameFilter));
   const r = await apiFetch(`/forums/threads?${params.toString()}`);
   if (!r.ok) {
     const data = await r.json().catch(() => null);
@@ -185,21 +191,31 @@ async function fetchThreadFeedPage(
 
 function ForumHome({
   profile,
+  crewGames,
   onSelectCategory,
   onSelectThread,
   onCompose
 }: {
   profile: MeProfile | null;
+  crewGames: CrewOwnedGame[];
   onSelectCategory: (slug: string) => void;
   onSelectThread: (threadId: number) => void;
   onCompose: (slug: string, type?: ForumThreadType) => void;
 }) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [categories, setCategories] = useState<ForumCategory[] | null>(null);
   const [shellError, setShellError] = useState<string | null>(null);
   const [stats, setStats] = useState<ForumStats | null>(null);
   const [sort, setSort] = useState<ForumFeedSort>("latest");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<ForumThreadType | null>(null);
+  // Game filter is URL-driven (/forums?game=<appId>) so the game landing
+  // page's "See all" link and filtered views are shareable/bookmarkable.
+  const [gameFilter, setGameFilter] = useState<CrewOwnedGame | null>(() => {
+    const g = Number(searchParams.get("game"));
+    if (!Number.isInteger(g) || g <= 0) return null;
+    return crewGames.find((c) => c.appId === g) ?? null;
+  });
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<ForumSearchResult[] | null>(null);
   const [memoryWall, setMemoryWall] = useState<ForumFeedThread[]>([]);
@@ -262,9 +278,10 @@ function ForumHome({
   // (instant, no spinner) instead of always re-fetching. "Load more" beyond
   // page one is a manual accumulation on top, same as before: it's paging
   // through a live list, not something cache/staleTime should paper over.
+  const gameFilterAppId = gameFilter?.appId ?? null;
   const threadFeedQuery = useQuery({
-    queryKey: appQueryKeys.forumThreadFeed(sort, categoryFilter, typeFilter),
-    queryFn: () => fetchThreadFeedPage(sort, categoryFilter, typeFilter, 0),
+    queryKey: appQueryKeys.forumThreadFeed(sort, categoryFilter, typeFilter, gameFilterAppId),
+    queryFn: () => fetchThreadFeedPage(sort, categoryFilter, typeFilter, gameFilterAppId, 0),
     staleTime: 60_000,
   });
   const [extraPages, setExtraPages] = useState<ForumFeedThread[]>([]);
@@ -296,7 +313,7 @@ function ForumHome({
     setLoadMoreLoading(true);
     setLoadMoreError(null);
     try {
-      const batch = await fetchThreadFeedPage(sort, categoryFilter, typeFilter, offset);
+      const batch = await fetchThreadFeedPage(sort, categoryFilter, typeFilter, gameFilterAppId, offset);
       setExtraPages((cur) => [...cur, ...batch]);
       setFeedHasMore(batch.length === FEED_PAGE_SIZE);
     } catch (err) {
@@ -304,7 +321,22 @@ function ForumHome({
     } finally {
       setLoadMoreLoading(false);
     }
-  }, [sort, categoryFilter, typeFilter, threadFeedQuery]);
+  }, [sort, categoryFilter, typeFilter, gameFilterAppId, threadFeedQuery]);
+
+  // Keep the `game` URL param in sync with the filter so the picker, the
+  // game landing page's "See all" link, and browser back/forward all agree.
+  const setGameFilterAndUrl = useCallback((game: CrewOwnedGame | null) => {
+    setGameFilter(game);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (game) next.set("game", String(game.appId));
+        else next.delete("game");
+        return next;
+      },
+      { replace: true, preventScrollReset: true }
+    );
+  }, [setSearchParams]);
 
   useEffect(() => { void loadShell(); }, [loadShell]);
 
@@ -408,16 +440,23 @@ function ForumHome({
                 />
               ) : null}
 
+              <GameFilterControl crewGames={crewGames} active={gameFilter} onChange={setGameFilterAndUrl} />
+
               <FeedList
                 threads={feed}
                 loading={feedLoading}
                 error={feedError}
                 sort={sort}
                 categoryFilter={categoryFilter}
+                gameFilter={gameFilter}
                 hasMore={feedHasMore}
                 onLoadMore={() => void loadFeed(feed?.length ?? 0)}
                 onSelect={onSelectThread}
-                onClearFilter={() => { setCategoryFilter(null); setSort("latest"); setTypeFilter(null); }}
+                onSelectGame={(appId) => {
+                  const match = crewGames.find((g) => g.appId === appId);
+                  if (match) setGameFilterAndUrl(match);
+                }}
+                onClearFilter={() => { setCategoryFilter(null); setSort("latest"); setTypeFilter(null); setGameFilterAndUrl(null); }}
               />
             </div>
             {rail}
@@ -759,6 +798,99 @@ function CategoryChipStrip({
   );
 }
 
+// ── Game filter ──────────────────────────────────────────────────────────────
+// Same search-input + suggestion-chip pattern as the compose panel's "Tag a
+// game" picker (client-side filter over the already-loaded crewGames prop).
+
+function GameFilterControl({
+  crewGames,
+  active,
+  onChange
+}: {
+  crewGames: CrewOwnedGame[];
+  active: CrewOwnedGame | null;
+  onChange: (game: CrewOwnedGame | null) => void;
+}) {
+  const [query, setQuery] = useState("");
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return crewGames.filter((g) => g.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [query, crewGames]);
+
+  if (active) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "4px 6px 4px 4px",
+            borderRadius: 999,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            background: islandTheme.color.panelMutedBg,
+            fontSize: 12,
+            fontWeight: 700,
+            color: islandTheme.color.textPrimary
+          }}
+        >
+          🎮 {active.name}
+          <button
+            type="button"
+            className="island-btn"
+            onClick={() => onChange(null)}
+            aria-label="Clear game filter"
+            style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 14, lineHeight: 1, padding: 0 }}
+          >
+            ×
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 6, maxWidth: 320 }}>
+      <input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="🎮 Filter by game…"
+        style={{ ...islandInputStyle, width: "100%", padding: "7px 12px", fontSize: 13 }}
+      />
+      {matches.length > 0 ? (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {matches.map((g) => (
+            <button
+              key={g.appId}
+              type="button"
+              className="island-btn"
+              onClick={() => { onChange(g); setQuery(""); }}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "3px 10px 3px 4px",
+                borderRadius: 8,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                background: islandTheme.color.panelMutedBg,
+                color: islandTheme.color.textPrimary,
+                cursor: "pointer",
+                font: "inherit",
+                fontSize: 12
+              }}
+            >
+              <GameCover appId={g.appId} storedUrl={g.headerImageUrl} alt={g.name} style={{ width: 32, height: 15, borderRadius: 3 }} />
+              {g.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 // ── Feed list ───────────────────────────────────────────────────────────────
 
 function FeedList({
@@ -767,9 +899,11 @@ function FeedList({
   error,
   sort,
   categoryFilter,
+  gameFilter,
   hasMore,
   onLoadMore,
   onSelect,
+  onSelectGame,
   onClearFilter
 }: {
   threads: ForumFeedThread[] | null;
@@ -777,15 +911,18 @@ function FeedList({
   error: string | null;
   sort: ForumFeedSort;
   categoryFilter: string | null;
+  gameFilter: CrewOwnedGame | null;
   hasMore: boolean;
   onLoadMore: () => void;
   onSelect: (id: number) => void;
+  onSelectGame: (appId: number) => void;
   onClearFilter: () => void;
 }) {
   const headerLabel =
     sort === "top" ? "Top discussions" :
     sort === "unanswered" ? "Unanswered threads" :
     sort === "mine" ? "Your threads" :
+    gameFilter ? `Latest about ${gameFilter.name}` :
     categoryFilter ? `Latest in ${categoryFilter}` : "Latest activity";
 
   return (
@@ -800,10 +937,11 @@ function FeedList({
           <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>
             {sort === "unanswered" ? "Nothing here — every thread has a reply." :
              sort === "mine" ? "You haven't posted yet. Start a discussion above." :
+             gameFilter ? "No threads about this game yet." :
              categoryFilter ? "No threads in this category yet." :
              "No threads anywhere yet. Be first."}
           </p>
-          {(categoryFilter || sort !== "latest") ? (
+          {(categoryFilter || gameFilter || sort !== "latest") ? (
             <button
               type="button"
               className="island-btn"
@@ -817,7 +955,7 @@ function FeedList({
       ) : (
         <>
           {threads.map((t, i) => (
-            <FeedRow key={t.id} thread={t} firstRow={i === 0} onSelect={() => onSelect(t.id)} />
+            <FeedRow key={t.id} thread={t} firstRow={i === 0} onSelect={() => onSelect(t.id)} onSelectGame={onSelectGame} />
           ))}
           {hasMore ? (
             <button
@@ -850,11 +988,13 @@ function FeedList({
 function FeedRow({
   thread,
   firstRow,
-  onSelect
+  onSelect,
+  onSelectGame
 }: {
   thread: ForumFeedThread;
   firstRow: boolean;
   onSelect: () => void;
+  onSelectGame: (appId: number) => void;
 }) {
   return (
     <button
@@ -909,7 +1049,7 @@ function FeedRow({
             {thread.replyCount} repl{thread.replyCount === 1 ? "y" : "ies"}
             {" · "}
             {thread.viewCount} view{thread.viewCount === 1 ? "" : "s"}
-            {thread.game ? <GameChip game={thread.game} /> : null}
+            {thread.game ? <GameChip game={thread.game} onClick={() => onSelectGame(thread.game!.appId)} /> : null}
           </div>
           {thread.linkUrl ? <FeedLinkLine linkUrl={thread.linkUrl} preview={thread.linkPreview ?? null} /> : null}
           {thread.coverImage ? (
@@ -1125,6 +1265,7 @@ function SearchResultRow({ result, firstRow, onSelect }: { result: ForumSearchRe
         <span style={{ color: result.categoryAccent }}>{result.categoryIcon} {result.categoryName}</span>
         {" · "}{result.replyCount} repl{result.replyCount === 1 ? "y" : "ies"}
         {" · "}{formatRelative(result.lastReplyAt ?? result.createdAt)}
+        {result.game ? <GameChip game={result.game} /> : null}
       </div>
     </button>
   );

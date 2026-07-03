@@ -17,6 +17,25 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Recently shipped
 
+- **Feature sweep 2026-07** *(shipped 2026-07-03, PRs #89–#96 via integration PR)* — eight
+  parallel workstreams: (1) bug sweep — Steam achievement % (NUMERIC-as-string `::float8`
+  casts), admin blade label overflow, forum OP badge now on the thread author's replies
+  (`isThreadAuthor && !isOp`); (2) shared activity-feed formatter
+  (`packages/shared/src/activityFeedCopy.ts`) — no surface can render a raw event kind,
+  fixes "fired achievement.unlocked" on Community + islander-profile achievement names;
+  (3) Nuggie achievement announcements always name the achievement (dispatcher-side
+  composition + migration 090 variant copy polish; `checkNerfed` now deduction-only);
+  (4) Library: poster overlay click-swallow fix, STORE link, `/games?plan=<appId>` planner
+  deep link (game actually preselected now), most/least-played sorts
+  (`totalPlaytimeMinutes` via crew-games SUM), richer hover flair; (5) share-to-Discord
+  (migration 088 `share_targets`, `POST /share` with server-side content re-fetch,
+  `member.share` outbox kind, SharePopover on news/forums/activity, admin channel picker);
+  (6) forum reactions: any Unicode emoji + synced guild custom emoji (migration 089
+  `guild_emojis`, `c:<snowflake>` keys, lazy EmojiPicker, 8-per-post cap); (7) per-game
+  landing page `/library/:appId` + forum game filter/search (`?appId` on threads/search,
+  clickable GameChip, composer `?game=` preselect); (8) UserMenu enrichment parity (banner,
+  full status dot, booster/role pills, live `selfMember` source, banner-backfill wipe fix).
+  Rationale in [`DESIGN_NOTES.md`] → "Feature sweep 2026-07".
 - **News quality: off-topic gate + full-context summaries** *(shipped 2026-07-03)* —
   two fixes to the Gaming News curator (`generalNewsIngestion.ts`). (1) A gaming-
   relevance gate: new AI-judged `offTopic` flag drops non-gaming stories (film fan
@@ -84,7 +103,17 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
   name but never renders the avatar image (`Forums.tsx:~608`).
 - **"Hot" flame indicator at a reply threshold** *(unbuilt)* — no `isHot` field, no
   threshold rendering in `Forums.tsx`.
-- **Forums V2** — see the dedicated section at the bottom.
+- **Migrate the compose-time "announce to Discord" checkbox onto the share pipeline**
+  *(unbuilt)* — thread compose still posts via the single `forums_discord_webhook_url`
+  webhook as username "Nuggie" (`forumAnnounce.ts`); an author announce is really a
+  self-share to a default `share_targets` row. Migrating retires the webhook + the
+  Nuggie-attributed posting (brand-split cleanliness).
+- **Reaction surfaces beyond forums** *(unbuilt)* — `ReactionBar`/`EmojiPicker`
+  (`apps/web/src/pages/forums/`) were built reusable; nothing else consumes them yet.
+  Candidates: news cards (distinct from the up/down content vote), activity rows.
+- **Batch the guild-emoji sync inserts** *(nice-to-have)* — `syncGuildEmojis` in
+  `forums.ts` upserts one row per emoji sequentially; fine at hobby scale, batch it if
+  the guild ever carries hundreds of emoji.
 
 ## Achievements / Nuggies economy
 
@@ -97,9 +126,6 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Activity feed / Community
 
-- **Achievement-event parity on the Community page** *(partial)* — Home renders the
-  `achievement.unlocked` case with emoji/name + game art (`Home.tsx:~1333`); the Community
-  `ActivityRow` lacks that case and renders no game art (`Community.tsx:~359,483`).
 - **Friends Online role badges** *(unbuilt)* — `roleNames` is on the member type and
   rendered elsewhere (IslanderProfile), but the Friends Online `CrewRow`
   (`Home.tsx:~1067`) shows only avatar/name/presence.
@@ -109,9 +135,14 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Library / Games
 
-- **Last-played per owner in the game detail drawer** *(unbuilt)* — drawer shows
-  playtime-forever / 2-week only; `user_games.last_played_at` is stored but not surfaced
-  (`GameDetailDrawer.tsx:~546`).
+- **Per-game activity feed on the game landing page** *(unbuilt, deliberately deferred
+  from the 2026-07 sweep)* — "what the crew did in this game" section on
+  `/library/:appId`. Needs a migration adding an index like
+  `(target_app_id, created_at DESC) WHERE target_app_id IS NOT NULL` on
+  `activity_events`, an `appId` param on `GET /activity` (or a new endpoint), and
+  `filterHiddenSteamEvents` privacy wiring.
+- **"Hot lately" library sort** *(unbuilt)* — SUM of `playtime_2weeks` next to the
+  shipped most/least-played sorts; one extra aggregate in crew-games + one `<option>`.
 - **Capability filter chips in the recommender** *(unbuilt)* — `CrewOwnedGame` carries
   `isOnlineCoop` / `isLanCoop` / `isMmo` etc. (`types.ts`) but Games filters only by genre
   tags, not capability (`Games.tsx`).
@@ -120,10 +151,6 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Performance & tech debt
 
-- **Remove `game_night_votes` dead code** *(partial)* — voting is gone, but the table
-  remains and is still referenced for cascade-delete and a voter query in the
-  recommendations path (`gameNights.ts:462,726`). Finish the removal (and the
-  `topGameVote` type if any remnant remains).
 - **`AbortController` timeout in `apiFetch`** *(partial)* — crew-games/crew-wishlist
   already respond-then-enrich on the backend (`steam.ts`), but the generic `apiFetch`
   (`client.ts:3`) has no timeout, so a slow call can still hang the UI.
@@ -138,8 +165,7 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 ## Scene / polish
 
 - **Toast glow-up** *(partial)* — tone styling + entry animation exist; missing exit
-  animation, tone icons, and hover-to-pause. Also drop the dead `"vote saved"` entry from
-  `SUCCESS_PREFIXES` (`toast.tsx:94`) — a remnant of removed voting.
+  animation, tone icons, and hover-to-pause.
 - **Seasonal / weather scene moments** *(partial)* — only a date-keyed shooting star
   exists; no month-based string-lights / jack-o'-lantern moon / overcast roll.
 - **Living island — backdrop reacts to live crew presence** *(unbuilt, blocked on art)* —
@@ -157,8 +183,20 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
   noted as low/no value in the old plan; Steam groups data is a deletion candidate rather
   than a feature. Listed only so the decision isn't rediscovered from scratch.
 
+## News
+
+- **Per-item news endpoint for share deep links** *(gap, known at ship time)* — shared
+  news embeds link to `/games/news?item=<id>`, but there is no `GET`-single-item
+  endpoint; the page resolves the param against the already-loaded feed, so an article
+  that has aged out of the live feed silently no-ops. Add a by-id lookup (session-gated)
+  and have the modal fall back to it.
+
 ## Ops
 
+- **Configure `share_targets` on prod** *(operational, one-time)* — the share feature
+  ships enabled (`share_enabled = true`) but with an EMPTY channel allowlist; members see
+  no targets until an admin adds channels via Admin → Discord Bridge → Share to Discord
+  (picker backed by `GET /admin/discord/channels`).
 - **Flip `API_BASE_URL` to `http://api:3000` on the live box** *(operational)* — code and
   `DEPLOY.md` already expect the internal docker-compose hostname (Caddy 403s `/internal*`
   from public); the production `.env` value is the only remaining manual step.
@@ -170,21 +208,6 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
   window, watching `/csp-reports` + console. `img-src` already broadened to `https:` (PR #76).
   See [`DESIGN_NOTES.md`] → "Content Security Policy".
 
----
-
-## Forums V2 (built, unmerged — needs sign-off)
-
-The full Forums V2 feature set is **built and verified on branch
-`claude/confident-mendel-34a474` (SHA `a2ee84b`)** but is **not in `main`**. Scope:
-markdown with safe rendering, post types (discussion/memory/recommendation/resource),
-image uploads with EXIF strip + thumbnails, full-text search with snippets,
-subscriptions/unread tracking, `@mentions` + notifications, five fixed emoji reactions,
-resource link unfurling with SSRF guards, opt-in per-thread Discord webhook announce, and
-generic thread polls. Migrations `057–061` apply; 47/47 security probes pass; 61/61
-migrations apply on a fresh DB.
-
-**Blocked on human sign-off**, not code: two-account browser smoke tests, a live Discord
-webhook test, `EXPLAIN` analysis on live data, and an optional `Forums.tsx` per-view split
-if it exceeds ~2.5k lines. Design invariants are preserved in
-[`DESIGN_NOTES.md`](DESIGN_NOTES.md#forums-v2-built-on-an-unmerged-branch). To proceed,
-revive that branch rather than rebuilding from this note.
+(The old "Forums V2 (built, unmerged)" section was removed 2026-07-03: commits `72f4f2e`
+and `a2ee84b` are ancestors of `main` — V2 shipped long ago and the section had gone
+stale. Its design invariants live on in [`DESIGN_NOTES.md`] → "Forums V2".)

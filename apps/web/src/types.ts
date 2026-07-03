@@ -3,6 +3,7 @@ export type PageId =
   | "games"
   | "games-news"
   | "library"
+  | "library-game"
   | "community"
   | "community-forums"
   | "community-leaderboard"
@@ -113,7 +114,9 @@ export type MeProfile = {
   steam: SteamSummary | null;
   roleNames: string[];
   inVoice: boolean;
+  presenceStatus: PresenceStatus | null;
   richPresenceText: string | null;
+  guildAvatarUrl: string | null;
   nuggieBalance: number;
   lifetimeEarned: number;
   claimedToday?: boolean;
@@ -157,6 +160,7 @@ export type CrewOwnedGame = {
   headerImageUrl: string | null;
   ownerCount: number;
   owners: CrewOwner[];
+  totalPlaytimeMinutes: number;
 };
 
 export type CrewWishlistGame = {
@@ -503,7 +507,19 @@ export type ForumNotification = {
 
 export type ForumMember = { username: string; displayName: string; avatarUrl: string | null };
 
+// The 5 legacy quick-react keys. Reaction keys are no longer limited to these —
+// a reaction key may also be a raw Unicode emoji grapheme, or a Discord custom
+// emoji reference shaped "c:<snowflake>" (see ForumCustomEmoji / customEmoji map).
 export type ForumReactionKey = "nug" | "heart" | "laugh" | "fire" | "salute";
+
+// Any reaction key as stored/returned by the API: a legacy key, a raw Unicode
+// emoji string, or a "c:<snowflake>" custom-emoji reference.
+export type ForumReaction = string;
+
+export type ForumCustomEmoji = { id: string; name: string; url: string; animated: boolean };
+
+/** Custom-emoji-prefixed reaction keys ("c:<snowflake>") looked up against the map the API returns. */
+export type ForumCustomEmojiMap = Record<string, ForumCustomEmoji>;
 
 export type ForumAttachment = { url: string; thumbUrl: string; width: number; height: number };
 
@@ -518,8 +534,8 @@ export type ForumPost = {
   editedAt: string | null;
   createdAt: string;
   author: ForumAuthor;
-  reactions: Partial<Record<ForumReactionKey, number>>;
-  myReactions: ForumReactionKey[];
+  reactions: Partial<Record<ForumReaction, number>>;
+  myReactions: ForumReaction[];
   attachments: ForumAttachment[];
 };
 
@@ -587,6 +603,7 @@ export type ForumSearchResult = {
   categoryName: string;
   categoryIcon: string;
   categoryAccent: string;
+  game?: ForumThreadGame | null;
   snippet: string | null;
 };
 

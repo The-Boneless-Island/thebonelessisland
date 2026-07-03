@@ -444,6 +444,16 @@ export function BridgeAdminPage({
             </>
           ),
         },
+        {
+          anchor: "bridge-share",
+          label: "Share to Discord",
+          content: (
+            <>
+              <InlineSettings keys={["share_enabled"]} settings={settings} onSave={onUpdate} title="" />
+              <ShareTargetsPanel />
+            </>
+          ),
+        },
       ]}
     />
   );
@@ -582,6 +592,284 @@ function PatchAlertRolesPanel() {
                   fontSize: 12,
                   cursor: "pointer",
                   font: "inherit",
+                }}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </IslandCard>
+  );
+}
+
+// ── Share to Discord ─────────────────────────────────────────────────────────
+// Admin-curated list of channels members can send content to (news, forum
+// posts/threads, activity events). Members only ever see id/label/emoji —
+// the raw channel snowflake never reaches the browser outside this panel.
+
+type ShareTargetRow = {
+  id: number;
+  discordChannelId: string;
+  label: string;
+  emoji: string | null;
+  position: number;
+  isActive: boolean;
+};
+
+type DiscordChannelOption = {
+  id: string;
+  name: string;
+  category: string | null;
+};
+
+function ShareTargetsPanel() {
+  const [rows, setRows] = useState<ShareTargetRow[] | null>(null);
+  const [channels, setChannels] = useState<DiscordChannelOption[] | null>(null);
+  const [channelsError, setChannelsError] = useState<string | null>(null);
+  const [selectedChannelId, setSelectedChannelId] = useState("");
+  const [labelDraft, setLabelDraft] = useState("");
+  const [emojiDraft, setEmojiDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadTargets = () =>
+    apiFetch("/share/admin/targets")
+      .then((r) => r.json())
+      .then((d) => setRows(Array.isArray(d?.targets) ? d.targets : []))
+      .catch(() => setRows([]));
+
+  const loadChannels = () =>
+    apiFetch("/share/admin/discord/channels")
+      .then(async (r) => {
+        if (!r.ok) {
+          const d = await r.json().catch(() => null);
+          throw new Error(d?.error ?? "Failed to load channels");
+        }
+        return r.json();
+      })
+      .then((d) => setChannels(Array.isArray(d?.channels) ? d.channels : []))
+      .catch((e) => setChannelsError(e instanceof Error ? e.message : "Failed to load channels"));
+
+  useEffect(() => {
+    void loadTargets();
+    void loadChannels();
+  }, []);
+
+  async function addTarget() {
+    const channel = channels?.find((c) => c.id === selectedChannelId);
+    if (!channel || !labelDraft.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await apiFetch("/share/admin/targets", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          discordChannelId: channel.id,
+          label: labelDraft.trim(),
+          emoji: emojiDraft.trim() || undefined,
+          position: rows?.length ?? 0
+        })
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => null);
+        throw new Error(d?.error ?? "Save failed");
+      }
+      setSelectedChannelId("");
+      setLabelDraft("");
+      setEmojiDraft("");
+      await loadTargets();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleActive(row: ShareTargetRow) {
+    setRows((cur) => cur?.map((r) => (r.id === row.id ? { ...r, isActive: !r.isActive } : r)) ?? cur);
+    try {
+      await apiFetch(`/share/admin/targets/${row.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isActive: !row.isActive })
+      });
+    } catch {
+      await loadTargets();
+    }
+  }
+
+  async function removeTarget(id: number) {
+    setBusy(true);
+    try {
+      await apiFetch(`/share/admin/targets/${id}`, { method: "DELETE" });
+      await loadTargets();
+    } catch {
+      setError("Remove failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function move(id: number, direction: -1 | 1) {
+    if (!rows) return;
+    const idx = rows.findIndex((r) => r.id === id);
+    const swapIdx = idx + direction;
+    if (idx < 0 || swapIdx < 0 || swapIdx >= rows.length) return;
+    const next = [...rows];
+    [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+    setRows(next);
+    try {
+      await apiFetch("/share/admin/targets/reorder", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ order: next.map((r) => r.id) })
+      });
+    } catch {
+      await loadTargets();
+    }
+  }
+
+  const usedChannelIds = new Set((rows ?? []).map((r) => r.discordChannelId));
+  const availableChannels = (channels ?? []).filter((c) => !usedChannelIds.has(c.id));
+
+  return (
+    <IslandCard style={{ padding: "16px 18px" }}>
+      <SubsectionTitle>Share Targets</SubsectionTitle>
+      <p style={{ margin: "0 0 12px", fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+        Channels members can send news, forum posts, and activity to via the in-app share picker.
+        Only the label and emoji are ever shown to members — the channel ID stays server-side.
+      </p>
+
+      {channelsError ? (
+        <p style={{ margin: "0 0 12px", fontSize: 12, color: islandTheme.color.dangerText }}>
+          {channelsError} — the bot needs a valid guild + bot token configured on the Guild Identity page.
+        </p>
+      ) : null}
+
+      <div style={{ display: "grid", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <select
+            value={selectedChannelId}
+            onChange={(e) => setSelectedChannelId(e.target.value)}
+            className="island-mono"
+            style={{ ...islandInputStyle, flex: "2 1 220px", maxWidth: 320, fontSize: 13 }}
+          >
+            <option value="">
+              {channels === null ? "Loading channels…" : "Select a channel…"}
+            </option>
+            {availableChannels.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.category ? `${c.category} / ` : ""}#{c.name}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={labelDraft}
+            onChange={(e) => setLabelDraft(e.target.value)}
+            placeholder="Label (e.g. general)"
+            className="island-mono"
+            style={{ ...islandInputStyle, flex: "1 1 140px", maxWidth: 200, fontSize: 13 }}
+          />
+          <input
+            type="text"
+            value={emojiDraft}
+            onChange={(e) => setEmojiDraft(e.target.value)}
+            placeholder="Emoji (optional)"
+            className="island-mono"
+            style={{ ...islandInputStyle, flex: "0 1 120px", maxWidth: 120, fontSize: 13 }}
+          />
+          <IslandButton
+            variant="secondary"
+            onClick={() => void addTarget()}
+            disabled={busy || !selectedChannelId || !labelDraft.trim()}
+          >
+            Add target
+          </IslandButton>
+        </div>
+        {error ? <p style={{ margin: 0, fontSize: 12, color: islandTheme.color.dangerText }}>{error}</p> : null}
+      </div>
+
+      {rows === null ? (
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>Loading share targets…</p>
+      ) : rows.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textMuted }}>No share targets yet.</p>
+      ) : (
+        <div style={{ display: "grid", gap: 8 }}>
+          {rows.map((row, i) => (
+            <div
+              key={row.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                padding: "8px 10px",
+                borderRadius: 8,
+                background: islandTheme.color.panelMutedBg,
+                border: `1px solid ${islandTheme.color.cardBorder}`,
+                opacity: row.isActive ? 1 : 0.55
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <button
+                  type="button"
+                  onClick={() => void move(row.id, -1)}
+                  disabled={i === 0}
+                  aria-label="Move up"
+                  style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, cursor: i === 0 ? "default" : "pointer", fontSize: 11, padding: 0, lineHeight: 1 }}
+                >
+                  ▲
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void move(row.id, 1)}
+                  disabled={i === rows.length - 1}
+                  aria-label="Move down"
+                  style={{ background: "transparent", border: "none", color: islandTheme.color.textMuted, cursor: i === rows.length - 1 ? "default" : "pointer", fontSize: 11, padding: 0, lineHeight: 1 }}
+                >
+                  ▼
+                </button>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>
+                  {row.emoji ? `${row.emoji} ` : ""}#{row.label}
+                </div>
+                <div className="island-mono" style={{ fontSize: 11, color: islandTheme.color.textMuted }}>
+                  {row.isActive ? "Active" : "Disabled"}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void toggleActive(row)}
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  color: islandTheme.color.textSubtle,
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  font: "inherit"
+                }}
+              >
+                {row.isActive ? "Disable" : "Enable"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void removeTarget(row.id)}
+                disabled={busy}
+                style={{
+                  background: "transparent",
+                  border: `1px solid ${islandTheme.color.danger}`,
+                  color: islandTheme.color.dangerText,
+                  borderRadius: 6,
+                  padding: "4px 8px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  font: "inherit"
                 }}
               >
                 Remove

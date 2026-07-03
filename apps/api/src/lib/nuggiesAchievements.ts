@@ -124,8 +124,9 @@ export async function grantEarned(discordUserId: string, key: EarnedKey): Promis
       });
       // Bridge to Discord via the bot outbox — but only for non-milestone
       // unlocks. Tier badges (milestone_rank_*) ride the milestone.reached
-      // path in checkMilestones, which includes role assignment + LLM-flavored
-      // celebration; double-announcing would be noise.
+      // path in checkMilestones, which includes role assignment + a static-
+      // template celebration with a rendered rank-card image (no LLM call);
+      // double-announcing would be noise.
       if (!key.startsWith("milestone_rank_")) {
         try {
           await db.query(

@@ -1,20 +1,23 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { apiFetch } from "../../api/client.js";
+import { SharePopover } from "../../components/SharePopover.js";
 import { IslandButton, IslandCard, IslandTag } from "../../islandUi.js";
 import { renderMarkdown } from "../../lib/markdown.js";
 import { islandTheme } from "../../theme.js";
 import type {
+  ForumCustomEmojiMap,
   ForumPoll,
   ForumPost,
-  ForumReactionKey,
+  ForumReaction,
   ForumRelatedThread,
   ForumThreadDetail,
   ForumUpload,
   MeProfile
 } from "../../types.js";
 import { AttachmentGallery, ImageDropzone, MarkdownEditor } from "./forumEditor.js";
-import { formatAbsolute, formatRelative, listRowStyle, REACTION_META } from "./forumShared.js";
+import { formatAbsolute, formatRelative, listRowStyle } from "./forumShared.js";
 import { BackLink, GameChip, LinkPreviewCard, PinGlyph, LockGlyph, TypeChip } from "./forumUi.js";
+import { ReactionBar } from "./ReactionBar.js";
 
 const ghostBtn: CSSProperties = {
   background: "transparent",
@@ -34,7 +37,8 @@ export function ForumThreadPanel({
   isAdmin,
   onBack,
   onCategory,
-  onSelectThread
+  onSelectThread,
+  onSelectGame
 }: {
   threadId: number;
   targetPostId?: number;
@@ -43,9 +47,11 @@ export function ForumThreadPanel({
   onBack: () => void;
   onCategory: (slug: string) => void;
   onSelectThread: (id: number) => void;
+  onSelectGame: (appId: number) => void;
 }) {
   const [thread, setThread] = useState<ForumThreadDetail | null>(null);
   const [posts, setPosts] = useState<ForumPost[] | null>(null);
+  const [customEmoji, setCustomEmoji] = useState<ForumCustomEmojiMap>({});
   const [related, setRelated] = useState<ForumRelatedThread[]>([]);
   // Reply drafts survive accidental navigation within the session.
   const replyDraftKey = `bi:forum-reply:${threadId}`;
@@ -68,6 +74,7 @@ export function ForumThreadPanel({
     }
     setThread(r.thread);
     setPosts(r.posts ?? []);
+    setCustomEmoji(r.customEmoji ?? {});
   }, [threadId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -158,7 +165,9 @@ export function ForumThreadPanel({
     }
   }
 
-  async function reactPost(postId: number, reaction: ForumReactionKey) {
+  async function reactPost(postId: number, reaction: ForumReaction) {
+    // Optimistic toggle. A 409 (8-distinct-reactions cap hit) or any other
+    // failure re-syncs from the server to correct the optimistic state.
     setPosts((cur) => cur?.map((p) => {
       if (p.id !== postId) return p;
       const has = p.myReactions.includes(reaction);
@@ -173,11 +182,12 @@ export function ForumThreadPanel({
       };
     }) ?? cur);
     try {
-      await apiFetch(`/forums/posts/${postId}/react`, {
+      const r = await apiFetch(`/forums/posts/${postId}/react`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ reaction })
       });
+      if (!r.ok) void load();
     } catch {
       void load();
     }
@@ -325,13 +335,20 @@ export function ForumThreadPanel({
             </h1>
             <div style={{ marginTop: 6, fontSize: 12, color: islandTheme.color.textMuted }}>
               {posts.length} post{posts.length === 1 ? "" : "s"} · {thread.viewCount.toLocaleString()} views · started {formatRelative(thread.createdAt)}
-              {thread.game ? <GameChip game={thread.game} /> : null}
+              {thread.game ? <GameChip game={thread.game} onClick={() => onSelectGame(thread.game!.appId)} /> : null}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <ModButton onClick={toggleSubscribe}>
               {thread.subscribed ? "🔔 Following" : "🔕 Follow"}
             </ModButton>
+            <SharePopover
+              contentType="forum_thread"
+              contentId={threadId}
+              fallbackTitle={thread.title}
+              fallbackUrl={`${window.location.origin}/forums/thread/${threadId}`}
+              variant="label"
+            />
             {isAdmin ? (
               <>
                 <ModButton onClick={() => modAction("isPinned", !thread.isPinned)}>
@@ -362,6 +379,7 @@ export function ForumThreadPanel({
             isOwner={profile?.discordUserId === post.author.discordUserId}
             isThreadAuthor={post.author.discordUserId === thread.author.discordUserId}
             copied={copied === post.id}
+            customEmoji={customEmoji}
             onReact={(reaction) => reactPost(post.id, reaction)}
             onQuote={thread.isLocked ? undefined : () => quotePost(post)}
             onCopyLink={() => copyPermalink(post.id)}
@@ -419,6 +437,7 @@ function PostCard({
   isOwner,
   isThreadAuthor,
   copied,
+  customEmoji,
   onReact,
   onQuote,
   onCopyLink,
@@ -432,7 +451,8 @@ function PostCard({
   isOwner: boolean;
   isThreadAuthor: boolean;
   copied: boolean;
-  onReact: (reaction: ForumReactionKey) => void;
+  customEmoji: ForumCustomEmojiMap;
+  onReact: (reaction: ForumReaction) => void;
   onQuote?: () => void;
   onCopyLink: () => void;
   onEdit: () => void;
@@ -526,38 +546,12 @@ function PostCard({
           {!post.isDeleted && post.attachments.length > 0 ? <AttachmentGallery attachments={post.attachments} /> : null}
           {!post.isDeleted ? (
             <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-              {REACTION_META.map((r) => {
-                const count = post.reactions[r.key] ?? 0;
-                const mine = post.myReactions.includes(r.key);
-                return (
-                  <button
-                    key={r.key}
-                    type="button"
-                    className="island-btn"
-                    onClick={() => onReact(r.key)}
-                    title={r.label}
-                    aria-label={`${r.label}${count ? ` (${count})` : ""}`}
-                    aria-pressed={mine}
-                    style={{
-                      background: mine ? islandTheme.color.primary : islandTheme.color.panelMutedBg,
-                      color: mine ? islandTheme.color.primaryText : islandTheme.color.textSubtle,
-                      border: `1px solid ${mine ? islandTheme.color.primary : islandTheme.color.cardBorder}`,
-                      borderRadius: 999,
-                      padding: count > 0 ? "4px 10px 4px 8px" : "4px 8px",
-                      fontSize: 13,
-                      lineHeight: 1,
-                      cursor: "pointer",
-                      font: "inherit",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 4
-                    }}
-                  >
-                    <span aria-hidden="true">{r.emoji}</span>
-                    {count > 0 ? <span style={{ fontSize: 12, fontWeight: 700 }}>{count}</span> : null}
-                  </button>
-                );
-              })}
+              <ReactionBar
+                reactions={post.reactions}
+                myReactions={post.myReactions}
+                customEmoji={customEmoji}
+                onToggle={onReact}
+              />
               <span aria-hidden="true" style={{ width: 1, alignSelf: "stretch", background: islandTheme.color.cardBorder, margin: "2px 2px" }} />
               {onQuote ? (
                 <button type="button" className="island-btn" onClick={onQuote} style={ghostBtn}>Quote</button>
@@ -571,6 +565,14 @@ function PostCard({
               {!isOwner ? (
                 <button type="button" className="island-btn" onClick={onReport} style={ghostBtn}>Report</button>
               ) : null}
+              <SharePopover
+                contentType="forum_post"
+                contentId={post.id}
+                fallbackTitle="Boneless Island forum post"
+                fallbackUrl={`${window.location.origin}/forums/thread/${post.threadId}/post/${post.id}`}
+                variant="label"
+                align="left"
+              />
             </div>
           ) : null}
         </div>

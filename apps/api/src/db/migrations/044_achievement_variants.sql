@@ -1,8 +1,11 @@
 -- Small-unlock announcement variants. Bot picks one at random when a non-
 -- milestone achievement fires (e.g. first_blood, pog_moment, the_grind).
 -- Token `{{user}}` is replaced with the user's Discord mention at announce
--- time. Milestone tier crossings (milestone_rank_*) keep using the existing
--- LLM-generated path in checkMilestones — they are NOT seeded here.
+-- time; the achievement name/emoji are prepended by the bot dispatcher
+-- (processAchievementUnlocked), not embedded in this seed text. Milestone
+-- tier crossings (milestone_rank_*) keep using the existing static-template
+-- + rendered rank-card path in checkMilestones — they are NOT seeded here
+-- and involve no LLM call.
 
 CREATE TABLE IF NOT EXISTS achievement_message_variants (
   id              SERIAL PRIMARY KEY,

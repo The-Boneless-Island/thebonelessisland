@@ -10,11 +10,14 @@ import { NotFoundPage } from "./pages/NotFound.js";
 import { preloadRankBadge } from "./lib/preloadRankBadge.js";
 import { AuthBootShell, IslandUnreachableScreen } from "./components/AuthBootShell.js";
 import {
+  gameAppIdFromPath,
   islanderIdFromPath,
   pageFromPath,
   pathForForumThread,
+  pathForGamePage,
   pathForIslander,
-  pathForPage
+  pathForPage,
+  pathForPlanNight
 } from "./lib/routes.js";
 
 // Route-level code splitting: each routed page is lazy-loaded so its bundle is
@@ -25,6 +28,7 @@ const CommunityPage = lazy(() => import("./pages/Community.js").then((m) => ({ d
 const GamesPage = lazy(() => import("./pages/Games.js").then((m) => ({ default: m.GamesPage })));
 const GamingNewsPage = lazy(() => import("./pages/GamingNews.js").then((m) => ({ default: m.GamingNewsPage })));
 const LibraryPage = lazy(() => import("./pages/Library.js").then((m) => ({ default: m.LibraryPage })));
+const GameLandingPage = lazy(() => import("./pages/GameLanding.js"));
 const AchievementsPage = lazy(() => import("./pages/Achievements.js").then((m) => ({ default: m.AchievementsPage })));
 const MilestonesPage = lazy(() => import("./pages/Milestones.js").then((m) => ({ default: m.MilestonesPage })));
 const CasinoPage = lazy(() => import("./pages/games/CasinoPage.js").then((m) => ({ default: m.CasinoPage })));
@@ -113,7 +117,7 @@ export function App() {
   const page = pageFromPath(location.pathname);
   const navigateToPage = useCallback((next: PageId) => navigate(pathForPage(next)), [navigate]);
   const selectedProfileId = islanderIdFromPath(location.pathname);
-  const [composerScrollNonce, setComposerScrollNonce] = useState(0);
+  const selectedGameAppId = gameAppIdFromPath(location.pathname);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [results, setResults] = useState<Recommendation[]>([]);
   const [status, setStatus] = useState("Idle");
@@ -325,6 +329,14 @@ export function App() {
   const selectedNight = useMemo(
     () => gameNights.find((night) => night.id === selectedNightId) ?? null,
     [gameNights, selectedNightId]
+  );
+  // Self entry in the already-polled member list — reused so the user menu can
+  // show live status/banner/roles without a second poll. Falls back to null
+  // (UserMenu itself falls back to profileData) during the boot race before
+  // guildMembers has loaded for the first time.
+  const selfMember = useMemo(
+    () => guildMembers.find((m) => m.discordUserId === profileData?.discordUserId) ?? null,
+    [guildMembers, profileData?.discordUserId]
   );
   const isAdmin = Boolean(profileData?.roleNames.includes("Parent"));
 
@@ -1494,21 +1506,30 @@ export function App() {
     setSelectedMemberIds(nightAttendees.map((attendee) => attendee.discordUserId));
   }
 
-  // Library "Plan" seed: resolve the owners of the chosen game from the crew
-  // library, seed them as the selected members (which auto-refires the composer
-  // recommendation), bump the scroll nonce so Games scrolls to its composer, and
-  // hop over to Games.
-  function onPlan(appId: number) {
+  // Resolve the owners of a game from the crew library and seed them as the
+  // selected planner members (auto-refires the composer recommendation).
+  // Shared by the Library "Plan" shortcut and the Games-page `?plan=` deep
+  // link consumption effect.
+  function onSeedMembersForGame(appId: number) {
     const game = crewGames.find((row) => row.appId === appId);
     const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
     setSelectedMemberIds(ownerIds);
-    setComposerScrollNonce((nonce) => nonce + 1);
-    navigateToPage("games");
-    toastQueue.pushToast(`Planning around ${game?.name ?? "this game"}`, "info");
+  }
+
+  // Library "Plan" shortcut: hand off to the Games page via the `?plan=`
+  // deep link. Games.tsx's PlanNightCard owns seeding members, preselecting
+  // the game itself, scrolling to the composer, and toasting once the crew
+  // library data (and its own effects) are ready.
+  function onPlan(appId: number) {
+    navigate(pathForPlanNight(appId));
   }
 
   function openProfile(discordUserId: string) {
     navigate(pathForIslander(discordUserId));
+  }
+
+  function openGame(appId: number) {
+    navigate(pathForGamePage(appId));
   }
 
   async function loadSteamExclusions() {
@@ -1836,6 +1857,7 @@ export function App() {
         page={page ?? "home"}
         onNavigate={navigateToPage}
         profile={profileData}
+        selfMember={selfMember}
         isAdmin={isAdmin}
         tagline={tagline}
         onLogout={() => void logout()}
@@ -1853,6 +1875,7 @@ export function App() {
         crewGames={crewGames}
         onNavigate={navigateToPage}
         onOpenProfile={openProfile}
+        onOpenGame={openGame}
       />
       <OnboardingFlow
         open={showOnboarding}
@@ -1905,7 +1928,6 @@ export function App() {
           crewGames={crewGames}
           crewWishlist={crewWishlist}
           gameNews={gameNews}
-          composerScrollNonce={composerScrollNonce}
           draftAppId={draftAppId}
           lockNonce={lockNonce}
           currentDiscordUserId={profileData?.discordUserId ?? null}
@@ -1923,6 +1945,7 @@ export function App() {
           onRemoveSelectedMembersFromNight={removeSelectedMembersFromNight}
           onNavigate={navigateToPage}
           onSendChatMessage={sendChatMessage}
+          onSeedMembersForGame={onSeedMembersForGame}
         />
       ) : null}
 
@@ -1934,6 +1957,10 @@ export function App() {
           onNavigate={navigateToPage}
           onPlan={onPlan}
         />
+      ) : null}
+
+      {page === "library-game" ? (
+        <GameLandingPage appId={selectedGameAppId} onBack={() => navigateToPage("library")} />
       ) : null}
 
       {page === "community" ? (
