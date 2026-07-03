@@ -1134,14 +1134,26 @@ async function processAchievementUnlocked(payload: AchievementUnlockedPayload): 
   if (!channelId) return;
 
   const { ok, data } = await internalApi("GET", `/internal/achievement-variants/${encodeURIComponent(payload.key)}`);
-  let text: string;
+  let flavorText: string | null = null;
   if (ok && data && typeof data === "object" && "text" in data) {
-    text = String((data as { text: string }).text);
-  } else {
-    // Fallback for keys without seeded variants — keeps the channel alive
-    // even if a new achievement is added without variant data yet.
-    text = `{{user}} unlocked ${payload.emoji} ${payload.name}`;
+    flavorText = String((data as { text: string }).text);
   }
+
+  // Guard against undefined/malformed name on very old pre-migration-044
+  // rows: fall back to a title-cased rendering of the raw key.
+  const displayName =
+    payload.name && payload.name.trim().length > 0
+      ? payload.name
+      : String(payload.key ?? "").replace(/_/g, " ").toUpperCase();
+  const emoji = payload.emoji || "✨";
+
+  // Always compose the final message ourselves so the achievement name is
+  // guaranteed regardless of whether the seeded flavor text happens to
+  // mention it — roughly half of the seeded variants (migration 044) do
+  // not, which previously produced nameless-looking announcements.
+  const prefix = `${emoji} **${displayName}** unlocked — `;
+  const body = flavorText ?? `{{user}} earned it.`;
+  const text = `${prefix}${body}`;
   const rendered = text.replace(/\{\{user\}\}/g, `<@${payload.discordUserId}>`);
 
   try {
