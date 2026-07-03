@@ -136,7 +136,7 @@ export function AdminLayout({ renderPage }: AdminLayoutProps) {
       <style>{`
         .bi-admin-shell {
           display: grid;
-          grid-template-columns: 216px minmax(0, 1fr);
+          grid-template-columns: 232px minmax(0, 1fr);
           gap: 24px;
           align-items: start;
         }
@@ -257,6 +257,7 @@ function SidebarItem({
       className="bi-admin-item"
       onClick={onClick}
       aria-current={active ? "page" : undefined}
+      title={meta.label}
       style={{
         display: "flex",
         alignItems: "center",
@@ -273,6 +274,7 @@ function SidebarItem({
         font: "inherit",
         textAlign: "left",
         whiteSpace: "nowrap",
+        overflow: "hidden",
         transition: `background ${islandTheme.motion.dur.fast} ease, border-color ${islandTheme.motion.dur.fast} ease`
       }}
       onMouseEnter={(e) => {
@@ -283,7 +285,7 @@ function SidebarItem({
       }}
     >
       <span aria-hidden="true" style={{ fontSize: 15, flexShrink: 0 }}>{meta.icon}</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{meta.label}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>{meta.label}</span>
     </button>
   );
 }

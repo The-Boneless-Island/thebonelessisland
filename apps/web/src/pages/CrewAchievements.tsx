@@ -29,8 +29,9 @@ type CrewAchievementsPageProps = {
 };
 
 function clampPct(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(100, Math.round(value)));
+  const num = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(num)) return 0;
+  return Math.max(0, Math.min(100, Math.round(num)));
 }
 
 function memberColor(seed: string): string {
