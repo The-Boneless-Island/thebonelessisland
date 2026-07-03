@@ -28,6 +28,7 @@ type RepairInput = {
   partial: RepairableResult;
   errors: string[];
   batchUrls: Set<string>;
+  minSummaryChars: number;
 };
 
 /**
@@ -38,7 +39,7 @@ export async function tryValidationRepair(input: RepairInput): Promise<Repairabl
   if (!isRepairableValidation(input.errors)) return null;
 
   const ai = getAIProviderForTask("light");
-  const systemPrompt = `You repair incomplete JSON for a gaming news card. Fill ONLY the fields listed as missing. If summary is too short, expand it to at least 250 characters using facts from the excerpt (3+ sentences). Keep whyMatters to 1–2 concrete sentences about why a Discord gaming crew would care. Sources must be valid https URLs from the provided list or the article URL. Return ONLY JSON:
+  const systemPrompt = `You repair incomplete JSON for a gaming news card. Fill ONLY the fields listed as missing. If summary is too short, expand it to at least ${input.minSummaryChars} characters using facts from the excerpt PLUS well-established background context about the game/studio (what it is, its history, why this event matters). Never invent event-specific numbers, dates, quotes, or prices that are not in the excerpt. Keep whyMatters to 1–2 concrete sentences about why a Discord gaming crew would care. Sources must be valid https URLs from the provided list or the article URL. Return ONLY JSON:
 
 {
   "id": "<exact id>",
@@ -68,7 +69,7 @@ export async function tryValidationRepair(input: RepairInput): Promise<Repairabl
         { role: "system", content: systemPrompt },
         { role: "user", content: userContent }
       ],
-      { maxTokens: 2048, temperature: 0 }
+      { maxTokens: 3072, temperature: 0 }
     );
     const text = result.text.trim();
     const jsonStart = text.indexOf("{");

@@ -17,6 +17,22 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Recently shipped
 
+- **News quality: off-topic gate + full-context summaries** *(shipped 2026-07-03)* —
+  two fixes to the Gaming News curator (`generalNewsIngestion.ts`). (1) A gaming-
+  relevance gate: new AI-judged `offTopic` flag drops non-gaming stories (film fan
+  art, general tech/AI-infrastructure news) that previously leaked because the
+  prompt said "include everything" and forced a Boneless Island connection "even if
+  thin"; whyMatters now requires a genuine gaming reason or the story is declared
+  off-topic. (2) Two-tier factual policy: event facts stay excerpt-bound, but
+  background context (what the game/studio is, history, the why) is now REQUIRED
+  from model knowledge, hedged — summaries target 250–500 words (floor
+  `MIN_SUMMARY_CHARS` 700; feed keeps the legacy `>= 250` gate so old cards stay
+  visible). Plus: excerpt cap 800→2500 chars, bigger curation maxTokens, repair
+  pass aligned, fallback cards park instead of padding with filler. One-shot boot
+  sweep (`newsOffTopicSweep.ts`, `news_pipeline_jobs`-guarded) parked off-topic
+  live cards and re-queued thin recent summaries for regeneration. Engadget has no
+  gaming-only RSS anymore (verified 2026-07) — firehose stays, gate enforces.
+  Rationale in [`DESIGN_NOTES.md`].
 - **Forums v2** *(shipped, verified 2026-06-12)* — full community-forum overhaul:
   post types (memory/rec/resource), image uploads (migration 058, served from the
   local `/uploads` volume), full-text search (059), engagement/trending (060), and

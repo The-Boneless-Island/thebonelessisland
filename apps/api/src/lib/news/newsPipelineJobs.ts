@@ -1,6 +1,6 @@
 import { db } from "../../db/client.js";
 
-export type PipelineJobKind = "embed_backfill" | "recurate" | "autopilot";
+export type PipelineJobKind = "embed_backfill" | "recurate" | "autopilot" | "offtopic_sweep";
 
 export async function loadPipelineJob<T extends Record<string, unknown>>(
   kind: PipelineJobKind
