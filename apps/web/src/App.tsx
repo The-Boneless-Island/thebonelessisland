@@ -10,9 +10,11 @@ import { NotFoundPage } from "./pages/NotFound.js";
 import { preloadRankBadge } from "./lib/preloadRankBadge.js";
 import { AuthBootShell, IslandUnreachableScreen } from "./components/AuthBootShell.js";
 import {
+  gameAppIdFromPath,
   islanderIdFromPath,
   pageFromPath,
   pathForForumThread,
+  pathForGamePage,
   pathForIslander,
   pathForPage
 } from "./lib/routes.js";
@@ -25,6 +27,7 @@ const CommunityPage = lazy(() => import("./pages/Community.js").then((m) => ({ d
 const GamesPage = lazy(() => import("./pages/Games.js").then((m) => ({ default: m.GamesPage })));
 const GamingNewsPage = lazy(() => import("./pages/GamingNews.js").then((m) => ({ default: m.GamingNewsPage })));
 const LibraryPage = lazy(() => import("./pages/Library.js").then((m) => ({ default: m.LibraryPage })));
+const GameLandingPage = lazy(() => import("./pages/GameLanding.js"));
 const AchievementsPage = lazy(() => import("./pages/Achievements.js").then((m) => ({ default: m.AchievementsPage })));
 const MilestonesPage = lazy(() => import("./pages/Milestones.js").then((m) => ({ default: m.MilestonesPage })));
 const CasinoPage = lazy(() => import("./pages/games/CasinoPage.js").then((m) => ({ default: m.CasinoPage })));
@@ -113,6 +116,7 @@ export function App() {
   const page = pageFromPath(location.pathname);
   const navigateToPage = useCallback((next: PageId) => navigate(pathForPage(next)), [navigate]);
   const selectedProfileId = islanderIdFromPath(location.pathname);
+  const selectedGameAppId = gameAppIdFromPath(location.pathname);
   const [composerScrollNonce, setComposerScrollNonce] = useState(0);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [results, setResults] = useState<Recommendation[]>([]);
@@ -1511,6 +1515,10 @@ export function App() {
     navigate(pathForIslander(discordUserId));
   }
 
+  function openGame(appId: number) {
+    navigate(pathForGamePage(appId));
+  }
+
   async function loadSteamExclusions() {
     try {
       const res = await apiFetch("/profile/steam-exclusions", { credentials: "include" });
@@ -1853,6 +1861,7 @@ export function App() {
         crewGames={crewGames}
         onNavigate={navigateToPage}
         onOpenProfile={openProfile}
+        onOpenGame={openGame}
       />
       <OnboardingFlow
         open={showOnboarding}
@@ -1934,6 +1943,10 @@ export function App() {
           onNavigate={navigateToPage}
           onPlan={onPlan}
         />
+      ) : null}
+
+      {page === "library-game" ? (
+        <GameLandingPage appId={selectedGameAppId} onBack={() => navigateToPage("library")} />
       ) : null}
 
       {page === "community" ? (

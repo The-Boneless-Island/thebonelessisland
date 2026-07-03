@@ -3,6 +3,7 @@ export type PageId =
   | "games"
   | "games-news"
   | "library"
+  | "library-game"
   | "community"
   | "community-forums"
   | "community-leaderboard"
@@ -587,6 +588,7 @@ export type ForumSearchResult = {
   categoryName: string;
   categoryIcon: string;
   categoryAccent: string;
+  game?: ForumThreadGame | null;
   snippet: string | null;
 };
 

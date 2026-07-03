@@ -16,6 +16,7 @@ const PAGE_PATHS: Record<PageId, string> = {
   games: "/games",
   "games-news": "/games/news",
   library: "/library",
+  "library-game": "/library",
   community: "/community",
   "community-forums": "/forums",
   "community-leaderboard": "/community/leaderboard",
@@ -44,6 +45,7 @@ export function pageFromPath(pathname: string): PageId | null {
   if (p === "/") return "home";
   if (p === "/games/news") return "games-news";
   if (p === "/games") return "games";
+  if (p.startsWith("/library/")) return "library-game";
   if (p === "/library") return "library";
   if (p === "/community/leaderboard") return "community-leaderboard";
   if (p === "/community") return "community";
@@ -72,14 +74,37 @@ export function pathForIslander(discordUserId: string): string {
   return `/islanders/${encodeURIComponent(discordUserId)}`;
 }
 
+// `/library/:appId` → appId (null on the bare `/library` path or a non-numeric
+// segment). Mirrors islanderIdFromPath above.
+export function gameAppIdFromPath(pathname: string): number | null {
+  const m = /^\/library\/(\d+)/.exec(pathname);
+  if (!m) return null;
+  const id = Number(m[1]);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+export function pathForGamePage(appId: number): string {
+  return `/library/${appId}`;
+}
+
 export function pathForForumThread(threadId: number, postId?: number | null): string {
   return `/forums/thread/${threadId}${postId ? `/post/${postId}` : ""}`;
 }
 
-// Opens the crew Library with a game's detail drawer pre-opened (Library reads
-// the `game` query param). Used by inline game links in activity feeds.
+// Full per-game landing page. Used by inline game links in activity feeds and
+// other deep-link surfaces. (Previously opened the Library quick-peek drawer
+// via `/library?game=`; the drawer remains reachable from the Library grid
+// itself, this just repoints external deep links to the fuller page.)
 export function pathForGame(appId: number): string {
-  return `/library?game=${appId}`;
+  return pathForGamePage(appId);
+}
+
+// Sibling workstream (WS-adjacent "plan a game night" flow) also adds this
+// helper in parallel — defensive add so this branch doesn't depend on merge
+// order. If both PRs land, expect a trivial duplicate-export conflict here;
+// keep one copy.
+export function pathForPlanNight(appId: number): string {
+  return `/games?plan=${appId}`;
 }
 
 export function pathForLoan(loanId: number): string {

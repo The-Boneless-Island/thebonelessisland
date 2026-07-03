@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import { apiFetch } from "../../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
@@ -44,7 +45,15 @@ export function ForumComposePanel({
   const [uploads, setUploads] = useState<ForumUpload[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [taggedGame, setTaggedGame] = useState<CrewOwnedGame | null>(null);
+  // Preselect a tagged game from ?game=<appId> — e.g. the "Start a thread"
+  // link on the per-game landing page. Only applied once on mount so a later
+  // manual change/clear isn't fought by the URL.
+  const [searchParams] = useSearchParams();
+  const [taggedGame, setTaggedGame] = useState<CrewOwnedGame | null>(() => {
+    const g = Number(searchParams.get("game"));
+    if (!Number.isInteger(g) || g <= 0) return null;
+    return crewGames.find((c) => c.appId === g) ?? null;
+  });
   const [gameQuery, setGameQuery] = useState("");
   const [categories, setCategories] = useState<ForumCategory[]>([]);
   const [category, setCategory] = useState<string>(categorySlug);

@@ -34,7 +34,8 @@ export function ForumThreadPanel({
   isAdmin,
   onBack,
   onCategory,
-  onSelectThread
+  onSelectThread,
+  onSelectGame
 }: {
   threadId: number;
   targetPostId?: number;
@@ -43,6 +44,7 @@ export function ForumThreadPanel({
   onBack: () => void;
   onCategory: (slug: string) => void;
   onSelectThread: (id: number) => void;
+  onSelectGame: (appId: number) => void;
 }) {
   const [thread, setThread] = useState<ForumThreadDetail | null>(null);
   const [posts, setPosts] = useState<ForumPost[] | null>(null);
@@ -325,7 +327,7 @@ export function ForumThreadPanel({
             </h1>
             <div style={{ marginTop: 6, fontSize: 12, color: islandTheme.color.textMuted }}>
               {posts.length} post{posts.length === 1 ? "" : "s"} · {thread.viewCount.toLocaleString()} views · started {formatRelative(thread.createdAt)}
-              {thread.game ? <GameChip game={thread.game} /> : null}
+              {thread.game ? <GameChip game={thread.game} onClick={() => onSelectGame(thread.game!.appId)} /> : null}
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
