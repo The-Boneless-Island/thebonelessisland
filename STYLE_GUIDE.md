@@ -120,7 +120,6 @@ Use `apps/web/src/islandUi.tsx` primitives before writing custom inline control 
 - `IslandTileButton` — large promo tile with background image (used on Home)
 - `IslandMemberChip` — selectable member pill
 - `IslandGameCard` — selectable game row/card
-- `IslandGameBlade` — dense interactive game row (dead/unused; its definition still carries voting UI but nothing imports or renders it — slated for removal)
 - `IslandComingSoonTile` — placeholder reserved-feature tile
 - `IslandNewsPlaceholderCard` — temporary news entry shell
 - `IslandActiveMemberRow` — member status row

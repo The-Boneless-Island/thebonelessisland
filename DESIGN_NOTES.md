@@ -216,12 +216,11 @@ Below 640px the hover-driven mega-menu is unusable, so `MobileTabBar`
 (Home / Games / Community / Nuggies / Profile) is the primary nav. Consolidate the
 ad-hoc breakpoints toward a small set (≈1024 / 768 / 540).
 
-## Forums V2 (built on an unmerged branch)
+## Forums V2
 
-Forums V2 lives on branch `claude/confident-mendel-34a474` (not in `main`). It is
-fully built and verified there but blocked on human sign-off (see `BACKLOG.md`). The
-design invariants below are preserved here in case that branch is revived or the work
-is lost:
+Forums V2 is merged and live (an earlier version of this note claimed it sat unmerged
+on `claude/confident-mendel-34a474`; that went stale — `a2ee84b` is an ancestor of
+`main`). The design invariants that shaped it:
 
 - **Zero new web dependencies** beyond React. All markdown rendering, routing, UI are
   hand-rolled. The API gains only `multer` + `sharp`.
@@ -241,9 +240,65 @@ is lost:
 - **Notifications are polled, in-app only** (Discord is the push channel); no email,
   no reaction notifications (noise). Mentions use `@discord_username` (the unique
   username, anchored to Discord identity).
-- **Reactions are a fixed crew-flavored set** of five (nug 👍 / heart ❤️ / laugh 😂 /
-  fire 🔥 / salute 🫡), one per user per post per type.
+- **Reactions started as a fixed crew-flavored set** of five (nug 👍 / heart ❤️ /
+  laugh 😂 / fire 🔥 / salute 🫡), one per user per post per type. The 2026-07 sweep
+  opened this up — see "Feature sweep 2026-07 → Emoji reactions" below; the five
+  remain the quick-react row.
 - **Polls are a generic forum feature, explicitly distinct from the deleted
   game-night voting** — opt-in per thread, one poll per thread, 2–10 options.
 - **Discord webhook announce is opt-in per thread** and posts as Nuggie;
-  fire-and-forget, never fails the request.
+  fire-and-forget, never fails the request. (Candidate for retirement onto the share
+  pipeline — see `BACKLOG.md` → Forums.)
+
+## Feature sweep 2026-07
+
+Durable rationale from the eight-workstream sweep (PRs #89–#96). Full per-item detail
+lives in the PR bodies; what matters going forward:
+
+- **Share-to-Discord is allowlist + outbox, never client-trusted.** Members share by
+  reference only: `POST /share {contentType, contentId, targetId}`. The API re-fetches
+  the content server-side, resolves the channel from the admin-curated `share_targets`
+  table (raw channel snowflakes never round-trip through the browser), freezes an embed
+  payload, and enqueues a `member.share` row on the existing `bot_announcements` outbox
+  (inheriting its at-least-once retry/dead-letter contract). Shares are
+  member-attributed ("X shared from the island") — the bot is a courier, never the
+  Nuggie voice (brand split). Guard rails: strict per-user rate limit, 6h same-share
+  dedupe (409), `share_enabled` kill-switch, bot-side `channel.guildId` check.
+  `navigator.share` survives only as the secondary "share elsewhere" action.
+- **Emoji reactions widen the key space instead of re-modeling.**
+  `forum_post_reactions.reaction` stays TEXT with PK `(post_id, user_id, reaction)`.
+  Three key shapes coexist: the legacy five keys, a literal Unicode emoji (validated
+  server-side with an `RGI_Emoji` unicode-sets regex + length cap), and `c:<snowflake>`
+  for guild custom emoji (must exist in the `guild_emojis` cache table, lazily synced
+  from Discord REST on a 6h cooldown). Cap: 8 distinct reactions per member per post.
+  The picker is hand-rolled + lazy-chunked with a vendored emoji dataset — no npm
+  dependency, per the project's dependency posture.
+- **Activity-feed copy has one source of truth.** `describeActivityFeedEvent` in
+  `packages/shared/src/activityFeedCopy.ts` is the only kind→copy mapping; Home keeps
+  richer JSX per-kind but its *fallback* (and all of Community + islander-profile
+  summaries) route through the shared formatter, whose default arm humanizes unknown
+  kinds — no surface may ever print a raw dotted event kind. Don't add a new per-page
+  mapping; extend the shared one.
+- **Discord achievement announcements compose the name in the dispatcher.** The bot
+  always renders `{emoji} **{NAME}** unlocked — {flavor}`; variant seed text is purely
+  decorative flavor and must never be the only carrier of the achievement name (that
+  was the root cause of the "took an L" incident). A `{{achievement}}` token approach
+  was deliberately rejected — it would move the guarantee back into unvalidated seed
+  copy.
+- **OP badge is identity on replies, structure on the opener.** The badge renders only
+  on the thread author's *replies* (`isThreadAuthor && !isOp`); the opening post keeps
+  its glow border instead. `forum_posts.is_op` remains strictly structural — server
+  logic (thread delete, reply counts, announce re-sync) depends on it; never repurpose
+  it as an identity flag.
+- **Game landing page supersedes nothing.** `/library/:appId` is the destination page;
+  the GameDetailDrawer stays as the Library grid's quick peek (both consume the same
+  `GET /steam/game/:appId` payload via shared types in `apps/web/src/lib/gameDetail.ts`).
+  `pathForGame()` now points at the page; `/library?game=` keeps opening the drawer so
+  old deep links survive. Crew-facing additions (wishlisted-by, last-played) read the
+  `shareable_*` views like everything else.
+- **Planner deep-link contract:** `/games?plan=<appId>` (helper `pathForPlanNight`).
+  The Games composer consumes it: forces the "tonight" view + "search" source (the AI
+  lockstep effect otherwise clobbers the selection — that was why the old Library PLAN
+  button never actually preselected), seeds the owners as invitees, then clears the
+  param with a replace navigation. Crew-library games only; unknown appids toast and
+  clear.

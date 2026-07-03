@@ -118,7 +118,6 @@ export function App() {
   const navigateToPage = useCallback((next: PageId) => navigate(pathForPage(next)), [navigate]);
   const selectedProfileId = islanderIdFromPath(location.pathname);
   const selectedGameAppId = gameAppIdFromPath(location.pathname);
-  const [composerScrollNonce, setComposerScrollNonce] = useState(0);
   const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
   const [results, setResults] = useState<Recommendation[]>([]);
   const [status, setStatus] = useState("Idle");
@@ -1929,7 +1928,6 @@ export function App() {
           crewGames={crewGames}
           crewWishlist={crewWishlist}
           gameNews={gameNews}
-          composerScrollNonce={composerScrollNonce}
           draftAppId={draftAppId}
           lockNonce={lockNonce}
           currentDiscordUserId={profileData?.discordUserId ?? null}

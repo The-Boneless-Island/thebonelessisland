@@ -36,7 +36,6 @@ type GamesPageProps = {
   crewGames: CrewOwnedGame[];
   crewWishlist: CrewWishlistGame[];
   gameNews: GameNewsItem[];
-  composerScrollNonce: number;
   draftAppId: number | null;
   lockNonce: number;
   currentDiscordUserId: string | null;
@@ -390,7 +389,6 @@ function PlanNightCard(props: GamesPageProps) {
     onNewNightTitleChange,
     onNewNightScheduledForChange,
     onCreateGameNight,
-    composerScrollNonce,
     lockNonce,
     currentDiscordUserId,
     isAdmin,
@@ -419,11 +417,6 @@ function PlanNightCard(props: GamesPageProps) {
     if (source === "ai") onDraftAppIdChange(aiPick?.appId ?? null);
     else if (source === "later") onDraftAppIdChange(null);
   }, [source, aiPick?.appId, onDraftAppIdChange]);
-
-  useEffect(() => {
-    if (composerScrollNonce === 0) return;
-    cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [composerScrollNonce]);
 
   // Consume a `?plan=<appId>` deep link (from the Library "PLAN" shortcut):
   // wait for crewGames to load, then preselect the matching game into the
