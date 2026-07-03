@@ -22,7 +22,7 @@ type LibraryPageProps = {
 };
 
 type LibFilter = "all" | "mine" | LibCategory;
-type SortMode = "owned" | "title" | "tonight";
+type SortMode = "owned" | "title" | "tonight" | "most-played" | "least-played";
 
 const LIB_FILTERS: LibFilter[] = ["all", "mine", "co-op", "horror", "puzzle", "party", "solo"];
 
@@ -37,7 +37,7 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
   });
   const [sort, setSort] = useState<SortMode>(() => {
     const s = searchParams.get("s");
-    return s === "title" || s === "tonight" ? s : "owned";
+    return s === "title" || s === "tonight" || s === "most-played" || s === "least-played" ? s : "owned";
   });
   // The game-detail drawer is URL-driven (/library?game=<appId>) so activity-feed
   // rows and shared links can deep-link straight into a game.
@@ -151,6 +151,20 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
           b.game.ownerCount - a.game.ownerCount ||
           a.game.name.localeCompare(b.game.name)
       );
+    } else if (sort === "most-played") {
+      out.sort(
+        (a, b) =>
+          b.game.totalPlaytimeMinutes - a.game.totalPlaytimeMinutes ||
+          b.game.ownerCount - a.game.ownerCount ||
+          a.game.name.localeCompare(b.game.name)
+      );
+    } else if (sort === "least-played") {
+      out.sort(
+        (a, b) =>
+          a.game.totalPlaytimeMinutes - b.game.totalPlaytimeMinutes ||
+          b.game.ownerCount - a.game.ownerCount ||
+          a.game.name.localeCompare(b.game.name)
+      );
     }
     return out;
   }, [enriched, search, filter, sort]);
@@ -236,6 +250,8 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
           <option value="owned">Most owned</option>
           <option value="title">Alphabetical</option>
           <option value="tonight">Playable tonight</option>
+          <option value="most-played">Most played</option>
+          <option value="least-played">Least played</option>
         </select>
         <span
           className="island-mono"
@@ -268,6 +284,7 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
               category={entry.category}
               mine={entry.mine}
               onlineOwners={entry.onlineOwners}
+              showPlaytime={sort === "most-played" || sort === "least-played"}
               onPlan={onPlan}
               onDetails={setOpenAppId}
             />
@@ -286,11 +303,20 @@ function LibraryPageImpl({ crewGames, guildMembers, currentDiscordUserId, onNavi
 
 export const LibraryPage = memo(LibraryPageImpl);
 
+// Same pattern as GameDetailDrawer's formatHours: minutes → compact hour label.
+function formatHours(minutes: number): string {
+  if (!Number.isFinite(minutes) || minutes <= 0) return "0h";
+  const hours = minutes / 60;
+  if (hours < 1) return `${Math.round(minutes)}m`;
+  return `${Math.round(hours).toLocaleString()}h`;
+}
+
 function LibraryPoster({
   game,
   category,
   mine,
   onlineOwners,
+  showPlaytime,
   onPlan,
   onDetails
 }: {
@@ -298,6 +324,7 @@ function LibraryPoster({
   category: LibCategory;
   mine: boolean;
   onlineOwners: number;
+  showPlaytime: boolean;
   onPlan: (appId: number) => void;
   onDetails: (appId: number) => void;
 }) {
@@ -322,7 +349,7 @@ function LibraryPoster({
           {onlineOwners >= 2 ? (
             <span style={{ color: islandTheme.color.successAccent }}> · {onlineOwners} online</span>
           ) : null}
-          {priceLine ? ` · ${priceLine}` : ""}
+          {showPlaytime ? ` · ${formatHours(game.totalPlaytimeMinutes)} crew` : priceLine ? ` · ${priceLine}` : ""}
         </>
       }
       badges={
@@ -333,28 +360,53 @@ function LibraryPoster({
         </>
       }
       action={
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onPlan(game.appId);
-          }}
-          className="island-btn island-mono"
-          style={{
-            background: islandTheme.color.primary,
-            border: `1px solid ${islandTheme.color.primary}`,
-            color: islandTheme.color.primaryText,
-            padding: "5px 12px",
-            borderRadius: 999,
-            fontSize: islandTheme.text.sm,
-            fontWeight: 700,
-            cursor: "pointer",
-            font: "inherit",
-            flexShrink: 0
-          }}
-        >
-          PLAN
-        </button>
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: 6 }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlan(game.appId);
+            }}
+            className="island-btn island-mono"
+            style={{
+              background: islandTheme.color.primary,
+              border: `1px solid ${islandTheme.color.primary}`,
+              color: islandTheme.color.primaryText,
+              padding: "5px 12px",
+              borderRadius: 999,
+              fontSize: islandTheme.text.sm,
+              fontWeight: 700,
+              cursor: "pointer",
+              font: "inherit",
+              flexShrink: 0
+            }}
+          >
+            PLAN
+          </button>
+          <a
+            href={`https://store.steampowered.com/app/${game.appId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="island-mono"
+            aria-label={`${game.name} — view on Steam`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontSize: islandTheme.text.sm,
+              fontWeight: 700,
+              color: "#e2e8f0",
+              textDecoration: "none",
+              padding: "5px 10px",
+              borderRadius: 999,
+              border: "1px solid rgba(226,232,240,0.5)",
+              background: "transparent",
+              flexShrink: 0
+            }}
+          >
+            STORE ↗
+          </a>
+        </div>
       }
     />
   );
