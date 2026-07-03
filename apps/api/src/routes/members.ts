@@ -699,10 +699,14 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
       bannerUrl = fetched.bannerUrl ?? bannerUrl;
       accentColor = fetched.accentColor ?? accentColor;
     }
+    // Only overwrite banner_url/accent_color when the fetch actually returned a
+    // value — a failed/empty fetch (network error, non-200, no banner set) must
+    // not wipe a previously-stored banner. The cooldown timestamp always
+    // advances either way so the weekly retry cadence is preserved.
     await db.query(
       `UPDATE guild_members SET banner_url = $3, accent_color = $4, banner_checked_at = NOW()
        WHERE guild_id = $1 AND discord_user_id = $2`,
-      [guildId, discordUserId, fetched?.bannerUrl ?? null, fetched?.accentColor ?? accentColor ?? null]
+      [guildId, discordUserId, bannerUrl ?? null, accentColor ?? null]
     );
   }
 

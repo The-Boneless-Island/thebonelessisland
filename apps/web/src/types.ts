@@ -113,7 +113,9 @@ export type MeProfile = {
   steam: SteamSummary | null;
   roleNames: string[];
   inVoice: boolean;
+  presenceStatus: PresenceStatus | null;
   richPresenceText: string | null;
+  guildAvatarUrl: string | null;
   nuggieBalance: number;
   lifetimeEarned: number;
   claimedToday?: boolean;

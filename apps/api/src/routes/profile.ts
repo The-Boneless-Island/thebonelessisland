@@ -54,9 +54,11 @@ profileRouter.get("/me", async (req, res) => {
     display_name: string | null;
     role_names: string[] | null;
     in_voice: boolean | null;
+    presence_status: string | null;
     rich_presence_text: string | null;
     activity_name: string | null;
     activity_type: number | null;
+    guild_avatar_url: string | null;
     joined_at_guild: string | null;
     premium_since: string | null;
     balance: string | null;
@@ -88,9 +90,11 @@ profileRouter.get("/me", async (req, res) => {
         gm.display_name,
         gm.role_names,
         gm.in_voice,
+        gm.presence_status,
         gm.rich_presence_text,
         gm.activity_name,
         gm.activity_type,
+        gm.guild_avatar_url,
         gm.joined_at_guild,
         gm.premium_since,
         nb.balance,
@@ -150,12 +154,14 @@ profileRouter.get("/me", async (req, res) => {
         : null,
       roleNames: row.role_names ?? [],
       inVoice: Boolean(row.in_voice),
+      presenceStatus: row.presence_status,
       richPresenceText: composePresenceText({
         activityName: row.activity_name,
         activityType: row.activity_type,
         steamGameInfo: row.steam_game_extra_info,
         richPresenceText: row.rich_presence_text
       }),
+      guildAvatarUrl: row.guild_avatar_url,
       nuggieBalance: parseInt(row.balance ?? "0", 10),
       lifetimeEarned: parseInt(row.lifetime_earned ?? "0", 10),
       claimedToday,

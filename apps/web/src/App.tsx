@@ -326,6 +326,14 @@ export function App() {
     () => gameNights.find((night) => night.id === selectedNightId) ?? null,
     [gameNights, selectedNightId]
   );
+  // Self entry in the already-polled member list — reused so the user menu can
+  // show live status/banner/roles without a second poll. Falls back to null
+  // (UserMenu itself falls back to profileData) during the boot race before
+  // guildMembers has loaded for the first time.
+  const selfMember = useMemo(
+    () => guildMembers.find((m) => m.discordUserId === profileData?.discordUserId) ?? null,
+    [guildMembers, profileData?.discordUserId]
+  );
   const isAdmin = Boolean(profileData?.roleNames.includes("Parent"));
 
   useEffect(() => {
@@ -1836,6 +1844,7 @@ export function App() {
         page={page ?? "home"}
         onNavigate={navigateToPage}
         profile={profileData}
+        selfMember={selfMember}
         isAdmin={isAdmin}
         tagline={tagline}
         onLogout={() => void logout()}

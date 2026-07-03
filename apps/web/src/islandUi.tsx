@@ -876,6 +876,23 @@ export function accentHex(accentColor: number | null | undefined): string | null
   return `#${(accentColor & 0xffffff).toString(16).padStart(6, "0")}`;
 }
 
+/**
+ * Header background for a profile-ish surface (crew card, islander page,
+ * user menu): real Discord banner image > accent-color gradient > hashed
+ * per-member gradient. Single source — the fallback chain was previously
+ * duplicated inline across Community/IslanderProfile/Profile.
+ */
+export function bannerBackground(
+  bannerUrl: string | null | undefined,
+  accentColor: number | null | undefined,
+  seedId: string
+): string {
+  if (bannerUrl) return `url("${bannerUrl}") center/cover`;
+  const accent = accentHex(accentColor);
+  if (accent) return `linear-gradient(135deg, ${accent}88, ${islandTheme.color.panelMutedBg})`;
+  return `linear-gradient(135deg, ${memberColor(seedId)}55, ${islandTheme.color.panelMutedBg})`;
+}
+
 // ── Icon ─────────────────────────────────────────────────────────────────────
 // Minimal geometric icon set shared by new primitives.
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { SITE_BRAND_NAME } from "@island/shared";
 import { islandTheme } from "../theme.js";
-import type { MeProfile, PageId } from "../types.js";
+import type { GuildMember, MeProfile, PageId } from "../types.js";
 import { UserMenu } from "./UserMenu.js";
 import { MegaMenu } from "./MegaMenu.js";
 import { NotificationBell } from "./NotificationBell.js";
@@ -11,6 +11,7 @@ type TopbarProps = {
   page: PageId;
   onNavigate: (page: PageId) => void;
   profile: MeProfile | null;
+  selfMember?: GuildMember | null;
   isAdmin: boolean;
   tagline?: string;
   onLogout: () => void;
@@ -18,7 +19,7 @@ type TopbarProps = {
   onOpenForumThread?: (threadId: number, postId: number | null) => void;
 };
 
-export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, onOpenSearch, onOpenForumThread }: TopbarProps) {
+export function Topbar({ page, onNavigate, profile, selfMember, isAdmin, tagline, onLogout, onOpenSearch, onOpenForumThread }: TopbarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -115,6 +116,7 @@ export function Topbar({ page, onNavigate, profile, isAdmin, tagline, onLogout, 
             <UserMenu
               menuRef={menuRef}
               profile={profile}
+              selfMember={selfMember ?? null}
               page={page}
               isAdmin={isAdmin}
               onClose={() => setMenuOpen(false)}
