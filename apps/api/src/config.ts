@@ -24,6 +24,24 @@ const Env = z.object({
       "WEB_ORIGIN must be a fully-qualified http(s) URL with no wildcards"
     )
     .default("http://localhost:5173"),
+  // The API's own publicly-reachable origin (scheme + host, no trailing
+  // slash) — used to build the Steam OpenID realm/return_to URLs. Previously
+  // derived per-request from X-Forwarded-Host/X-Forwarded-Proto, which trusts
+  // whatever the caller sends unless every hop in front of the API strips
+  // those headers; a static config value removes that trust dependency.
+  // Defaults to the real prod host when NODE_ENV=production, else localhost
+  // on API_PORT — override only if the API is reachable at a different host.
+  API_PUBLIC_URL: z
+    .string()
+    .refine(
+      (v) => /^https?:\/\/[^*\s]+$/.test(v),
+      "API_PUBLIC_URL must be a fully-qualified http(s) URL with no wildcards"
+    )
+    .default(() =>
+      process.env.NODE_ENV === "production"
+        ? "https://api.bonelessisland.com"
+        : `http://localhost:${process.env.API_PORT ?? "3000"}`
+    ),
   DATABASE_URL: z.string().default("postgresql://postgres:postgres@localhost:5432/boneless"),
   SESSION_SECRET: z.string().default("dev-secret"),
   BOT_API_SHARED_SECRET: z.string().default(""),

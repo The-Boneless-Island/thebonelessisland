@@ -1,5 +1,6 @@
 import { loanGuideEmbedFields } from "@island/shared";
 import { randomUUID } from "crypto";
+import { writeFile } from "fs/promises";
 import dotenv from "dotenv";
 import {
   ActionRowBuilder,
@@ -22,7 +23,7 @@ import {
 import { loadSecrets } from "./lib/secrets.js";
 import { installRedactor } from "./lib/logger.js";
 import { initSentry, Sentry } from "./lib/sentry.js";
-import { installProcessFatalHandlers } from "./lib/structuredLog.js";
+import { installProcessFatalHandlers, log } from "./lib/structuredLog.js";
 import { renderRankCard } from "./cards/index.js";
 
 dotenv.config({ path: "../../.env" });
@@ -39,6 +40,12 @@ const apiBase = process.env.API_BASE_URL ?? "http://localhost:3000";
 const botApiSharedSecret = process.env.BOT_API_SHARED_SECRET ?? "";
 
 // ── API Helper ────────────────────────────────────────────────────────────────
+
+// Every outbound fetch to our own API gets a hard deadline — an api-side
+// stall (e.g. a slow query, a Postgres bounce) must not hang a Discord
+// interaction (which has its own 3s/15min deadlines) or the announcement
+// poller forever.
+const API_FETCH_TIMEOUT_MS = 10_000;
 
 async function api(
   method: string,
@@ -57,6 +64,7 @@ async function api(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
   });
   const data = await res.json().catch(() => null);
   return { ok: res.ok, status: res.status, data };
@@ -75,6 +83,7 @@ async function internalApi(
       "x-island-bot-secret": botApiSharedSecret,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS),
   });
   const data = await res.json().catch(() => null);
   return { ok: res.ok, status: res.status, data };
@@ -263,7 +272,15 @@ type ActivityEvent = {
 const webOrigin = (process.env.WEB_ORIGIN ?? "http://localhost:5173").replace(/\/+$/, "");
 const webUrl = (path: string): string => `${webOrigin}${path}`;
 
-type PendingLoanWizard =
+// `nonce` binds a pending wizard entry to the exact button message that
+// offered it — the customId carries the same nonce, so a stale confirm
+// button from an older wizard invocation (or a replayed/forwarded
+// interaction) can't accidentally confirm a different, newer pending
+// entry for the same user. `createdAt` backs the 5-minute expiry below.
+type PendingLoanWizard = {
+  nonce: string;
+  createdAt: number;
+} & (
   | {
       kind: "offer";
       userId: string;
@@ -273,9 +290,31 @@ type PendingLoanWizard =
       interestPct?: number;
       collateral: number;
     }
-  | { kind: "repay"; userId: string; loanId: number };
+  | { kind: "repay"; userId: string; loanId: number }
+);
 
 const loanWizardPending = new Map<string, PendingLoanWizard>();
+const LOAN_WIZARD_TTL_MS = 5 * 60 * 1000;
+
+/** customId shape: `loan_wizard_confirm:<nonce>` / `loan_wizard_cancel:<nonce>`. */
+function loanWizardCustomId(action: "confirm" | "cancel", nonce: string): string {
+  return `loan_wizard_${action}:${nonce}`;
+}
+
+// Lazy sweep, run on every wizard-button click (see the loan_wizard_confirm/
+// cancel handler below) rather than on a dedicated timer — pending wizard
+// entries are a handful of in-memory rows at most, so a full periodic timer
+// is unneeded ceremony. The per-click `Date.now() - createdAt` check right
+// below is the actual enforcement; this just keeps the map from
+// accumulating abandoned entries between clicks.
+function sweepExpiredLoanWizards(): void {
+  const now = Date.now();
+  for (const [userId, pending] of loanWizardPending) {
+    if (now - pending.createdAt > LOAN_WIZARD_TTL_MS) {
+      loanWizardPending.delete(userId);
+    }
+  }
+}
 
 function loanWebLink(loanId: number): string {
   return webUrl(`/nuggies/loans?loan=${loanId}`);
@@ -702,13 +741,56 @@ async function registerCommands() {
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
     // Privileged — enable both in Discord Dev Portal under the bot's
     // "Privileged Gateway Intents" section.
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildPresences
   ]
 });
+
+// ── Gateway lifecycle ────────────────────────────────────────────────────────
+// discord.js silently keeps a session-less client alive after certain
+// failures (a session invalidation, a fatal auth error) instead of crashing
+// — the process looks "up" to `docker ps` / `restart: unless-stopped` while
+// actually doing nothing. Treat those as fatal so the container restarts
+// into a clean login instead of zombie-ing forever. Ordinary reconnect
+// churn (shard drop + resume) is normal gateway behavior — log only.
+client.on(Events.Invalidated, () => {
+  log.fatal("bot", "gateway.invalidated", { msg: "session invalidated — exiting for a clean restart" });
+  process.exit(1);
+});
+client.on(Events.Error, (err) => {
+  log.error("bot", "gateway.error", { err: err.message, stack: err.stack });
+});
+client.on(Events.ShardError, (err, shardId) => {
+  log.error("bot", "gateway.shardError", { shardId, err: err.message, stack: err.stack });
+});
+client.on(Events.ShardDisconnect, (event, shardId) => {
+  log.warn("bot", "gateway.shardDisconnect", { shardId, code: event?.code, reason: event?.reason });
+});
+client.on(Events.ShardResume, (shardId, replayedEvents) => {
+  log.info("bot", "gateway.shardResume", { shardId, replayedEvents });
+});
+
+// ── Heartbeat (container healthcheck) ────────────────────────────────────────
+// Touches /tmp/heartbeat so the compose healthcheck (busybox `find -mmin`,
+// see infra/docker-compose.yml) can tell "process alive" apart from "gateway
+// actually connected and doing work." Written at ready + every announcement
+// poll tick (already a steady 30s cadence — see processPendingAnnouncements
+// below), so a stalled poll loop (e.g. wedged on a hung fetch) stops the
+// heartbeat and the container gets recycled instead of idling forever.
+const HEARTBEAT_PATH = "/tmp/heartbeat";
+
+async function touchHeartbeat(): Promise<void> {
+  try {
+    await writeFile(HEARTBEAT_PATH, new Date().toISOString(), "utf8");
+  } catch (err) {
+    // Non-fatal — worst case the healthcheck goes unhealthy and the
+    // orchestrator restarts us, which is an acceptable failure mode for a
+    // liveness probe.
+    console.error("[heartbeat] write failed", err);
+  }
+}
 
 // ── Presence sync ───────────────────────────────────────────────────────────
 // Push every Discord presence change (online/idle/dnd/offline) to the API so
@@ -739,17 +821,69 @@ async function pushPresence(
   if (lastPushedStatus.get(discordUserId) === dedupeKey) return;
   lastPushedStatus.set(discordUserId, dedupeKey);
   try {
-    await fetch(`${apiBase}/members/presence/${discordUserId}`, {
+    const res = await fetch(`${apiBase}/members/presence/${discordUserId}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-island-bot-secret": botApiSharedSecret
       },
-      body: JSON.stringify({ status, activityName, activityType })
+      body: JSON.stringify({ status, activityName, activityType }),
+      signal: AbortSignal.timeout(API_FETCH_TIMEOUT_MS)
     });
+    if (!res.ok) {
+      // Recorded-as-pushed would otherwise wedge this user's presence stale
+      // until their next *different* status change. Drop the dedupe key so
+      // the next PresenceUpdate (or the hourly sweep) retries the push.
+      lastPushedStatus.delete(discordUserId);
+    }
   } catch {
     // Best-effort. Next presence event will retry.
     lastPushedStatus.delete(discordUserId);
+  }
+}
+
+/**
+ * Runs `fn` over `items` with at most `limit` in flight at once. No new
+ * deps — a small manual pool is enough for our fan-out sizes (guild member
+ * counts in the hundreds, not thousands).
+ */
+async function runWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    while (cursor < items.length) {
+      const item = items[cursor];
+      cursor += 1;
+      await fn(item);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+}
+
+const PRESENCE_SWEEP_CONCURRENCY = 5;
+
+/**
+ * Pushes current cached presence for every guild member. Used both at
+ * ready (covers members outside the gateway's initial PRESENCE_UPDATE
+ * backlog) and on an hourly re-sweep (covers any presence push that was
+ * silently dropped between sweeps — a missed gateway event, an api blip
+ * that raced pushPresence's own retry-on-next-event).
+ */
+async function sweepGuildPresence(): Promise<void> {
+  if (!guildId) return;
+  try {
+    const guild = await client.guilds.fetch(guildId).catch(() => null);
+    if (!guild) return;
+    const members = await guild.members.fetch().catch(() => null);
+    if (!members) return;
+    const list = [...members.values()];
+    await runWithConcurrency(list, PRESENCE_SWEEP_CONCURRENCY, async (member) => {
+      const status = member.presence?.status ?? "offline";
+      const { activityName, activityType } = extractActivity(member.presence?.activities);
+      await pushPresence(member.id, status, activityName, activityType);
+    });
+    console.log(`[presence] sweep pushed ${list.length} member(s)`);
+  } catch (error) {
+    console.error("[presence] sweep failed", error);
   }
 }
 
@@ -1023,68 +1157,14 @@ async function processAchievementUnlocked(payload: AchievementUnlockedPayload): 
   }
 }
 
-async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<void> {
-  const enabled = await getCachedSetting("milestone_announcements_enabled");
-  const channelId = await getCachedSetting("milestone_channel_id");
-
-  // 1. Public channel announcement (if enabled + configured)
-  if (enabled === "true" && channelId) {
-    try {
-      const channel = await client.channels.fetch(channelId);
-      if (channel && channel.isSendable()) {
-        const idx = TIER_ROLE_KEYS_IN_LADDER_ORDER.indexOf(payload.roleSettingKey);
-        const tier = idx >= 0 ? TIER_LADDER[idx] : undefined;
-        let posted = false;
-
-        // Preferred: rich rank-up card embed. Falls back to the text line if the
-        // member, art, or render fails — never blocks the role grant below.
-        if (tier && guildId) {
-          try {
-            const guild = await client.guilds.fetch(guildId).catch(() => null);
-            const member = guild
-              ? await guild.members.fetch(payload.discordUserId).catch(() => null)
-              : null;
-            if (member) {
-              const card = await renderRankCard({
-                displayName: member.displayName,
-                avatarUrl: member.displayAvatarURL({ extension: "png", size: 128 }),
-                tierLabel: payload.label,
-                coinUrl: `${webOrigin}/art/milestones/${tier.slug}.png?v=${RANK_ART_VERSION}`,
-                accent: tier.accent,
-                bonus: payload.bonus,
-                currentThreshold: payload.threshold,
-                lifetimeEarned: payload.lifetimeEarned,
-                nextThreshold: payload.nextThreshold ?? undefined,
-                nextLabel: payload.nextLabel ?? undefined,
-              });
-              const embed = new EmbedBuilder()
-                .setColor(parseInt(tier.accent.slice(1), 16))
-                .setImage("attachment://rank.png");
-              await channel.send({
-                content: `🎉 <@${payload.discordUserId}> reached **${payload.label}** — +${payload.bonus.toLocaleString()} Nuggies!`,
-                embeds: [embed],
-                files: [new AttachmentBuilder(card, { name: "rank.png" })],
-                allowedMentions: { users: [payload.discordUserId] },
-              });
-              posted = true;
-            }
-          } catch (err) {
-            console.error(`[milestones] card post failed for ${payload.discordUserId}@${payload.label}`, err);
-          }
-        }
-
-        if (!posted) {
-          await channel.send(
-            `🌊 <@${payload.discordUserId}> reached **${payload.label}** ${payload.emblem} — ₦${payload.bonus.toLocaleString()} bonus paid!`
-          );
-        }
-      }
-    } catch (err) {
-      console.error(`[milestones] channel post failed for ${payload.discordUserId}@${payload.label}`, err);
-    }
-  }
-
-  // 2. Role assignment + lower-tier role cleanup
+// Role grant is idempotent — re-adding a role a member already has is a
+// no-op on Discord's side. The channel announcement is NOT idempotent (a
+// retry would post twice). So we grant the role FIRST, best-effort, and let
+// the announcement send be the part that determines this row's delivery
+// outcome: if it throws, the outbox retries the row later, which re-sends
+// the announcement but only re-applies a role the member already holds —
+// never a duplicate grant.
+async function grantMilestoneRole(payload: MilestonePayload): Promise<void> {
   if (!guildId) return;
   try {
     const guild = await client.guilds.fetch(guildId).catch(() => null);
@@ -1117,7 +1197,115 @@ async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<
   }
 }
 
+async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<void> {
+  // 1. Role assignment + lower-tier role cleanup (idempotent — goes first).
+  await grantMilestoneRole(payload);
+
+  // 2. Public channel announcement (if enabled + configured). Left
+  // unguarded (throws propagate) so a send failure marks this row's
+  // delivery attempt failed and the outbox retries it — see the
+  // attempts/last_error contract in processPendingAnnouncements below.
+  const enabled = await getCachedSetting("milestone_announcements_enabled");
+  const channelId = await getCachedSetting("milestone_channel_id");
+  if (enabled !== "true" || !channelId) return;
+
+  const channel = await client.channels.fetch(channelId);
+  if (!channel?.isSendable()) return;
+
+  const idx = TIER_ROLE_KEYS_IN_LADDER_ORDER.indexOf(payload.roleSettingKey);
+  const tier = idx >= 0 ? TIER_LADDER[idx] : undefined;
+  let posted = false;
+
+  // Preferred: rich rank-up card embed. Falls back to the text line if the
+  // member, art, or render fails — never blocks the fallback send below.
+  if (tier && guildId) {
+    try {
+      const guild = await client.guilds.fetch(guildId).catch(() => null);
+      const member = guild
+        ? await guild.members.fetch(payload.discordUserId).catch(() => null)
+        : null;
+      if (member) {
+        const card = await renderRankCard({
+          displayName: member.displayName,
+          avatarUrl: member.displayAvatarURL({ extension: "png", size: 128 }),
+          tierLabel: payload.label,
+          coinUrl: `${webOrigin}/art/milestones/${tier.slug}.png?v=${RANK_ART_VERSION}`,
+          accent: tier.accent,
+          bonus: payload.bonus,
+          currentThreshold: payload.threshold,
+          lifetimeEarned: payload.lifetimeEarned,
+          nextThreshold: payload.nextThreshold ?? undefined,
+          nextLabel: payload.nextLabel ?? undefined,
+        });
+        const embed = new EmbedBuilder()
+          .setColor(parseInt(tier.accent.slice(1), 16))
+          .setImage("attachment://rank.png");
+        await channel.send({
+          content: `🎉 <@${payload.discordUserId}> reached **${payload.label}** — +${payload.bonus.toLocaleString()} Nuggies!`,
+          embeds: [embed],
+          files: [new AttachmentBuilder(card, { name: "rank.png" })],
+          allowedMentions: { users: [payload.discordUserId] },
+        });
+        posted = true;
+      }
+    } catch (err) {
+      console.error(`[milestones] card post failed for ${payload.discordUserId}@${payload.label}`, err);
+    }
+  }
+
+  if (!posted) {
+    await channel.send(
+      `🌊 <@${payload.discordUserId}> reached **${payload.label}** ${payload.emblem} — ₦${payload.bonus.toLocaleString()} bonus paid!`
+    );
+  }
+}
+
 let processInFlight = false;
+
+/**
+ * Reports one row's delivery outcome to the API (attempts/last_error/
+ * dead-letter bookkeeping lives server-side — see internal.ts). Retries the
+ * ack POST once after a short delay on network failure, since an unacked
+ * "ok" would otherwise leave a successfully-delivered row stuck pending and
+ * cause a duplicate announcement next poll.
+ *
+ * If the ack still fails after the retry, we deliberately do nothing further
+ * locally (no local "already handled" bookkeeping — the bot has no
+ * database). The row stays pending server-side and re-polls next tick,
+ * which re-runs the handler. For an "ok" outcome that means a possible
+ * duplicate announcement send; for a "failed" outcome it just means the
+ * retry-count bump is delayed by one cycle. At-least-once delivery is the
+ * accepted failure mode here — the alternative (marking success locally
+ * without a confirmed ack) risks silently losing an announcement forever,
+ * which is worse than an occasional double-post.
+ */
+async function ackAnnouncement(id: number, ok: boolean, error?: string): Promise<void> {
+  const body = { id, ok, error };
+  // internalApi returns { ok:false } for HTTP errors but THROWS for network
+  // failures and the 10s fetch timeout — both must count as a failed ack
+  // attempt, never propagate: a throw escaping the success-path ack would
+  // land in the poller's catch and record a false "failed delivery" for an
+  // announcement that actually sent (guaranteeing a duplicate), and a throw
+  // from the failure-path ack would abort the rest of the batch.
+  const tryAck = async (): Promise<{ ok: boolean; status: number | "network-error" }> => {
+    try {
+      const res = await internalApi("POST", `/internal/bot/announcements/${id}/processed`, body);
+      return { ok: res.ok, status: res.status };
+    } catch {
+      return { ok: false, status: "network-error" };
+    }
+  };
+  const first = await tryAck();
+  if (first.ok) return;
+  console.error(`[announcements] ack failed for row ${id}, retrying once`, { status: first.status });
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
+  const second = await tryAck();
+  if (!second.ok) {
+    console.error(`[announcements] ack retry also failed for row ${id} — row will re-poll (at-least-once)`, {
+      status: second.status,
+    });
+  }
+}
 
 async function processPendingAnnouncements(): Promise<void> {
   if (processInFlight) return;
@@ -1142,11 +1330,11 @@ async function processPendingAnnouncements(): Promise<void> {
         } else if (row.kind === "game.patch") {
           await processGamePatch(row.payload as GamePatchPayload);
         }
+        await ackAnnouncement(row.id, true);
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
         console.error(`[announcements] handler failed for row ${row.id}`, err);
-      } finally {
-        // Always mark processed so a misconfigured row can't loop forever.
-        await internalApi("POST", `/internal/bot/announcements/${row.id}/processed`);
+        await ackAnnouncement(row.id, false, message);
       }
     }
   } catch (err) {
@@ -1156,41 +1344,34 @@ async function processPendingAnnouncements(): Promise<void> {
   }
 }
 
+const PRESENCE_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Bot ready as ${readyClient.user.tag}`);
+  void touchHeartbeat();
   try {
     await registerCommands();
   } catch (error) {
     console.error("Command registration failed", error);
   }
 
-  // Kick off the announcement poll loop. First run immediate, then every 30s.
+  // Kick off the announcement poll loop. First run immediate, then every
+  // 30s — also our heartbeat cadence (see touchHeartbeat above), since a
+  // healthy poll loop is a reasonable proxy for "bot is actually working."
   void processPendingAnnouncements();
-  setInterval(() => void processPendingAnnouncements(), 30_000);
+  setInterval(() => {
+    void touchHeartbeat();
+    void processPendingAnnouncements();
+  }, 30_000);
 
   // Initial presence sweep — push current cached status for every guild
   // member. Without this, members not in the bot's gateway PRESENCE_UPDATE
   // backlog (e.g. permanently offline users) would stay null in the DB.
-  if (guildId) {
-    try {
-      const guild = await readyClient.guilds.fetch(guildId).catch(() => null);
-      if (guild) {
-        const members = await guild.members.fetch().catch(() => null);
-        if (members) {
-          let pushed = 0;
-          for (const [, member] of members) {
-            const status = member.presence?.status ?? "offline";
-            const { activityName, activityType } = extractActivity(member.presence?.activities);
-            void pushPresence(member.id, status, activityName, activityType);
-            pushed += 1;
-          }
-          console.log(`[presence] initial sweep queued ${pushed} member(s)`);
-        }
-      }
-    } catch (error) {
-      console.error("Initial presence sweep failed", error);
-    }
-  }
+  // Re-run hourly (same function) to catch pushes silently dropped between
+  // sweeps — a missed gateway event, or an api blip pushPresence's own
+  // retry-on-next-event never got a "next event" to retry on.
+  void sweepGuildPresence();
+  setInterval(() => void sweepGuildPresence(), PRESENCE_SWEEP_INTERVAL_MS);
 });
 
 // ── Interaction Handler ───────────────────────────────────────────────────────
@@ -1217,14 +1398,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
   if (interaction.isButton()) {
     const id = interaction.customId;
-    if (id === "loan_wizard_confirm" || id === "loan_wizard_cancel") {
+    const [action, clickedNonce] = id.startsWith("loan_wizard_confirm:")
+      ? ["confirm", id.slice("loan_wizard_confirm:".length)]
+      : id.startsWith("loan_wizard_cancel:")
+        ? ["cancel", id.slice("loan_wizard_cancel:".length)]
+        : [null, null];
+    if (action) {
+      sweepExpiredLoanWizards();
       const pending = loanWizardPending.get(interaction.user.id);
-      if (!pending || pending.userId !== interaction.user.id) {
-        await interaction.reply({ content: "That confirmation expired. Run the wizard again.", flags: MessageFlags.Ephemeral });
+      const expired =
+        !pending ||
+        pending.userId !== interaction.user.id ||
+        pending.nonce !== clickedNonce ||
+        Date.now() - pending.createdAt > LOAN_WIZARD_TTL_MS;
+      if (expired) {
+        await interaction.reply({
+          content: "This confirmation expired — run the command again.",
+          flags: MessageFlags.Ephemeral,
+        });
         return;
       }
       loanWizardPending.delete(interaction.user.id);
-      if (id === "loan_wizard_cancel") {
+      if (action === "cancel") {
         await interaction.update({ content: "Cancelled.", components: [] });
         return;
       }
@@ -1592,75 +1787,89 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
 
         collector.on("collect", async (btnInteraction) => {
-          const action = btnInteraction.customId === `bj_hit_${userId}` ? "hit" : "stand";
-          const stepKey = `bot-bj-step-${interaction.id}-${btnInteraction.id}-${randomUUID()}`;
-          const stepRes = await api(
-            "POST",
-            `/nuggies/games/${sessionId}/step`,
-            userId,
-            { action },
-            stepKey
-          );
+          try {
+            const action = btnInteraction.customId === `bj_hit_${userId}` ? "hit" : "stand";
+            const stepKey = `bot-bj-step-${interaction.id}-${btnInteraction.id}-${randomUUID()}`;
+            const stepRes = await api(
+              "POST",
+              `/nuggies/games/${sessionId}/step`,
+              userId,
+              { action },
+              stepKey
+            );
 
-          if (!stepRes.ok) {
+            if (!stepRes.ok) {
+              collector.stop("error");
+              await btnInteraction.update({
+                content: gameErrorMessage(stepRes.status, stepRes.data as { error?: string; secondsLeft?: number; code?: string } | null),
+                components: [],
+              });
+              return;
+            }
+
+            state = stepRes.data as GameStateResponse;
+
+            if (state.status === "resolved" && state.result?.type === "blackjack") {
+              collector.stop("resolved");
+              const r = state.result;
+              const playerTotal = state.data.playerTotal ?? 0;
+              const dealerTotal = state.data.dealerTotal ?? 0;
+              await btnInteraction.update({
+                content:
+                  `🃏 **${username}**'s Blackjack — ${blackjackResultText(r.result)}\n` +
+                  `Your hand: ${formatHand(r.playerHand)} (**${playerTotal}**)\n` +
+                  `Dealer: ${formatHand(r.dealerHand)} (**${dealerTotal}**)\n` +
+                  `Payout: ${nuggie(state.payout ?? 0)} | Balance: ${nuggie(state.newBalance ?? 0)}`,
+                components: [],
+              });
+              return;
+            }
+
+            // Still active — update the message with new hand state
+            await btnInteraction.update({
+              content: renderActive(state),
+              components: [buttons()],
+            });
+          } catch (err) {
+            console.error(`[blackjack] collect handler failed for session ${sessionId}`, err);
             collector.stop("error");
-            await btnInteraction.update({
-              content: gameErrorMessage(stepRes.status, stepRes.data as { error?: string; secondsLeft?: number; code?: string } | null),
-              components: [],
-            });
-            return;
+            if (!btnInteraction.deferred && !btnInteraction.replied) {
+              await btnInteraction
+                .update({ content: "⚠️ Something went wrong with that move. Your bet may still be settled server-side — check `/balance`.", components: [] })
+                .catch(() => {});
+            }
           }
-
-          state = stepRes.data as GameStateResponse;
-
-          if (state.status === "resolved" && state.result?.type === "blackjack") {
-            collector.stop("resolved");
-            const r = state.result;
-            const playerTotal = state.data.playerTotal ?? 0;
-            const dealerTotal = state.data.dealerTotal ?? 0;
-            await btnInteraction.update({
-              content:
-                `🃏 **${username}**'s Blackjack — ${blackjackResultText(r.result)}\n` +
-                `Your hand: ${formatHand(r.playerHand)} (**${playerTotal}**)\n` +
-                `Dealer: ${formatHand(r.dealerHand)} (**${dealerTotal}**)\n` +
-                `Payout: ${nuggie(state.payout ?? 0)} | Balance: ${nuggie(state.newBalance ?? 0)}`,
-              components: [],
-            });
-            return;
-          }
-
-          // Still active — update the message with new hand state
-          await btnInteraction.update({
-            content: renderActive(state),
-            components: [buttons()],
-          });
         });
 
         collector.on("end", async (_, reason) => {
-          if (reason === "resolved" || reason === "error") return;
-          // Timeout — server will auto-stand on its own. Force a stand call to
-          // surface the result to the user.
-          const standKey = `bot-bj-timeout-${interaction.id}-${randomUUID()}`;
-          const standRes = await api(
-            "POST",
-            `/nuggies/games/${sessionId}/step`,
-            userId,
-            { action: "stand" },
-            standKey
-          );
-          if (standRes.ok) {
-            const finalState = standRes.data as GameStateResponse;
-            if (finalState.result?.type === "blackjack") {
-              const r = finalState.result;
-              await interaction.editReply({
-                content:
-                  `🃏 **${username}**'s Blackjack — ⏰ auto-stand · ${blackjackResultText(r.result)}\n` +
-                  `Your hand: ${formatHand(r.playerHand)} (**${finalState.data.playerTotal ?? 0}**)\n` +
-                  `Dealer: ${formatHand(r.dealerHand)} (**${finalState.data.dealerTotal ?? 0}**)\n` +
-                  `Payout: ${nuggie(finalState.payout ?? 0)} | Balance: ${nuggie(finalState.newBalance ?? 0)}`,
-                components: [],
-              }).catch(() => {});
+          try {
+            if (reason === "resolved" || reason === "error") return;
+            // Timeout — server will auto-stand on its own. Force a stand call to
+            // surface the result to the user.
+            const standKey = `bot-bj-timeout-${interaction.id}-${randomUUID()}`;
+            const standRes = await api(
+              "POST",
+              `/nuggies/games/${sessionId}/step`,
+              userId,
+              { action: "stand" },
+              standKey
+            );
+            if (standRes.ok) {
+              const finalState = standRes.data as GameStateResponse;
+              if (finalState.result?.type === "blackjack") {
+                const r = finalState.result;
+                await interaction.editReply({
+                  content:
+                    `🃏 **${username}**'s Blackjack — ⏰ auto-stand · ${blackjackResultText(r.result)}\n` +
+                    `Your hand: ${formatHand(r.playerHand)} (**${finalState.data.playerTotal ?? 0}**)\n` +
+                    `Dealer: ${formatHand(r.dealerHand)} (**${finalState.data.dealerTotal ?? 0}**)\n` +
+                    `Payout: ${nuggie(finalState.payout ?? 0)} | Balance: ${nuggie(finalState.newBalance ?? 0)}`,
+                  components: [],
+                }).catch(() => {});
+              }
             }
+          } catch (err) {
+            console.error(`[blackjack] end handler failed for session ${sessionId}`, err);
           }
         });
 
@@ -1697,45 +1906,58 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
 
         collector.on("collect", async (selectInteraction) => {
-          const guess = parseInt(selectInteraction.values[0], 10);
-          const idempotencyKey = `bot-gn-${interaction.id}-${randomUUID()}`;
-          const gameRes = await api(
-            "POST",
-            "/nuggies/games/guessnumber/start",
-            userId,
-            { bet, input: { guess } },
-            idempotencyKey
-          );
+          try {
+            const guess = parseInt(selectInteraction.values[0], 10);
+            const idempotencyKey = `bot-gn-${interaction.id}-${randomUUID()}`;
+            const gameRes = await api(
+              "POST",
+              "/nuggies/games/guessnumber/start",
+              userId,
+              { bet, input: { guess } },
+              idempotencyKey
+            );
 
-          if (!gameRes.ok) {
+            if (!gameRes.ok) {
+              await selectInteraction.update({
+                content: gameErrorMessage(gameRes.status, gameRes.data as { error?: string; secondsLeft?: number; code?: string } | null),
+                components: [],
+              });
+              return;
+            }
+
+            const state = gameRes.data as GameStateResponse;
+            if (state.result?.type !== "guessnumber") {
+              await selectInteraction.update({ content: "❌ Unexpected response.", components: [] });
+              return;
+            }
+            const r = state.result;
+            const outcomeText = r.won
+              ? `✅ **CORRECT!** It was ${r.secret}! Payout: ${nuggie(state.payout ?? 0)}`
+              : `❌ **WRONG!** It was **${r.secret}**. Lost ${nuggie(bet)}`;
+
             await selectInteraction.update({
-              content: gameErrorMessage(gameRes.status, gameRes.data as { error?: string; secondsLeft?: number; code?: string } | null),
+              content:
+                `🎯 **${username}** guessed **${r.guess}**\n` +
+                `${outcomeText}\nBalance: ${nuggie(state.newBalance ?? 0)}`,
               components: [],
             });
-            return;
+          } catch (err) {
+            console.error(`[guessnumber] collect handler failed for user ${userId}`, err);
+            if (!selectInteraction.deferred && !selectInteraction.replied) {
+              await selectInteraction
+                .update({ content: "⚠️ Something went wrong with that guess. Your bet may still be settled server-side — check `/balance`.", components: [] })
+                .catch(() => {});
+            }
           }
-
-          const state = gameRes.data as GameStateResponse;
-          if (state.result?.type !== "guessnumber") {
-            await selectInteraction.update({ content: "❌ Unexpected response.", components: [] });
-            return;
-          }
-          const r = state.result;
-          const outcomeText = r.won
-            ? `✅ **CORRECT!** It was ${r.secret}! Payout: ${nuggie(state.payout ?? 0)}`
-            : `❌ **WRONG!** It was **${r.secret}**. Lost ${nuggie(bet)}`;
-
-          await selectInteraction.update({
-            content:
-              `🎯 **${username}** guessed **${r.guess}**\n` +
-              `${outcomeText}\nBalance: ${nuggie(state.newBalance ?? 0)}`,
-            components: [],
-          });
         });
 
         collector.on("end", async (collected) => {
-          if (collected.size === 0) {
-            await interaction.editReply({ content: "⏰ Timed out — no guess made, bet not placed.", components: [] }).catch(() => {});
+          try {
+            if (collected.size === 0) {
+              await interaction.editReply({ content: "⏰ Timed out — no guess made, bet not placed.", components: [] }).catch(() => {});
+            }
+          } catch (err) {
+            console.error(`[guessnumber] end handler failed for user ${userId}`, err);
           }
         });
 
@@ -1818,7 +2040,10 @@ client.on(Events.InteractionCreate, async (interaction) => {
               await interaction.editReply("Offer wizard needs **borrower** and **amount**. Example: `/loan wizard action:Offer borrower:@crew amount:100`");
               return;
             }
+            const offerNonce = randomUUID();
             loanWizardPending.set(userId, {
+              nonce: offerNonce,
+              createdAt: Date.now(),
               kind: "offer",
               userId,
               toDiscordUserId: borrower.id,
@@ -1828,8 +2053,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
               collateral: interaction.options.getInteger("collateral", false) ?? 0,
             });
             const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-              new ButtonBuilder().setCustomId("loan_wizard_confirm").setLabel("Confirm offer").setStyle(ButtonStyle.Success),
-              new ButtonBuilder().setCustomId("loan_wizard_cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary)
+              new ButtonBuilder().setCustomId(loanWizardCustomId("confirm", offerNonce)).setLabel("Confirm offer").setStyle(ButtonStyle.Success),
+              new ButtonBuilder().setCustomId(loanWizardCustomId("cancel", offerNonce)).setLabel("Cancel").setStyle(ButtonStyle.Secondary)
             );
             await interaction.editReply({
               content: `Confirm loan offer to **${borrower.username}** for ${nuggie(amount)}?`,
@@ -1842,10 +2067,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.editReply("Repay wizard needs **id** (pick an active borrowed loan).");
             return;
           }
-          loanWizardPending.set(userId, { kind: "repay", userId, loanId });
+          const repayNonce = randomUUID();
+          loanWizardPending.set(userId, { nonce: repayNonce, createdAt: Date.now(), kind: "repay", userId, loanId });
           const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-            new ButtonBuilder().setCustomId("loan_wizard_confirm").setLabel("Confirm repay").setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId("loan_wizard_cancel").setLabel("Cancel").setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(loanWizardCustomId("confirm", repayNonce)).setLabel("Confirm repay").setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(loanWizardCustomId("cancel", repayNonce)).setLabel("Cancel").setStyle(ButtonStyle.Secondary)
           );
           await interaction.editReply({
             content: `Confirm repay for loan \`${loanId}\`?`,
@@ -2275,7 +2501,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 if (token) {
-  client.login(token);
+  // An unhandled login rejection (bad token, network failure at boot, etc.)
+  // used to leave the process running with no gateway connection — alive
+  // per `docker ps` / `restart: unless-stopped`, but doing nothing. Exit
+  // loudly instead so the container actually restarts into a fresh attempt.
+  client.login(token).catch((err) => {
+    log.fatal("bot", "login.failed", {
+      err: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    process.exit(1);
+  });
 } else {
   console.log("DISCORD_BOT_TOKEN missing — bot not started.");
 }

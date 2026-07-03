@@ -51,12 +51,17 @@ function CoverImage({
   src,
   alt = "",
   eager = false,
+  fetchPriority = false,
   kenBurns = false,
   objectPosition = "center 30%"
 }: {
   src: string | null;
   alt?: string;
   eager?: boolean;
+  /** Hints the browser to prioritize this fetch — reserve for the one
+   * above-the-fold cover most likely to be the LCP element (the rotating
+   * hero), not every eager image. */
+  fetchPriority?: boolean;
   kenBurns?: boolean;
   objectPosition?: string;
 }) {
@@ -73,7 +78,7 @@ function CoverImage({
           alt={alt}
           loading={eager ? "eager" : "lazy"}
           decoding="async"
-          ref={eager ? (el) => { el?.setAttribute("fetchpriority", "high"); } : undefined}
+          fetchPriority={fetchPriority ? "high" : "auto"}
           onError={() => setFailed(true)}
           onLoad={(e) => { e.currentTarget.style.opacity = "1"; }}
           className={kenBurns ? "news-kenburns" : undefined}
@@ -870,7 +875,7 @@ function NewsHeroCard({
         e.currentTarget.style.boxShadow = "none";
       }}
     >
-      <CoverImage src={item.imageUrl} eager kenBurns objectPosition="center 35%" />
+      <CoverImage src={item.imageUrl} eager fetchPriority kenBurns objectPosition="center 35%" />
       <div className="news-hero-sheen" />
       <div
         aria-hidden="true"

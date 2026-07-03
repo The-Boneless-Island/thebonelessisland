@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { apiFetch } from "../api/client.js";
+import { appQueryKeys } from "../lib/queryClient.js";
 import { IslandCard } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
@@ -9,25 +10,21 @@ type CommunityLeaderboardPageProps = {
   onNavigate: (page: PageId) => void;
 };
 
-export default function CommunityLeaderboardPage({ onNavigate }: CommunityLeaderboardPageProps) {
-  const [leaderboard, setLeaderboard] = useState<NuggiesLeaderboardEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+async function fetchLeaderboard(): Promise<NuggiesLeaderboardEntry[]> {
+  const r = await apiFetch("/nuggies/leaderboard");
+  if (!r.ok) return [];
+  const d = (await r.json().catch(() => null)) as { leaderboard: NuggiesLeaderboardEntry[] } | null;
+  return d?.leaderboard ?? [];
+}
 
-  useEffect(() => {
-    let active = true;
-    void apiFetch("/nuggies/leaderboard")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: { leaderboard: NuggiesLeaderboardEntry[] } | null) => {
-        if (!active) return;
-        if (d?.leaderboard) setLeaderboard(d.leaderboard);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
+export default function CommunityLeaderboardPage({ onNavigate }: CommunityLeaderboardPageProps) {
+  const leaderboardQuery = useQuery({
+    queryKey: appQueryKeys.nuggiesLeaderboard,
+    queryFn: fetchLeaderboard,
+    staleTime: 60_000,
+  });
+  const leaderboard = leaderboardQuery.data ?? [];
+  const loading = leaderboardQuery.isLoading;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>

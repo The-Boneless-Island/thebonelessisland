@@ -166,8 +166,7 @@ aiChatRouter.post("/chat", async (req, res) => {
     const result = await ai.complete(messages, { maxTokens: 512 });
     res.json({ reply: result.text, provider: result.provider, model: result.model });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "AI request failed";
     console.error("[aiChat] ai.complete failed:", err);
-    res.status(502).json({ error: `AI error: ${msg}` });
+    res.status(502).json({ error: "AI request failed. Please try again." });
   }
 });

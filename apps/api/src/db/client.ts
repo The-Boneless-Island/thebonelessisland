@@ -17,3 +17,18 @@ export const db = new Pool({
   query_timeout: 35_000,
   idle_in_transaction_session_timeout: 30_000
 });
+
+// node-postgres emits "error" on the pool whenever an *idle* client dies
+// server-side (e.g. a Postgres restart, network blip) — not just on failed
+// queries. Without a listener, that event is an unhandled EventEmitter
+// "error", which Node treats as an uncaught exception and crashes the
+// process. Log-only here: the pool automatically drops and replaces the
+// broken idle client on its next checkout, so a bounce is self-healing and
+// must not take the api down with it. This listener has to exist before the
+// uncaughtException/unhandledRejection handlers below start calling
+// process.exit(1), or a routine idle-client error during a postgres restart
+// would (correctly per the new fatal-handler contract, but wrongly here)
+// kill the api.
+db.on("error", (err) => {
+  console.error("[db] idle client error (pool self-heals, not fatal):", err);
+});

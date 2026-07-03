@@ -161,6 +161,8 @@ function DesktopGroupItem({
   const [open, setOpen] = useState(false);
   const openTimer = useRef<number | null>(null);
   const closeTimer = useRef<number | null>(null);
+  const groupRef = useRef<HTMLDivElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   function clearTimers() {
     if (openTimer.current) window.clearTimeout(openTimer.current);
@@ -181,14 +183,64 @@ function DesktopGroupItem({
 
   useEffect(() => () => clearTimers(), []);
 
+  // Keyboard/focus accessibility for a menu that otherwise only opens on
+  // mouseenter: focus-within opens it (so Tabbing to the trigger reveals its
+  // children instead of skipping straight past them), Escape and
+  // blur-outside close it, ArrowDown on the trigger opens + moves focus into
+  // the panel's first item.
+  function handleFocus() {
+    clearTimers();
+    prefetchPage(group.defaultId);
+    for (const child of group.children) prefetchPage(child.id);
+    setOpen(true);
+  }
+
+  // Container-level blur: fires when focus leaves any descendant. Check
+  // relatedTarget (where focus is going) — if it's still inside this group,
+  // do nothing; otherwise close. relatedTarget is null for some non-keyboard
+  // blurs (e.g. clicking outside the document), which we also treat as
+  // "left the group".
+  function handleBlur(e: React.FocusEvent<HTMLDivElement>) {
+    const next = e.relatedTarget as Node | null;
+    if (next && groupRef.current?.contains(next)) return;
+    setOpen(false);
+  }
+
+  function handleTriggerKeyDown(e: React.KeyboardEvent) {
+    if (e.key === "Escape") {
+      setOpen(false);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      clearTimers();
+      setOpen(true);
+      // Wait for the panel to mount before focusing its first link.
+      requestAnimationFrame(() => {
+        const firstChild = panelRef.current?.querySelector<HTMLElement>("a, button");
+        firstChild?.focus();
+      });
+    }
+  }
+
   return (
-    <div style={{ position: "relative" }} onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+    <div
+      ref={groupRef}
+      style={{ position: "relative" }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+    >
       <Link
         to={pathForPage(group.defaultId)}
+        aria-expanded={open}
+        aria-haspopup="menu"
         style={{ ...navButtonStyle(active), textDecoration: "none" }}
         onMouseEnter={(e) => { prefetchHandler(group.defaultId)(); if (!active) e.currentTarget.style.background = islandTheme.color.secondary; }}
         onFocus={prefetchHandler(group.defaultId)}
         onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = active ? "rgba(37, 99, 235, 0.22)" : "transparent"; }}
+        onKeyDown={handleTriggerKeyDown}
       >
         {group.label}
         <ChevronSmall open={open} />
@@ -196,6 +248,7 @@ function DesktopGroupItem({
 
       {open && (
         <div
+          ref={panelRef}
           style={{
             position: "absolute",
             top: "calc(100% + 6px)",

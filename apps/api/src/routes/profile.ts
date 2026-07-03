@@ -94,9 +94,7 @@ profileRouter.get("/me", async (req, res) => {
         gm.joined_at_guild,
         gm.premium_since,
         nb.balance,
-        COALESCE(nb.lifetime_earned, (
-          SELECT COALESCE(SUM(amount), 0) FROM nuggies_transactions WHERE user_id = u.id AND amount > 0
-        )) AS lifetime_earned
+        COALESCE(nb.lifetime_earned, 0) AS lifetime_earned
       FROM users u
       INNER JOIN discord_profiles dp ON dp.user_id = u.id
       LEFT JOIN steam_links sl ON sl.user_id = u.id

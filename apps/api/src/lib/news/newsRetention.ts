@@ -48,7 +48,20 @@ export async function shouldTriggerBackgroundIngest(): Promise<boolean> {
   return isFeedStale();
 }
 
-/** Rebuild tsvector for searchable primaries. */
+/**
+ * Rebuild tsvector for searchable primaries. Previously ran the write over
+ * every hot/warm row on every nightly pass regardless of whether its inputs
+ * (title/summary/tags) had changed — a full-table rewrite for a sweep that
+ * runs every 24h. general_news has no generic `updated_at`, but
+ * `ai_curated_at` is bumped on every (re)curation write (the only path that
+ * changes ai_title/ai_summary/ai_tags), so restricting to rows curated since
+ * the last sweep — or never vectorized — covers every row whose vector could
+ * actually be stale, at a fraction of the write volume. The lookback is 2×
+ * the sweep's 24h scheduling interval (server.ts): an exactly-24h lookback
+ * would let a late-firing sweep (restart, long prior run) permanently skip
+ * rows curated just inside the gap; doubling it costs a few redundant
+ * rewrites and removes that hole entirely.
+ */
 async function refreshSearchVectors(): Promise<number> {
   const r = await db.query(
     `
@@ -61,6 +74,7 @@ async function refreshSearchVectors(): Promise<number> {
          AND COALESCE(gn.ai_relevance_score, 0) > 0
          AND gn.ai_validation_failed = FALSE
          AND gn.ai_summary IS NOT NULL
+         AND (gn.search_vector IS NULL OR gn.ai_curated_at > NOW() - INTERVAL '2 days')
     `
   );
   return r.rowCount ?? 0;

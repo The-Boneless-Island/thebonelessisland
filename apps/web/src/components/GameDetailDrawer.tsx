@@ -3,6 +3,7 @@ import { apiFetch } from "../api/client.js";
 import { IslandTag, SpecStrip, memberColor, type SpecItem } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { GameCover } from "../steamArt.js";
+import { useModalFocus } from "../hooks/useModalFocus.js";
 
 type GameStore = {
   isSinglePlayer: boolean;
@@ -127,14 +128,13 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
   const [loading, setLoading] = useState(false);
   const [errored, setErrored] = useState(false);
 
-  useEffect(() => {
-    if (appId === null) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [appId, onClose]);
+  // Focus trap, initial focus, body-scroll lock, and focus restore all come
+  // from the shared hook; Escape-closes was previously an ad-hoc effect here
+  // — the hook now owns that too, so this is a straight replacement.
+  const drawerRef = useModalFocus<HTMLElement>({
+    isOpen: appId !== null,
+    onClose
+  });
 
   useEffect(() => {
     if (appId === null) {
@@ -203,6 +203,8 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
         }}
       />
       <aside
+        ref={drawerRef}
+        tabIndex={-1}
         style={{
           position: "relative",
           width: "min(440px, 100%)",
@@ -217,7 +219,8 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
           display: "grid",
           gap: 16,
           alignContent: "start",
-          padding: 18
+          padding: 18,
+          outline: "none"
         }}
       >
         <style>{`
