@@ -165,7 +165,6 @@ export function ForumThreadPanel({
   async function reactPost(postId: number, reaction: ForumReaction) {
     // Optimistic toggle. A 409 (8-distinct-reactions cap hit) or any other
     // failure re-syncs from the server to correct the optimistic state.
-    const hadReaction = posts?.find((p) => p.id === postId)?.myReactions.includes(reaction) ?? false;
     setPosts((cur) => cur?.map((p) => {
       if (p.id !== postId) return p;
       const has = p.myReactions.includes(reaction);
@@ -185,7 +184,7 @@ export function ForumThreadPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ reaction })
       });
-      if (!r.ok && !hadReaction) void load();
+      if (!r.ok) void load();
     } catch {
       void load();
     }
