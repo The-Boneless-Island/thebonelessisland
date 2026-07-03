@@ -212,9 +212,13 @@ async function applyLedgerInTx(client: PoolClient, opts: {
 
   const newBalance = currentBalance + opts.amount;
 
+  // Mirrors applyTransaction's GREATEST(amount, 0) rule: this helper covers
+  // both bet debits (negative) and payout credits (positive), and this is
+  // the games engine's own transaction (outside applyTransaction), so it
+  // has to carry the same lifetime_earned bookkeeping itself.
   await client.query(
-    "UPDATE nuggies_balances SET balance = $1, updated_at = NOW() WHERE user_id = $2",
-    [newBalance, opts.userId]
+    "UPDATE nuggies_balances SET balance = $1, lifetime_earned = lifetime_earned + $3, updated_at = NOW() WHERE user_id = $2",
+    [newBalance, opts.userId, Math.max(opts.amount, 0)]
   );
 
   await client.query(
