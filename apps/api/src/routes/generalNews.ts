@@ -7,7 +7,8 @@ import {
   isEmbeddingColumnAvailable
 } from "../lib/news/embeddings.js";
 import { buildGeneralNewsFeedQuery } from "../lib/news/newsFeed.js";
-import { savePipelineJob, reconcileInterruptedPipelineJobs } from "../lib/news/newsPipelineJobs.js";
+import { loadPipelineJob, savePipelineJob, reconcileInterruptedPipelineJobs } from "../lib/news/newsPipelineJobs.js";
+import { runOffTopicSweepOnce } from "../lib/news/newsOffTopicSweep.js";
 import { findSimilarArticles, searchGeneralNews } from "../lib/news/newsSearch.js";
 import { getNewsPipelineHealth } from "../lib/news/newsCurationHealth.js";
 import {
@@ -485,6 +486,30 @@ generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParent
  */
 generalNewsRouter.get("/general/recurate/status", requireSession, requireParentRole, (_req, res) => {
   res.json({ ok: true, job: getRecurateJob() });
+});
+
+/**
+ * POST /news/general/off-topic-sweep
+ * Admin — force-runs the off-topic quality sweep (ignores the run-once guard;
+ * the sweep is idempotent). Returns 202 immediately; poll the GET below.
+ */
+generalNewsRouter.post("/general/off-topic-sweep", requireSession, requireParentRole, (_req, res) => {
+  void runOffTopicSweepOnce({ force: true });
+  res.status(202).json({ ok: true, started: true, message: "Off-topic sweep started" });
+});
+
+/**
+ * GET /news/general/off-topic-sweep
+ * Admin — current/last sweep job record (state + scanned/parked/requeued counts).
+ */
+generalNewsRouter.get("/general/off-topic-sweep", requireSession, requireParentRole, async (_req, res) => {
+  try {
+    const job = await loadPipelineJob("offtopic_sweep");
+    res.json({ ok: true, job });
+  } catch (err) {
+    console.error("[generalNews] GET /news/general/off-topic-sweep error:", err);
+    res.status(500).json({ ok: false, error: "Failed to load sweep job" });
+  }
 });
 
 /**
