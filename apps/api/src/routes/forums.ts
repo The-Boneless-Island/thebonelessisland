@@ -1455,6 +1455,8 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
   const categorySlug = req.query.category ? String(req.query.category) : null;
   const typeFilterRaw = req.query.type ? String(req.query.type) : null;
   const typeFilter = typeFilterRaw && (THREAD_TYPES as readonly string[]).includes(typeFilterRaw) ? typeFilterRaw : null;
+  const appIdRaw = req.query.appId ? Number(req.query.appId) : null;
+  const appIdFilter = appIdRaw !== null && Number.isInteger(appIdRaw) && appIdRaw > 0 ? appIdRaw : null;
   const limit = Math.min(parseInt(String(req.query.limit ?? "30"), 10) || 30, 100);
   const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
 
@@ -1473,6 +1475,9 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
   }
   if (typeFilter) {
     p++; where.push(`t.thread_type = $${p}`); params.push(typeFilter);
+  }
+  if (appIdFilter) {
+    p++; where.push(`t.app_id = $${p}`); params.push(appIdFilter);
   }
   if (sort === "unanswered") {
     where.push("t.reply_count = 0");
@@ -1577,6 +1582,9 @@ forumsRouter.get("/threads", requireSession, async (req, res) => {
         : null,
     })),
     sort,
+    category: categorySlug,
+    type: typeFilter,
+    appId: appIdFilter,
     limit,
     offset,
   });
@@ -1791,21 +1799,27 @@ forumsRouter.get("/search", requireSession, async (req, res) => {
   const q = String(req.query.q ?? "").trim();
   if (q.length < 2) { res.json({ threads: [] }); return; }
 
+  const appIdRaw = req.query.appId ? Number(req.query.appId) : null;
+  const appIdFilter = appIdRaw !== null && Number.isInteger(appIdRaw) && appIdRaw > 0 ? appIdRaw : null;
+
   // FTS over title (weighted) + post bodies, with an ILIKE-on-title safety net
   // so partial-word title matches still surface like the old behavior did.
   const r = await db.query<{
     id: string; title: string; slug: string; thread_type: string; reply_count: number;
     created_at: string; last_reply_at: string | null;
     category_slug: string; category_name: string; category_icon: string; category_accent: string;
+    app_id: number | null; game_name: string | null; game_image: string | null;
     snippet: string | null;
   }>(
     `WITH q AS (SELECT websearch_to_tsquery('english', $1) AS query)
      SELECT t.id, t.title, t.slug, t.thread_type, t.reply_count, t.created_at, t.last_reply_at,
             c.slug AS category_slug, c.name AS category_name, c.icon AS category_icon, c.accent_color AS category_accent,
+            t.app_id, g.name AS game_name, g.header_image_url AS game_image,
             ts_headline('english', COALESCE(bp.body, t.title), q.query, $2) AS snippet
      FROM forum_threads t
      CROSS JOIN q
      INNER JOIN forum_categories c ON c.id = t.category_id
+     LEFT JOIN games g ON g.app_id = t.app_id
      LEFT JOIN LATERAL (
        SELECT p.body, ts_rank(p.body_tsv, q.query) AS prank
        FROM forum_posts p
@@ -1815,10 +1829,11 @@ forumsRouter.get("/search", requireSession, async (req, res) => {
      ) bp ON TRUE
      WHERE t.is_deleted = FALSE
        AND (t.title_tsv @@ q.query OR bp.body IS NOT NULL OR t.title ILIKE $3)
+       AND ($4::int IS NULL OR t.app_id = $4)
      ORDER BY (ts_rank(t.title_tsv, q.query) * 2 + COALESCE(bp.prank, 0)) DESC,
               COALESCE(t.last_reply_at, t.created_at) DESC
      LIMIT 30`,
-    [q, SEARCH_HL_OPTS, `%${q}%`]
+    [q, SEARCH_HL_OPTS, `%${q}%`, appIdFilter]
   );
 
   res.json({
@@ -1834,6 +1849,9 @@ forumsRouter.get("/search", requireSession, async (req, res) => {
       categoryName: row.category_name,
       categoryIcon: row.category_icon,
       categoryAccent: row.category_accent,
+      game: row.app_id && row.game_name
+        ? { appId: row.app_id, name: row.game_name, headerImageUrl: row.game_image }
+        : null,
       snippet: row.snippet,
     })),
   });

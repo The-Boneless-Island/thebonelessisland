@@ -44,6 +44,7 @@ type QuickSwitcherProps = {
   crewGames: CrewOwnedGame[];
   onNavigate: (page: PageId) => void;
   onOpenProfile: (discordUserId: string) => void;
+  onOpenGame: (appId: number) => void;
 };
 
 export function QuickSwitcher({
@@ -53,7 +54,8 @@ export function QuickSwitcher({
   guildMembers,
   crewGames,
   onNavigate,
-  onOpenProfile
+  onOpenProfile,
+  onOpenGame
 }: QuickSwitcherProps) {
   const [query, setQuery] = useState("");
   const [highlight, setHighlight] = useState(0);
@@ -111,12 +113,12 @@ export function QuickSwitcher({
       key: `game-${g.appId}`,
       kind: "game",
       label: g.name,
-      detail: `${g.owners.length} owner${g.owners.length === 1 ? "" : "s"} · open library`,
+      detail: `${g.owners.length} owner${g.owners.length === 1 ? "" : "s"} · open game page`,
       icon: "🕹",
-      run: () => onNavigate("library")
+      run: () => onOpenGame(g.appId)
     }));
     return [...pages, ...members, ...games];
-  }, [isAdmin, guildMembers, crewGames, onNavigate, onOpenProfile]);
+  }, [isAdmin, guildMembers, crewGames, onNavigate, onOpenProfile, onOpenGame]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();

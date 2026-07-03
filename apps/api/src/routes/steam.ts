@@ -1474,6 +1474,7 @@ type GameDetailRow = {
   app_id: number;
   name: string;
   header_image_url: string | null;
+  background_url: string | null;
   is_single_player: boolean;
   is_online_coop: boolean;
   is_lan_coop: boolean;
@@ -1496,6 +1497,7 @@ type GameDetailRow = {
   platform_linux: boolean | null;
   controller_support: string | null;
   historical_low_cents: number | null;
+  store_details_checked_at: string | null;
 };
 
 type GameDetailOwnerRow = {
@@ -1504,6 +1506,14 @@ type GameDetailOwnerRow = {
   avatar_url: string | null;
   playtime_forever: number;
   playtime_2weeks: number;
+  last_played_at: string | null;
+};
+
+type GameDetailWishlisterRow = {
+  discord_user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  added_at: string | null;
 };
 
 type GameDetailAchievementRow = {
@@ -1517,6 +1527,8 @@ type GameDetailNewsRow = {
   title: string;
   url: string;
   published_at: string;
+  ai_summary: string | null;
+  ai_label: string | null;
 };
 
 steamRouter.get("/game/:appId", async (req, res) => {
@@ -1537,6 +1549,7 @@ steamRouter.get("/game/:appId", async (req, res) => {
         g.app_id,
         g.name,
         g.header_image_url,
+        g.background_url,
         g.is_single_player,
         g.is_online_coop,
         g.is_lan_coop,
@@ -1558,7 +1571,8 @@ steamRouter.get("/game/:appId", async (req, res) => {
         g.platform_mac,
         g.platform_linux,
         g.controller_support,
-        g.historical_low_cents
+        g.historical_low_cents,
+        g.store_details_checked_at
       FROM games g
       WHERE g.app_id = $1
     `,
@@ -1579,7 +1593,8 @@ steamRouter.get("/game/:appId", async (req, res) => {
         COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
         COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
         ug.playtime_minutes AS playtime_forever,
-        ug.playtime_2weeks
+        ug.playtime_2weeks,
+        ug.last_played_at
       FROM shareable_user_games ug
       INNER JOIN users u ON u.id = ug.user_id
       INNER JOIN guild_members gm
@@ -1589,6 +1604,28 @@ steamRouter.get("/game/:appId", async (req, res) => {
       LEFT JOIN discord_profiles dp ON dp.user_id = u.id
       WHERE ug.app_id = $1
       ORDER BY ug.playtime_minutes DESC, display_name ASC
+    `,
+    [appId, guildId]
+  );
+
+  // Privacy-safe wishlist join: same shape as the crew-wishlist endpoint above
+  // (shareable_user_wishlists → users → guild_members), scoped to this appId.
+  const wishlistersResult = await db.query<GameDetailWishlisterRow>(
+    `
+      SELECT
+        u.discord_user_id,
+        COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
+        COALESCE(gm.avatar_url, dp.avatar_url) AS avatar_url,
+        uw.added_at
+      FROM shareable_user_wishlists uw
+      INNER JOIN users u ON u.id = uw.user_id
+      INNER JOIN guild_members gm
+        ON gm.discord_user_id = u.discord_user_id
+       AND gm.guild_id = $2
+       AND gm.in_guild = TRUE
+      LEFT JOIN discord_profiles dp ON dp.user_id = u.id
+      WHERE uw.app_id = $1
+      ORDER BY uw.added_at ASC NULLS LAST, display_name ASC
     `,
     [appId, guildId]
   );
@@ -1616,11 +1653,11 @@ steamRouter.get("/game/:appId", async (req, res) => {
 
   const newsResult = await db.query<GameDetailNewsRow>(
     `
-      SELECT title, url, published_at
+      SELECT title, url, published_at, ai_summary, ai_label
       FROM game_news
       WHERE app_id = $1
       ORDER BY published_at DESC
-      LIMIT 5
+      LIMIT 10
     `,
     [appId]
   );
@@ -1645,6 +1682,18 @@ steamRouter.get("/game/:appId", async (req, res) => {
   if (achievementCatalogueResult.rows.length === 0) {
     void syncAchievementSchema(appId).catch((error: unknown) => {
       console.error("achievement schema sync failed", error);
+    });
+  }
+
+  // Cold-row enrichment: an unfetched or placeholder-named row means the crew
+  // hasn't triggered a store-details fetch for this game yet. Fire-and-forget
+  // so this response isn't blocked on an external Steam call — the next visit
+  // picks up the enriched data.
+  const looksUnfetched =
+    game.store_details_checked_at === null || /^app-\d+$/i.test(game.name.trim());
+  if (looksUnfetched) {
+    void enrichGameMetadataFromSteam([appId]).catch((error: unknown) => {
+      console.error("game-detail cold-row enrichment failed", error);
     });
   }
 
@@ -1674,7 +1723,8 @@ steamRouter.get("/game/:appId", async (req, res) => {
       platformMac: game.platform_mac,
       platformLinux: game.platform_linux,
       controllerSupport: game.controller_support,
-      historicalLowCents: game.historical_low_cents
+      historicalLowCents: game.historical_low_cents,
+      backgroundUrl: game.background_url
     },
     achievementCatalogue: achievementCatalogueResult.rows.map((row) => ({
       displayName: row.display_name,
@@ -1687,7 +1737,14 @@ steamRouter.get("/game/:appId", async (req, res) => {
       displayName: row.display_name,
       avatarUrl: row.avatar_url,
       playtimeForever: row.playtime_forever,
-      playtime2Weeks: row.playtime_2weeks
+      playtime2Weeks: row.playtime_2weeks,
+      lastPlayedAt: row.last_played_at
+    })),
+    wishlistedBy: wishlistersResult.rows.map((row) => ({
+      discordUserId: row.discord_user_id,
+      displayName: row.display_name,
+      avatarUrl: row.avatar_url,
+      addedAt: row.added_at
     })),
     achievements: achievementsResult.rows.map((row) => ({
       displayName: row.display_name,
@@ -1698,7 +1755,9 @@ steamRouter.get("/game/:appId", async (req, res) => {
     news: newsResult.rows.map((row) => ({
       title: row.title,
       url: row.url,
-      publishedAt: row.published_at
+      publishedAt: row.published_at,
+      aiSummary: row.ai_summary,
+      aiLabel: row.ai_label
     }))
   });
 });

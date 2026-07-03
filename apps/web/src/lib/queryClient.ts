@@ -25,6 +25,6 @@ export const appQueryKeys = {
   steamCrewAchievements: ["steam-crew-achievements"] as const,
   islanderProfile: (discordUserId: string) => ["islander-profile", discordUserId] as const,
   nuggiesLeaderboard: ["nuggies-leaderboard"] as const,
-  forumThreadFeed: (sort: string, category: string | null, type: string | null) =>
-    ["forum-thread-feed", sort, category, type] as const,
+  forumThreadFeed: (sort: string, category: string | null, type: string | null, appId: number | null) =>
+    ["forum-thread-feed", sort, category, type, appId] as const,
 };

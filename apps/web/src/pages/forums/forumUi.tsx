@@ -116,10 +116,34 @@ export function LinkPreviewCard({ linkUrl, preview }: { linkUrl: string; preview
   );
 }
 
-export function GameChip({ game }: { game: ForumThreadGame }) {
+export function GameChip({ game, onClick }: { game: ForumThreadGame; onClick?: () => void }) {
+  // GameChip is frequently rendered inside a feed row that is itself a
+  // <button> (FeedRow) — nesting a real <button> there is invalid HTML and
+  // breaks click handling, so the clickable variant uses a nested interactive
+  // span (role="button") with stopPropagation instead.
+  const interactiveProps = onClick
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        onClick: (e: React.MouseEvent) => {
+          e.stopPropagation();
+          onClick();
+        },
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            onClick();
+          }
+        },
+        style: { cursor: "pointer" }
+      }
+    : {};
+
   return (
     <span
       title={game.name}
+      {...interactiveProps}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -135,7 +159,8 @@ export function GameChip({ game }: { game: ForumThreadGame }) {
         verticalAlign: "middle",
         maxWidth: 220,
         overflow: "hidden",
-        whiteSpace: "nowrap"
+        whiteSpace: "nowrap",
+        ...(interactiveProps.style ?? {})
       }}
     >
       <GameCover
