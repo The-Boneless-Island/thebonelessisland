@@ -83,6 +83,8 @@ function mapActivityRow(row: ActivityRow) {
 }
 
 // Crew-facing feed only — admin ops stay in /activity/admin/audit.
+// share.discord is an audit-visibility record of a member's own share action,
+// not something the whole crew feed should replay as an activity row.
 const USER_ACTIVITY_EXCLUDE_SQL = `
   ae.event_type NOT LIKE 'admin.%'
   AND ae.event_type NOT LIKE 'game_night.admin_%'
@@ -91,7 +93,8 @@ const USER_ACTIVITY_EXCLUDE_SQL = `
     'nuggies.attendance_awarded',
     'nuggies.shop_item_changed',
     'news.card_updated',
-    'news.card_archived'
+    'news.card_archived',
+    'share.discord'
   )
 `;
 
@@ -140,7 +143,7 @@ function scopeSql(scope: AuditScope): string | null {
       return `(ae.event_type NOT LIKE 'admin.%'
         AND ae.event_type NOT LIKE 'game_night.admin_%'
         AND ae.event_type NOT LIKE 'news.card_%'
-        AND ae.event_type NOT IN ('nuggies.admin_adjustment', 'nuggies.attendance_awarded', 'nuggies.shop_item_changed'))`;
+        AND ae.event_type NOT IN ('nuggies.admin_adjustment', 'nuggies.attendance_awarded', 'nuggies.shop_item_changed', 'share.discord'))`;
     default:
       return null;
   }

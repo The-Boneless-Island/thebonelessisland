@@ -4,6 +4,7 @@ import { describeActivityFeedEvent } from "@island/shared";
 import { apiFetch } from "../api/client.js";
 import { IslandCard, IslandSkeletonRow, bannerBackground, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
+import { SharePopover } from "../components/SharePopover.js";
 import { islandTheme } from "../theme.js";
 import { activityHref, pathForIslander } from "../lib/routes.js";
 import { presenceTextOf, statusOf } from "../lib/presence.js";
@@ -475,8 +476,18 @@ function ActivityRow({ event, firstRow }: { event: ActivityEvent; firstRow: bool
         </div>
         <div style={{ fontSize: 12, color: islandTheme.color.textMuted, marginTop: 2 }}>{copy.detail}</div>
       </div>
-      <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
-        {ago}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
+          {ago}
+        </span>
+        <div onClick={(e) => e.stopPropagation()}>
+          <SharePopover
+            contentType="activity_event"
+            contentId={Number(event.id)}
+            fallbackTitle="Boneless Island activity"
+            fallbackUrl={href ? `${window.location.origin}${href}` : window.location.origin}
+          />
+        </div>
       </div>
     </div>
   );

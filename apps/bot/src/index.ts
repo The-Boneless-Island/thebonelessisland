@@ -1011,6 +1011,21 @@ type GamePatchPayload = {
   roleIds: string[];
 };
 
+type MemberSharePayload = {
+  channelId: string;
+  sharedBy: {
+    discordUserId: string;
+    displayName: string;
+    avatarUrl: string | null;
+  };
+  contentType: "forum_thread" | "forum_post" | "news_item" | "activity_event";
+  title: string;
+  description: string;
+  imageUrl?: string;
+  deepLink: string;
+  sourceLabel: string;
+};
+
 function buildOfficialAnnouncementEmbed(payload: Pick<OfficialAnnouncementPayload, "title" | "bodyPreview" | "authorName" | "threadUrl">) {
   return new EmbedBuilder()
     .setColor(0xf59e0b)
@@ -1104,6 +1119,35 @@ async function processGamePatch(payload: GamePatchPayload): Promise<void> {
   } catch (err) {
     console.error(`[patches] channel post failed for ${payload.appId}/${payload.gid}`, err);
   }
+}
+
+// Member-attributed courier message — NOT the Nuggie persona. Credits the
+// sharing member (author block + avatar), not the bot mascot. Guards throw
+// (rather than silently no-op like the other handlers above) so a bad/
+// deleted channel or a channel outside the configured guild marks this
+// row's delivery attempt failed and the outbox retries/dead-letters it —
+// see the attempts/last_error contract in processPendingAnnouncements.
+async function processMemberShare(payload: MemberSharePayload): Promise<void> {
+  const channel = await client.channels.fetch(payload.channelId);
+  if (!channel?.isSendable()) {
+    throw new Error(`Share target channel ${payload.channelId} is not sendable`);
+  }
+  if ("guildId" in channel && guildId && channel.guildId !== guildId) {
+    throw new Error(`Share target channel ${payload.channelId} is outside the configured guild`);
+  }
+
+  const embed = new EmbedBuilder()
+    .setAuthor({
+      name: `${payload.sharedBy.displayName} shared from the island`,
+      iconURL: payload.sharedBy.avatarUrl ?? undefined
+    })
+    .setTitle(payload.title.slice(0, 256))
+    .setURL(payload.deepLink)
+    .setDescription(payload.description.slice(0, 1000))
+    .setFooter({ text: "bonelessisland.com" });
+  if (payload.imageUrl) embed.setImage(payload.imageUrl);
+
+  await channel.send({ embeds: [embed] });
 }
 
 async function processTideWeekly(payload: TideWeeklyPayload): Promise<void> {
@@ -1341,6 +1385,8 @@ async function processPendingAnnouncements(): Promise<void> {
           await processOfficialAnnouncementUpdated(row.payload as OfficialAnnouncementUpdatedPayload);
         } else if (row.kind === "game.patch") {
           await processGamePatch(row.payload as GamePatchPayload);
+        } else if (row.kind === "member.share") {
+          await processMemberShare(row.payload as MemberSharePayload);
         }
         await ackAnnouncement(row.id, true);
       } catch (err) {

@@ -240,7 +240,8 @@ export const ADMIN_PAGES: Record<AdminPageId, AdminPageMeta> = {
       { anchor: "bridge-channel", label: "Milestone channel", keywords: ["milestone", "channel", "id", "post", "tier"] },
       { anchor: "bridge-roles", label: "Tier roles", keywords: ["roles", "tier", "rank", "assign"] },
       { anchor: "bridge-official", label: "Official announcements", keywords: ["official", "announcements", "forum", "everyone", "ping"] },
-      { anchor: "bridge-patches", label: "Patch alerts", keywords: ["patch", "alerts", "notes", "game", "updates"] }
+      { anchor: "bridge-patches", label: "Patch alerts", keywords: ["patch", "alerts", "notes", "game", "updates"] },
+      { anchor: "bridge-share", label: "Share to Discord", keywords: ["share", "channel", "targets", "picker", "send"] }
     ]
   },
   sync: {
@@ -302,7 +303,8 @@ const SETTING_PAGE_OVERRIDES: Record<string, { page: AdminPageId; anchor: string
   official_announcements_channel_id: { page: "bridge", anchor: "bridge-official" },
   official_announcements_ping_everyone: { page: "bridge", anchor: "bridge-official" },
   patch_alerts_enabled: { page: "bridge", anchor: "bridge-patches" },
-  patch_notes_channel_id: { page: "bridge", anchor: "bridge-patches" }
+  patch_notes_channel_id: { page: "bridge", anchor: "bridge-patches" },
+  share_enabled: { page: "bridge", anchor: "bridge-share" }
 };
 
 const DOMAIN_DEFAULT_PAGE: Record<SettingMeta["domain"], AdminPageId> = {
