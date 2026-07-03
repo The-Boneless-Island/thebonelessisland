@@ -98,12 +98,35 @@ const POSTER_WALL_CSS = `
     transition: transform ${islandTheme.motion.dur.fast} ${islandTheme.motion.ease.out},
                 box-shadow ${islandTheme.motion.dur.fast} ${islandTheme.motion.ease.out};
   }
-  .bi-poster:hover, .bi-poster:focus-within {
+  .bi-poster:focus-within {
     transform: translateY(-3px);
     box-shadow: ${islandTheme.shadow.cardHover};
   }
+  @media (hover: hover) {
+    .bi-poster {
+      transition: transform ${islandTheme.motion.dur.med} ${islandTheme.motion.ease.spring},
+                  box-shadow ${islandTheme.motion.dur.med} ${islandTheme.motion.ease.spring};
+    }
+    .bi-poster:hover {
+      transform: translateY(-6px) scale(1.02);
+      box-shadow: ${islandTheme.shadow.cardHoverStrong};
+    }
+  }
+  .bi-poster-cover {
+    transition: transform ${islandTheme.motion.dur.med} ${islandTheme.motion.ease.spring};
+  }
+  @media (hover: hover) {
+    .bi-poster:hover .bi-poster-cover {
+      transform: scale(1.06);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .bi-poster, .bi-poster:hover, .bi-poster:focus-within { transform: none; }
+    .bi-poster, .bi-poster:hover, .bi-poster:focus-within {
+      transform: none;
+      box-shadow: ${islandTheme.shadow.cardIdle};
+    }
+    .bi-poster:focus-within { box-shadow: ${islandTheme.shadow.cardHover}; }
+    .bi-poster-cover, .bi-poster:hover .bi-poster-cover { transform: none; transition: none; }
   }
   .bi-poster-overlay {
     opacity: 0;
@@ -112,14 +135,18 @@ const POSTER_WALL_CSS = `
   }
   .bi-poster:hover .bi-poster-overlay, .bi-poster:focus-within .bi-poster-overlay {
     opacity: 1;
-    pointer-events: auto;
   }
   @media (hover: none) {
     .bi-poster-overlay {
       opacity: 1;
-      pointer-events: auto;
       background: linear-gradient(180deg, transparent 40%, rgba(2, 6, 23, 0.82) 100%);
     }
+  }
+  /* Only the action row (pills/owners/buttons) is clickable — the overlay
+     itself must stay pointer-events:none in every state so it never steals
+     clicks/taps from the cover button underneath it. */
+  .bi-poster-overlay-actions {
+    pointer-events: auto;
   }
 `;
 
@@ -169,6 +196,7 @@ export function PosterCard({
       appId={appId}
       variant="libraryTall"
       alt={name}
+      className="bi-poster-cover"
       style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
     />
   );
@@ -262,7 +290,10 @@ export function PosterCard({
         }}
       >
         <CapabilityPills game={capabilities} />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: islandTheme.space[2] }}>
+        <div
+          className="bi-poster-overlay-actions"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: islandTheme.space[2] }}
+        >
           <OwnerStack owners={owners} />
           {action}
         </div>

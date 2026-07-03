@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router";
 import { IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import { GameCover, LogoCover, coverUrl, steamArt } from "../steamArt.js";
@@ -6,6 +7,7 @@ import { PosterCard, PosterWall, categoryFor } from "../components/PosterCard.js
 import { modePills } from "../gameModes.js";
 import { gameAccent, countdownLabel, seatPips, type CountdownTone } from "../gameAccent.js";
 import { ConfettiBurst } from "../system/celebration.js";
+import { usePushToast } from "../system/toast.js";
 import type {
   CrewOwnedGame,
   CrewWishlistGame,
@@ -52,6 +54,8 @@ type GamesPageProps = {
   onRemoveSelectedMembersFromNight: () => void;
   onNavigate: (page: PageId) => void;
   onSendChatMessage: (message: string, history: ChatMessage[]) => Promise<{ reply: string; error?: string }>;
+  /** Seeds the planner's selected members from a game's crew owners (used by the `?plan=` deep link). */
+  onSeedMembersForGame: (appId: number) => void;
 };
 
 type ChatMessage = { role: "user" | "assistant"; content: string };
@@ -75,10 +79,22 @@ type ComposerPick = {
 // library, streams) for browsing sessions. Choice sticks per browser.
 type GamesView = "tonight" | "everything";
 
+// A valid `?plan=` value is a positive integer app id; anything else is
+// treated as "no deep link" and silently ignored/cleared.
+function validPlanAppId(raw: string | null): number | null {
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 function GamesPageImpl(props: GamesPageProps) {
-  const [view, setViewState] = useState<GamesView>(() =>
-    localStorage.getItem("bi:games-view") === "everything" ? "everything" : "tonight"
-  );
+  const [searchParams] = useSearchParams();
+  const [view, setViewState] = useState<GamesView>(() => {
+    // A plan deep link always lands on "tonight" (where the composer lives),
+    // overriding the persisted view choice for this load.
+    if (validPlanAppId(searchParams.get("plan")) != null) return "tonight";
+    return localStorage.getItem("bi:games-view") === "everything" ? "everything" : "tonight";
+  });
   const setView = (v: GamesView) => {
     setViewState(v);
     localStorage.setItem("bi:games-view", v);
@@ -377,10 +393,19 @@ function PlanNightCard(props: GamesPageProps) {
     composerScrollNonce,
     lockNonce,
     currentDiscordUserId,
-    isAdmin
+    isAdmin,
+    onSeedMembersForGame
   } = props;
 
-  const [source, setSource] = useState<GameSource>("ai");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const pushToast = usePushToast();
+
+  // Lazy-initialize so a valid `?plan=` deep link starts life in "search"
+  // mode straight away — avoids even a one-frame flash of the AI pick before
+  // the consumption effect below can override it.
+  const [source, setSource] = useState<GameSource>(() =>
+    validPlanAppId(searchParams.get("plan")) != null ? "search" : "ai"
+  );
   const [librarySearch, setLibrarySearch] = useState("");
   const [showCustomTime, setShowCustomTime] = useState(false);
   const [joinAsHost, setJoinAsHost] = useState(true);
@@ -399,6 +424,39 @@ function PlanNightCard(props: GamesPageProps) {
     if (composerScrollNonce === 0) return;
     cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [composerScrollNonce]);
+
+  // Consume a `?plan=<appId>` deep link (from the Library "PLAN" shortcut):
+  // wait for crewGames to load, then preselect the matching game into the
+  // composer, seed the planner members from its owners, scroll into view,
+  // toast, and clear the param. Reads `searchParams` fresh inside the effect
+  // (rather than trusting a captured value) so a StrictMode double-invoke is
+  // a no-op once the param has already been cleared.
+  useEffect(() => {
+    const appId = validPlanAppId(searchParams.get("plan"));
+    if (appId == null) return;
+    // crewGames loads deferred after auth boot — an empty array here means
+    // "not loaded yet", not "not found". Wait for it to populate.
+    if (crewGames.length === 0) return;
+
+    const game = crewGames.find((g) => g.appId === appId);
+    if (game) {
+      setSource("search");
+      onDraftAppIdChange(game.appId);
+      onSeedMembersForGame(game.appId);
+      cardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      pushToast(`Planning around ${game.name}`, "info");
+    } else {
+      pushToast("That game is not in the crew library yet", "info");
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("plan");
+        return next;
+      },
+      { replace: true, preventScrollReset: true }
+    );
+  }, [searchParams, crewGames, onDraftAppIdChange, onSeedMembersForGame, pushToast, setSearchParams]);
 
   const pick: PickView | null = useMemo(() => {
     if (source === "later") return null;

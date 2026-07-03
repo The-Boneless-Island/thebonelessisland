@@ -82,6 +82,13 @@ export function pathForGame(appId: number): string {
   return `/library?game=${appId}`;
 }
 
+// Opens Games in the "tonight" planner with a game pre-selected in the
+// composer (Games reads the `plan` query param). Used by the Library "PLAN"
+// shortcut to deep-link straight into planning around a specific game.
+export function pathForPlanNight(appId: number): string {
+  return `/games?plan=${appId}`;
+}
+
 export function pathForLoan(loanId: number): string {
   return `/nuggies/loans?loan=${loanId}`;
 }
