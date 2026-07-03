@@ -31,6 +31,8 @@ export const CURATED_SOURCES: SeedSource[] = [
   { kind: "rss", slug: "gamespot",         name: "GameSpot",            identifier: "https://www.gamespot.com/feeds/news/" },
   { kind: "rss", slug: "destructoid",      name: "Destructoid",         identifier: "https://www.destructoid.com/feed/" },
   { kind: "rss", slug: "arstechnica-gaming", name: "Ars Technica Gaming", identifier: "https://feeds.arstechnica.com/arstechnica/gaming" },
+  // Engadget discontinued per-section RSS — this is the site-wide firehose only
+  // (verified 2026-07). Non-gaming items are dropped by the curator's off-topic gate.
   { kind: "rss", slug: "engadget-gaming",  name: "Engadget Gaming",     identifier: "https://www.engadget.com/rss.xml" },
   { kind: "rss", slug: "gamedeveloper",    name: "Game Developer",      identifier: "https://www.gamedeveloper.com/rss.xml" },
   { kind: "rss", slug: "gamesindustry",    name: "GamesIndustry.biz",   identifier: "https://www.gamesindustry.biz/feed" },

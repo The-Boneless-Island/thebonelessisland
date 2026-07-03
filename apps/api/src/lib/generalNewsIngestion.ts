@@ -62,6 +62,10 @@ type GeneralCurationResult = {
   // (score 0, summary cleared). AI judges by meaning so play-on-words headlines
   // like "How to crash a game studio in 1 release" stay (isGuide=false).
   isGuide?: boolean;
+  // Story not about video games / the video-game industry (e.g. a film fan-art
+  // piece, general internet-infrastructure news). Dropped like guides — the AI
+  // gaming-relevance gate is the single authority (not regex).
+  offTopic?: boolean;
   // Semantic fingerprint for merge clustering (v3.2). Normalized lowercase
   // "entity:event-topic", e.g. "poe2:1-0-launch", "ea:layoffs-2026q1".
   storyFingerprint?: string;
@@ -108,8 +112,8 @@ const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
 const MAX_TOTAL_CURATION_ATTEMPTS = 3;
 /** Fallback monthly budget cap (USD) when the ai_monthly_budget_usd setting is missing or invalid. */
 const AI_MONTHLY_BUDGET_DEFAULT_USD = 10;
-/** Minimum summary length — keep aligned with curator prompt (~3 sentences / 250+ chars). */
-export const MIN_SUMMARY_CHARS = 250;
+/** Minimum summary length — keep aligned with curator prompt (full-context article, ~120+ words). */
+export const MIN_SUMMARY_CHARS = 700;
 /** Default score for salvage/repair/fallback cards so they can appear in the feed. */
 const FALLBACK_RELEVANCE_SCORE = 0.55;
 
@@ -202,7 +206,7 @@ function curationMaxTokens(batchLen: number): number {
   if (provider === "bedrock") {
     return Math.min(8192, Math.max(4096, batchLen * 3500));
   }
-  return Math.min(16384, Math.max(8192, batchLen * 2800));
+  return Math.min(24576, Math.max(10240, batchLen * 4000));
 }
 // Cluster-candidate window: articles within this window are eligible for
 // content-overlap merging. AI still judges actual content overlap.
@@ -779,7 +783,7 @@ async function curateBatchOnce(
     excerpt: (() => {
       const body = (it.contents ?? "").trim();
       const text = body.length >= 40 ? body : it.title;
-      return text.length > 800 ? text.slice(0, 800) + "…" : text;
+      return text.length > 2500 ? text.slice(0, 2500) + "…" : text;
     })()
   }));
 
@@ -797,7 +801,23 @@ async function curateBatchOnce(
 
 You are a gaming news editor curating stories for the Boneless Island Discord community. For each news item provided (title + snippet, plus the source URL), you produce a structured four-section article output every time.
 
-Your job is to surface what matters to this specific community — the games they play together, updates affecting those games, and industry news that shapes their experience. The Crew context below describes the games Boneless Island members own, play frequently, have played recently, and have wishlisted (pulled from Steam account syncs). Prioritize news about those games, but include everything — tangential industry news and culturally relevant stories still get full treatment.
+Your job is to surface what matters to this specific community — the games they play together, updates affecting those games, and industry news that shapes their experience. The Crew context below describes the games Boneless Island members own, play frequently, have played recently, and have wishlisted (pulled from Steam account syncs). Prioritize news about the crew's games, but every story must first pass the gaming-relevance gate below.
+
+# Gaming relevance gate — FIRST CHECK, EXCLUDE off-topic
+
+This feed is strictly video-gaming news. Before anything else, decide whether the story's CORE SUBJECT is gaming.
+
+IN SCOPE: video games on any platform; game studios / publishers / developers; game announcements, patches, DLC, releases, delays; gaming hardware (consoles, handhelds, GPUs, peripherals) when framed for gaming; game storefronts / launchers / subscription services; esports; game-industry business (layoffs, acquisitions, earnings of game companies); modding; game-development tech and tools when the story is about making games; gaming-adjacent platforms (Steam, Discord, Twitch, Xbox / PlayStation / Nintendo services) when the story materially affects how people play or gather around games.
+
+OUT OF SCOPE (\`offTopic: true\`): general tech / AI / internet-infrastructure news without a direct, material gaming consequence stated in the article; movies / TV / streaming (including fan art or artist tributes to non-game films); digital-art or CG showcases that aren't about game development; phones, EVs, crypto, science, politics, celebrity news; business news of non-gaming companies.
+
+Two real examples that MUST be flagged \`offTopic\` (they previously leaked):
+- "Artist Creates Immersive and Beautiful Tribute to Disney's Coco" — fan art of a film, not gaming even though it's digital art from a game-art site.
+- "Cloudflare to Filter Web Crawlers Serving AI Companies" — internet infrastructure; a tangential "could affect gaming wikis" hand-wave does not make it gaming news.
+
+Borderline rule: if the article itself states a concrete, material effect on games / gamers / game companies, it's in scope; if the gaming link requires you to invent a hypothetical, it's \`offTopic\`.
+
+When \`offTopic: true\`: set \`relevanceScore\` to 0 and leave \`summary\`, \`whyMatters\`, and \`sources\` empty — the card will be dropped, so don't spend effort summarizing it. Still emit \`title\`, \`subtitle\`, \`tags\`, and \`storyFingerprint\`.
 
 # Output sections (every article, every time)
 
@@ -812,34 +832,34 @@ The rewritten title must:
 
 ## 2. Summary
 
-Write a complete summary. Aim for COMPLETENESS of information, not a word count — include every unique fact, figure, quote, date, name, and distinct source angle from all clustered articles. Do not pad to fill space, and do not drop details to stay short. Hard cap: 1350 words (most stories need far fewer). Cover:
-- What happened
+Write a complete, full-context article. It has two kinds of content held to two different standards (see the "Factual accuracy" section below): the event facts (strictly source-bound) and the background context (drawn from your general knowledge, REQUIRED, clearly hedged where not certain). Target 250–500 words for a typical story; multi-source or major stories can run longer; hard cap: 1350 words. Never under ~120 words. Cover:
+- What happened (sourced)
 - Who is affected (players, developers, platforms, regions)
-- Why it happened (if known)
-- What is changing (features, pricing, timelines, policies, releases)
+- Why it happened — the background and stakes (context from general knowledge)
+- What is changing (features, pricing, timelines, policies, releases — sourced)
 - When it takes effect
-- Any background context needed to understand the impact
+- Background a reader needs to understand the impact: what the game / franchise / studio is, its track record, and the history leading here
 
-Don't sacrifice detail for brevity. If a gamer deciding how to respond would care about it, include it. Label speculation clearly — don't present assumptions as facts.
+Structure the summary as: open with what happened (sourced), then the context / why (background), then the concrete details as bullets (sourced), then what's next / open questions. Don't sacrifice detail for brevity. If a gamer deciding how to respond would care about it, include it. Label speculation clearly — don't present assumptions as facts.
 
 Write so any gamer can follow it, even one who doesn't play this game. Use plain language; reach for jargon only when it adds real precision, and when you do, briefly explain it inline the first time — e.g. "a roguelite (a run-based game where you restart with small permanent upgrades)".
 
 Use a mix of flowing prose paragraphs AND bullet points. Use bullets for concrete facts, specs, or list-shaped information (release dates, platforms, feature lists, pricing tiers, patch line items, performance numbers). Use prose for context, narrative, and synthesis. Format bullets as plain markdown — each bullet on its own line, prefixed with \`- \`. Separate prose paragraphs with a blank line. Separate a prose paragraph from an adjacent bullet block with a blank line.
 
-You work only from the source excerpts in this batch. Synthesize across articles in the batch when multiple cover the same story. Do NOT speculate beyond what the excerpts state. When the excerpt is thin (headline-only or link post), still write at least 3 sentences (~150 characters minimum) restating the headline and any facts present — expand with neutral context from the headline wording, but do not invent quotes, dates, or numbers not in the excerpt.
+Synthesize across articles in the batch when multiple cover the same story. A thin excerpt (headline-only or link post) is NOT a license for a thin summary — use Tier-2 background (below) to build the full picture around the confirmed event. Never invent event-specific quotes, dates, or numbers that aren't in the excerpt.
 
 ## 3. Why This Matters to Boneless Island
 
 Write 1–2 short sentences as a direct, practical explanation — not a general commentary. This section is MANDATORY for every non-duplicate article.
 
-Always connect it to Boneless Island, even if the connection is thin or requires thought. Be specific about how this affects:
+The connection must be real and concrete — their games, their platforms, their money, their time, or the industry that builds what they play. Be specific about how this affects:
 - What people play
 - How they play it
 - Whether they need to act or pay attention soon
 
 Do NOT use phrases like "this is exciting," "this could be impactful," or any generic framing. Write like you're telling a friend who plays in this server, not filing a press release.
 
-If no direct connection to the community's games exists, explain the industry impact and why Boneless Island should track it — what broader context or business shift makes it relevant to gaming or how the community operates.
+If you cannot state a genuine gaming reason this crew would care, that is the signal the story is off-topic — set \`offTopic: true\` instead of manufacturing a connection.
 
 If the news is breaking, frame it with urgency — signal that immediate attention matters. For evergreen analysis or updates, use standard treatment.
 
@@ -916,7 +936,7 @@ The user message contains a separate \`existingStories\` array. These are alread
   - \`mergesIntoExistingId\`: the \`existingId\` of the parent story
   - \`updatedTitle\`: refreshed headline reflecting BOTH the existing summary and the new info
   - \`updatedSubtitle\`: refreshed subheadline (10–20 words)
-  - \`updatedSummary\`: fresh synthesis (as long as completeness needs — typically 500–1000 words, up to the 1350-word hard cap; prose + bullets) that integrates ALL details from the existing summary AND every new fact, quote, date, or angle introduced by the new article. The synthesis should be richer than either input alone. Lead with the most recent / most-confirmed information.
+  - \`updatedSummary\`: fresh synthesis (typically 250–500 words, longer for major stories, up to the 1350-word hard cap; prose + bullets) that integrates ALL details from the existing summary AND every new fact, quote, date, or angle introduced by the new article, plus the same Tier-2 background context. The synthesis should be richer than either input alone. Lead with the most recent / most-confirmed information.
   - \`updatedWhyMatters\`: refreshed Why This Matters paragraph (1–2 sentences) reflecting the combined picture
   - \`updatedSources\`: full source list = every URL from the existing story PLUS the new article's URL
   - \`updatedStoryFingerprint\`: the canonical fingerprint to lock the parent card to (typically the existing fingerprint when present, or your new canonical fingerprint when the existing card had \`null\`)
@@ -954,23 +974,27 @@ Rule of thumb: if the headline tells a *player* how to do something *inside a ga
 
 # Factual accuracy — HIGHEST PRIORITY
 
-Every claim in your summary must be **directly supported by the source excerpts in this batch**. Do not infer, generalize, or fill in plausible-sounding details from prior knowledge of the game, studio, or industry.
+Your summary has two tiers of content, held to two different standards. Keep them straight: event facts are source-bound; background context is required and comes from your general knowledge.
 
-**Hard rules:**
-- If the sources don't specify a business model (free-to-play, subscription, premium, B2P), DO NOT state one. Many shooters/MMOs default to assumed F2P/live-service in LLM training data — this is a common hallucination trap.
-- If the sources don't name a genre, platform, release date, or price, omit it rather than guess.
+**Tier 1 — Event facts (source-bound, non-negotiable):** anything about THIS news event — what was announced / changed / released, the numbers, dates, prices, quotes, percentages, business-model claims, exclusivity, and the platforms for the new thing — must come from the batch excerpts. Never invent these or import them from memory.
+- If the sources don't specify a business model (free-to-play, subscription, premium, B2P) for the thing announced, DO NOT state one. Many shooters/MMOs default to assumed F2P/live-service in LLM training data — this is a common hallucination trap.
+- If the sources don't name the genre, platform, release date, or price of the new thing, omit it rather than guess.
 - If the sources disagree, report the disagreement ("PC Gamer reports X; IGN reports Y") rather than picking one.
 - Numbers, quotes, dates, percentages must appear verbatim in at least one source excerpt. If you can't find the supporting text, drop the figure.
-- When a fact is widely-known but absent from the sources (e.g. publisher name), prefer to omit. Better to be brief than wrong.
-- If the sources are thin and you can only reliably restate the headline, do exactly that — don't pad with assumptions.
 
-**Common stereotype traps to avoid:**
+**Tier 2 — Background context (general knowledge, REQUIRED):** you MUST enrich every summary with well-established background that helps a reader understand the event: what the game / franchise is and its genre, who the studio / publisher is and their track record, prior events that led here (earlier patches, controversies, delays), how this fits broader industry trends, and the likely why behind the event when the sources state or strongly imply it.
+- Only use background you are confident is well-established and pre-dates this story.
+- Hedge anything less than certain — "historically", "as of earlier coverage", "reportedly".
+- If you don't recognize the game or studio, say less rather than guess.
+- Background must never contradict or override the excerpts — the excerpts win. Where general knowledge conflicts with a source claim, defer to the source.
+
+**Common stereotype traps to avoid (Tier 1):**
 - Modern shooter ≠ free-to-play live-service unless source says so. Marathon, Concord, XDefiant, etc. each have specific models — don't conflate.
 - "Studio acquired by [publisher]" ≠ "publisher exclusive" unless source confirms.
 - "Sequel" ≠ same genre/mechanics as predecessor.
 - Live-service decline ≠ studio failure, and vice versa.
 
-**Self-check before emitting each summary:** for every concrete claim (genre, business model, dates, numbers, exclusivity, platform), confirm it appears in the source excerpts you were given. If not, remove it.
+**Self-check before emitting each summary:** for every concrete EVENT claim (genre / business model / dates / numbers / exclusivity / platform of the announced thing), confirm it appears in the source excerpts you were given. If not, remove it — or, if it's well-established background rather than an event fact, keep it but hedge it as Tier-2 context.
 
 # Multi-source synthesis — CRITICAL
 
@@ -987,16 +1011,16 @@ This batch deliberately includes articles from multiple outlets. Your primary jo
 
 # Summary guidelines
 
-The summary must contain ONLY information about the article itself — facts, details, and context drawn directly from the source excerpts. Do NOT reference community interest, crew relevance, or player perspective in the summary; that belongs exclusively in \`whyMatters\`.
+The summary is about the news event and its context — the event facts drawn from the source excerpts PLUS well-established background about the game / studio / franchise that helps a reader understand it (Tier 2 above). Do NOT reference community interest, crew relevance, or player perspective in the summary; that crew framing belongs exclusively in \`whyMatters\`.
 
 Write a cross-source synthesis covering:
-1. **What happened** — the core news fact, announcement, or event
-2. **Context** — why it matters in industry / studio / game-history terms (no crew framing)
-3. **Details** — specific numbers, dates, features, changes, or quotes drawn from EVERY source covering this story
+1. **What happened** — the core news fact, announcement, or event (sourced)
+2. **Context** — what the game / studio is, its history, and why this matters in industry / studio / game-history terms (background; no crew framing)
+3. **Details** — specific numbers, dates, features, changes, or quotes drawn from EVERY source covering this story (sourced)
 4. **What's next** — expected follow-up, release date, or open questions surfaced by the sources
 
 **Length and format:**
-- Length follows completeness, not a target — include all unique information from every source and never pad. Hard cap 1350 words.
+- Target 250–500 words for a typical story; multi-source or major stories can run longer; never under ~120 words; hard cap 1350 words. Never pad with filler — build length with real Tier-2 background, not repetition.
 - Use a mix of flowing prose paragraphs AND bullet points. Use bullets specifically for concrete facts, specs, or list-shaped information (e.g. release dates, platforms, feature lists, pricing tiers, patch line items, performance numbers). Use prose for context, narrative, and synthesis.
 - Format bullets as plain markdown — each bullet on its own line, prefixed with \`- \`. Separate prose paragraphs with a blank line. Separate a prose paragraph from an adjacent bullet block with a blank line.
 - Direct, conversational gamer tone — informative but not dry.
@@ -1037,7 +1061,7 @@ Return a JSON array — one object per input article, in the same order. Every f
   {
     "id": "<string — must match input id exactly>",
     "title": "<rewritten headline, plain direct language, no clickbait>",
-    "summary": "<complete summary per the Section 2 rules — include EVERY unique fact, figure, quote, date, and source angle; typically 500–1000 words, up to the 1350-word hard cap; prose + bullets, article-only facts; empty string for duplicates or mergers>",
+    "summary": "<full-context summary per the Section 2 rules — sourced event facts PLUS required Tier-2 background about the game/studio; typically 250–500 words (never under ~120), up to the 1350-word hard cap; prose + bullets; empty string for duplicates, mergers, guides, or off-topic>",
     "whyMatters": "<1–2 sentences, concrete crew connection, never generic; empty string for duplicates or mergers>",
     "sources": ["<url1 from batch>", "<url2 from batch>"],
     "subtitle": "<one sharp subheadline sentence, 10–20 words; always include>",
@@ -1048,6 +1072,7 @@ Return a JSON array — one object per input article, in the same order. Every f
     "spoilerWarning": <true | false>,
     "duplicate": <true | false>,
     "isGuide": <true | false — evergreen player how-to / walkthrough / tier-list / best-build content; when true set relevanceScore 0 and leave summary, whyMatters, sources empty>,
+    "offTopic": <true | false — story is not about video games or the video-game industry; when true set relevanceScore 0 and leave summary, whyMatters, sources empty>,
     "storyFingerprint": "<entity:event-topic — REQUIRED on every article>",
     "mergesIntoExistingId": "<existingId of parent story, or null>",
     "updatedTitle": "<refreshed headline for the parent; only when mergesIntoExistingId is set>",
@@ -1061,7 +1086,7 @@ Return a JSON array — one object per input article, in the same order. Every f
 
 Relevance: 0.75–1.0 = major impact / crew relevance; 0.4–0.74 = notable; 0–0.39 = low signal.
 
-Tone & style — write like a knowledgeable human editor, not a content aggregator. No marketing language. No "as an AI" phrasing. No filler. Skip formal transitions (moreover, furthermore, in conclusion); use natural conversational tone. Minimize hedge words (essentially, basically, actually) and buzzwords (delve, unpack, embark, innovative, vibrant). Verify facts against source excerpts only; never present assumptions as facts.
+Tone & style — write like a knowledgeable human editor, not a content aggregator. No marketing language. No "as an AI" phrasing. No filler. Skip formal transitions (moreover, furthermore, in conclusion); use natural conversational tone. Minimize hedge words (essentially, basically, actually) and buzzwords (delve, unpack, embark, innovative, vibrant). Verify event facts against the source excerpts; keep background context to well-established, hedged knowledge; never present assumptions as facts.
 
 Return ONLY the JSON array. No markdown fences, no preamble.`;
 
@@ -1177,6 +1202,7 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
     gameTitle: pickString(obj, "gameTitle", "game_title") || null,
     duplicate: asBool(obj.duplicate),
     isGuide: asBool(obj.isGuide ?? obj.is_guide),
+    offTopic: asBool(obj.offTopic ?? obj.off_topic),
     storyFingerprint: pickString(obj, "storyFingerprint", "story_fingerprint") || undefined,
     mergesIntoExistingId:
       pickString(obj, "mergesIntoExistingId", "merges_into_existing_id") || null,
@@ -1201,8 +1227,9 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
 }
 
 function applyDefaultRelevanceScore(result: GeneralCurationResult): GeneralCurationResult {
-  // Guides are deliberately excluded — never salvage them with a fallback score.
-  if (result.isGuide) return { ...result, relevanceScore: 0 };
+  // Guides and off-topic stories are deliberately excluded — never salvage them
+  // with a fallback score.
+  if (result.isGuide || result.offTopic) return { ...result, relevanceScore: 0 };
   if ((result.relevanceScore ?? 0) > 0) return result;
   if (result.duplicate || isMerge(result)) return result;
   return { ...result, relevanceScore: FALLBACK_RELEVANCE_SCORE };
@@ -1247,8 +1274,14 @@ function buildFallbackCurationResult(item: RawGeneral): GeneralCurationResult | 
   if (summary.length < MIN_SUMMARY_CHARS) {
     summary = `${title}\n\n${body}`.trim();
   }
-  while (summary.length < MIN_SUMMARY_CHARS) {
+  // Append the filler sentence at most once. At a 700-char floor, looping the
+  // filler would repeat it dozens of times into garbage — so if we're still
+  // short after one append, give up and park the row instead of publishing padding.
+  if (summary.length < MIN_SUMMARY_CHARS) {
     summary += " More coverage may follow as the story develops.";
+  }
+  if (summary.length < MIN_SUMMARY_CHARS) {
+    return null;
   }
 
   // Use the first sentence of the article body as whyMatters when it's informative enough;
@@ -1366,7 +1399,9 @@ function resolveCurationResultForItem(
 }
 
 function validateCuration(res: GeneralCurationResult, batchUrls: Set<string>): ValidationError[] {
-  if (res.duplicate || isMerge(res)) return [];
+  // Off-topic rows are dropped with an empty summary — skip validation exactly
+  // like duplicates/merges so the empty summary doesn't trigger pointless retries.
+  if (res.duplicate || isMerge(res) || res.offTopic) return [];
   const errors: ValidationError[] = [];
   if (!res.title || res.title.trim().length < 8) errors.push("missing_title");
   if (!res.summary || res.summary.trim().length < MIN_SUMMARY_CHARS) {
@@ -1427,7 +1462,7 @@ async function curateBatchWithValidation(
       failed
         .map((o) => `${o.item.external_id}: ${o.errors.join(",")}`)
         .join(" | ") +
-      `. Return corrected JSON for these IDs only: populate every required field; summary must be at least ${MIN_SUMMARY_CHARS} characters (3+ sentences for thin excerpts); for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
+      `. Return corrected JSON for these IDs only: populate every required field; summaries must be at least ${MIN_SUMMARY_CHARS} characters — when the excerpt is thin, expand with well-established background context (what the game/studio is, its history, why this matters), NOT padding, while keeping event facts source-bound; for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
 
     const retryItems = failed.map((o) => o.item);
     console.warn(
@@ -1467,7 +1502,8 @@ async function curateBatchWithValidation(
         sources: o.result.sources
       },
       errors: o.errors,
-      batchUrls
+      batchUrls,
+      minSummaryChars: MIN_SUMMARY_CHARS
     });
     if (!repair) continue;
     const patched = ensurePrimarySources(
@@ -1542,6 +1578,25 @@ async function persistCurationOutcome(
       [item.id]
     );
     console.log(`[generalNews] guide dropped external=${item.external_id}`);
+    return { persisted: true, failed: false };
+  }
+
+  // Off-topic (not video-game news) — the AI gaming-relevance gate is the single
+  // authority (no tag backstop; the flag alone decides). Drop before any merge
+  // or publish, mirroring the guide branch.
+  if (result.offTopic) {
+    await db.query(
+      `UPDATE general_news
+         SET ai_relevance_score = 0,
+             ai_summary = NULL,
+             ai_curated_at = NOW(),
+             ai_validation_failed = FALSE,
+             ai_last_validation_errors = NULL,
+             pre_filter_reason = 'off_topic_ai'
+       WHERE id = $1`,
+      [item.id]
+    );
+    console.log(`[generalNews] off-topic dropped external=${item.external_id}`);
     return { persisted: true, failed: false };
   }
 

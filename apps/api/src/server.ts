@@ -34,6 +34,7 @@ import { nuggiesGamesRouter } from "./routes/nuggiesGames.js";
 import { registerAllGames } from "./lib/games/index.js";
 import { ingestAndCurateGeneralNews } from "./lib/generalNewsIngestion.js";
 import { runNewsPipelineHealthSweep } from "./lib/news/newsCurationHealth.js";
+import { runOffTopicSweepOnce } from "./lib/news/newsOffTopicSweep.js";
 import { reconcileInterruptedPipelineJobs } from "./lib/news/newsPipelineJobs.js";
 import { startPipelineQueueWorker, getPipelineQueueCounts, isPipelineQueueEnabled } from "./lib/news/newsPipelineQueue.js";
 import { runNewsRetentionSweep } from "./lib/news/newsRetention.js";
@@ -561,6 +562,15 @@ async function bootstrap() {
       }
     })();
   }, 4 * 60 * 60 * 1000);
+
+  // One-shot post-deploy quality sweep (2026-07): parks AI-judged off-topic live
+  // cards and re-queues thin summaries for regeneration under the new prompt.
+  // Self-guarding via a pipeline job record, so this no-ops on subsequent boots.
+  trackedTimeout(() => {
+    void runOffTopicSweepOnce().catch((err) => {
+      console.error("[generalNews] off-topic sweep failed:", err);
+    });
+  }, 120_000);
 
   // startPipelineQueueWorker's own poll interval isn't created by a plain
   // setInterval call here — it's returned (async) from that function — so it

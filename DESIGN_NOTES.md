@@ -121,13 +121,39 @@ The single most important invariant in the app. Implemented in migration `054`.
   freshness-window exemption is bounded (2× the window) so nothing pins forever.
   Half-life is a tunable setting, not a constant, because the right rotation
   cadence is editorial. (PR #75, migration 084, `newsFeed.ts`.)
-- **Summaries: completeness over word count — but the schema hint must agree.**
-  The curator prompt tells the model to include every unique fact up to a
-  1350-word hard cap. A stale JSON-schema example ("~300–500 words") silently
-  overrode that (models obey the concrete schema over prose) and truncated
-  summaries, dropping key points. Lesson: when a prompt carries both a prose
-  directive and a schema example, they must state the same length or the schema
-  wins. Target is now 500–1000 words; forward-only. (PR #75.)
+- **Summaries: the schema hint must agree with the prose directive.** A stale
+  JSON-schema example ("~300–500 words") once silently overrode the prompt's
+  completeness directive (models obey the concrete schema over prose) and
+  truncated summaries. Lesson: when a prompt carries both a prose directive and
+  a schema example, they must state the same length or the schema wins.
+  (PR #75; superseded target — see two-tier bullet below.)
+- **Two-tier factual policy: event facts source-bound, background REQUIRED.**
+  RSS excerpts are 1–3 sentences, and the old prompt banned all knowledge
+  beyond the excerpt — which mathematically capped summaries at restated
+  headlines no matter what word target the prompt asked for (PR #75's target
+  bump proved word-count prompting can't fix an input-starved task). The 2026-07
+  split: *event facts* (numbers, dates, prices, quotes, business models of the
+  announced thing) stay excerpt-verbatim with the anti-hallucination traps;
+  *background context* (what the game/studio is, track record, prior events,
+  the why) now comes from model knowledge and is mandatory, hedged when less
+  than certain, and always loses to the excerpts on conflict. Typical target
+  250–500 words, floor `MIN_SUMMARY_CHARS` 700; the feed SQL keeps its legacy
+  `>= 250` gate so pre-change cards stay visible. Fallback cards no longer pad
+  with repeated filler to reach the floor — they park instead.
+- **The off-topic gate is AI-judged, never regex.** Non-gaming stories (film
+  fan-art from 80 Level, Cloudflare crawler policy from Engadget's firehose)
+  leaked because the prompt said "include everything" and *ordered* a Boneless
+  Island connection "even if the connection is thin" — a rationalization
+  machine. The gate flips the default: the curator must justify a story as
+  gaming *first* (`offTopic: true` parks it, `pre_filter_reason='off_topic_ai'`),
+  and the whyMatters rule doubles as the tripwire — if no genuine gaming reason
+  exists, that *is* the off-topic signal. Engadget stays on its site-wide feed
+  (per-section RSS discontinued, verified 2026-07) because the gate is the
+  enforcement point. Retroactive cleanup was a one-shot boot sweep
+  (`newsOffTopicSweep.ts`, guarded by a `news_pipeline_jobs` record) that
+  reclassified live cards with a conservative when-uncertain-keep classifier and
+  re-queued thin recent summaries for regeneration — same AI-authoritative
+  principle as the `isGuide` exclusion.
 - **The soft spend cap is a foot-gun when it's silent.** `ai_monthly_budget_usd`
   pauses only the LLM curator once month-to-date `ai_cost_ledger` spend ≥ cap,
   but health still reads "healthy" (existing live cards mask the stall) and no
