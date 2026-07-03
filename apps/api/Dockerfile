@@ -36,6 +36,13 @@ COPY tsconfig*.json ./
 COPY packages packages
 COPY apps/api apps/api
 
+# Create the uploads dir the named volume mounts onto (docker-compose.yml)
+# and own it before switching users — a named volume with no pre-existing
+# content inherits the mountpoint directory's ownership from the image, so if
+# this stays root:root the `node` user can't write forum uploads at runtime.
+# Must be created before `chown -R /app` below so it's covered by the same pass.
+RUN mkdir -p /app/apps/api/data/uploads
+
 # Run as non-root. node:26-alpine ships with the `node` user (uid 1000).
 RUN chown -R node:node /app
 USER node
