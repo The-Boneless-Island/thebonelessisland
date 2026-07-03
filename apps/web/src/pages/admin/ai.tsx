@@ -60,7 +60,10 @@ export function AiAdminPage({ settings, onUpdate, onTest }: AiPageProps) {
       }
     }
     void load();
-    const handle = window.setInterval(load, 60_000);
+    const handle = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void load();
+    }, 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(handle);

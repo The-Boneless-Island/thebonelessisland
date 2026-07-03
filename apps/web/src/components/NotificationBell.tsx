@@ -35,7 +35,10 @@ export function NotificationBell({ onOpenThread }: { onOpenThread: (threadId: nu
 
   useEffect(() => {
     void load();
-    const h = window.setInterval(() => void load(), 60_000);
+    const h = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      void load();
+    }, 60_000);
     return () => window.clearInterval(h);
   }, [load]);
 

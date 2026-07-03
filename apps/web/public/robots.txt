@@ -1,0 +1,3 @@
+# Members-only site. Nothing here is meant for crawlers or public indexing.
+User-agent: *
+Disallow: /

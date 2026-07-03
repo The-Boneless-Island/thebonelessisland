@@ -155,6 +155,18 @@ services:
     mem_limit: 256m
     environment:
       NODE_OPTIONS: --max-old-space-size=192
+    # Liveness via a heartbeat file the process touches every 30s (ready +
+    # each announcement-poll tick — see apps/bot/src/index.ts touchHeartbeat).
+    # `-mmin -2` = modified within the last 2 minutes, comfortably wider than
+    # the 30s write cadence so one slow tick doesn't flap the check. Uses
+    # busybox `find` (bot image is node:26-alpine, no GNU findutils) —
+    # confirmed via Alpine's busybox build config: CONFIG_FEATURE_FIND_MMIN=y.
+    healthcheck:
+      test: ["CMD-SHELL", "test $(find /tmp/heartbeat -mmin -2 | wc -l) -ge 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   web:
     profiles: ["prod"]

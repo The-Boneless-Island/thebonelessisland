@@ -1,6 +1,8 @@
-import { memo, useEffect, useState } from "react";
+import { memo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
 import { apiFetch } from "../api/client.js";
+import { appQueryKeys } from "../lib/queryClient.js";
 import { IslandCard, IslandTag, accentHex, memberColor } from "../islandUi.js";
 import { MilestoneRankBadge } from "../components/MilestoneRankBadge.js";
 import { islandTheme } from "../theme.js";
@@ -119,45 +121,24 @@ function presenceTone(status: string | null): "success" | "warning" | "default" 
   return "default";
 }
 
-function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderProfilePageProps) {
-  const [profile, setProfile] = useState<IslanderProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [errored, setErrored] = useState(false);
+async function fetchIslanderProfile(targetDiscordUserId: string): Promise<IslanderProfile> {
+  const res = await apiFetch(`/members/${encodeURIComponent(targetDiscordUserId)}/profile`);
+  if (!res.ok) throw new Error(`Islander profile load failed (${res.status})`);
+  const body = (await res.json().catch(() => null)) as IslanderProfile | null;
+  if (!body) throw new Error("Islander profile load failed (empty response)");
+  return body;
+}
 
-  useEffect(() => {
-    if (!targetDiscordUserId) {
-      setLoading(false);
-      return;
-    }
-    let active = true;
-    setLoading(true);
-    setErrored(false);
-    setProfile(null);
-    void (async () => {
-      try {
-        const res = await apiFetch(`/members/${encodeURIComponent(targetDiscordUserId)}/profile`);
-        if (!active) return;
-        if (!res.ok) {
-          setErrored(true);
-          return;
-        }
-        const body = (await res.json().catch(() => null)) as IslanderProfile | null;
-        if (!active) return;
-        if (!body) {
-          setErrored(true);
-          return;
-        }
-        setProfile(body);
-      } catch {
-        if (active) setErrored(true);
-      } finally {
-        if (active) setLoading(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [targetDiscordUserId]);
+function IslanderProfilePageImpl({ targetDiscordUserId, onNavigate }: IslanderProfilePageProps) {
+  const profileQuery = useQuery({
+    queryKey: appQueryKeys.islanderProfile(targetDiscordUserId ?? ""),
+    queryFn: () => fetchIslanderProfile(targetDiscordUserId as string),
+    enabled: Boolean(targetDiscordUserId),
+    staleTime: 60_000,
+  });
+  const profile = profileQuery.data ?? null;
+  const loading = Boolean(targetDiscordUserId) && profileQuery.isLoading;
+  const errored = profileQuery.isError;
 
   const backButton = (
     <button

@@ -141,9 +141,9 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
   // "nuggies_daily_amount") so the claim button label matches the payout.
   const dailyAmount = getSetting("nuggies_daily_amount", 75);
 
-  const [balRow, optRow, txRows, invRows, loanRows, lifetimeRow, claimedToday] = await Promise.all([
-    db.query<{ balance: string }>(
-      "SELECT balance FROM nuggies_balances WHERE user_id = $1",
+  const [balRow, optRow, txRows, invRows, loanRows, claimedToday] = await Promise.all([
+    db.query<{ balance: string; lifetime_earned: string }>(
+      "SELECT balance, lifetime_earned FROM nuggies_balances WHERE user_id = $1",
       [userId]
     ),
     db.query<{ nuggies_opted_out: boolean }>(
@@ -171,12 +171,6 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
        ORDER BY l.created_at DESC`,
       [userId]
     ),
-    db.query<{ total: string }>(
-      `SELECT COALESCE(SUM(amount), 0)::text AS total
-       FROM nuggies_transactions
-       WHERE user_id = $1 AND amount > 0`,
-      [userId]
-    ),
     hasClaimedDailyToday(userId),
   ]);
 
@@ -191,7 +185,7 @@ nuggiesRouter.get("/me", requireBotOrSession, async (_req, res) => {
     balance: liquidity.balance,
     committedPrincipal: liquidity.committedPrincipal,
     availableToLend: liquidity.availableToLend,
-    lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
+    lifetimeEarned: parseInt(balRow.rows[0]?.lifetime_earned ?? "0", 10),
     dailyAmount,
     claimedToday,
     optedOut: optRow.rows[0]?.nuggies_opted_out ?? false,
@@ -270,23 +264,17 @@ nuggiesRouter.get("/user/:discordUserId", requireBotOrSession, async (req, res) 
   const userId = await resolveInternalId(String(req.params.discordUserId));
   if (!userId) { res.status(404).json({ error: "User not found" }); return; }
 
-  const [balRow, equippedItems, lifetimeRow] = await Promise.all([
-    db.query<{ balance: string }>(
-      "SELECT balance FROM nuggies_balances WHERE user_id = $1",
+  const [balRow, equippedItems] = await Promise.all([
+    db.query<{ balance: string; lifetime_earned: string }>(
+      "SELECT balance, lifetime_earned FROM nuggies_balances WHERE user_id = $1",
       [userId]
     ),
     getEquippedItemsByUserId(userId),
-    db.query<{ total: string }>(
-      `SELECT COALESCE(SUM(amount), 0)::text AS total
-       FROM nuggies_transactions
-       WHERE user_id = $1 AND amount > 0`,
-      [userId]
-    ),
   ]);
 
   res.json({
     balance: parseInt(balRow.rows[0]?.balance ?? "0", 10),
-    lifetimeEarned: parseInt(lifetimeRow.rows[0]?.total ?? "0", 10),
+    lifetimeEarned: parseInt(balRow.rows[0]?.lifetime_earned ?? "0", 10),
     equippedItems,
   });
 });
@@ -493,13 +481,19 @@ nuggiesRouter.post("/shop/:itemId/buy", requireBotOrSession, async (req, res) =>
   if (!item.rows[0].is_active) { res.status(400).json({ error: "Item not available" }); return; }
   if (item.rows[0].acquisition !== "shop") { res.status(400).json({ error: "Item is not purchasable" }); return; }
 
-  const alreadyOwned = await db.query(
-    "SELECT 1 FROM nuggies_inventory WHERE user_id = $1 AND item_id = $2",
+  const price = parseInt(item.rows[0].price, 10);
+
+  // Ownership row goes in FIRST (nuggies_inventory has PRIMARY KEY (user_id,
+  // item_id) — a real unique constraint), so two concurrent buys race on the
+  // INSERT rather than on a plain SELECT-then-charge TOCTOU window. Only the
+  // request whose insert actually lands gets to charge; the loser 409s before
+  // touching the ledger at all.
+  const claimed = await db.query<{ item_id: string }>(
+    `INSERT INTO nuggies_inventory (user_id, item_id) VALUES ($1, $2)
+     ON CONFLICT DO NOTHING RETURNING item_id`,
     [userId, itemId]
   );
-  if (alreadyOwned.rows.length > 0) { res.status(409).json({ error: "Already owned" }); return; }
-
-  const price = parseInt(item.rows[0].price, 10);
+  if (claimed.rowCount === 0) { res.status(409).json({ error: "Already owned" }); return; }
 
   try {
     const { newBalance } = await applyTransaction({
@@ -514,13 +508,14 @@ nuggiesRouter.post("/shop/:itemId/buy", requireBotOrSession, async (req, res) =>
       referenceId: `shop:${itemId}`,
     });
 
-    await db.query(
-      "INSERT INTO nuggies_inventory (user_id, item_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-      [userId, itemId]
-    );
-
     res.json({ ok: true, newBalance, item: { id: itemId, name: item.rows[0].name } });
   } catch (err) {
+    // Charge failed after the ownership row landed — undo the claim so a
+    // declined purchase can't leave the item in inventory for free.
+    await db.query(
+      "DELETE FROM nuggies_inventory WHERE user_id = $1 AND item_id = $2",
+      [userId, itemId]
+    );
     if (err instanceof InsufficientFundsError) { res.status(400).json({ error: "Insufficient Nuggies" }); return; }
     if (err instanceof OptedOutError) { res.status(403).json({ error: err.message }); return; }
     throw err;
@@ -846,36 +841,79 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
     return;
   }
 
-  const loan = await db.query<{ id: string; lender_user_id: string; borrower_user_id: string; principal: string; amount_due: string; collateral: string; due_at: string; status: string }>(
-    "SELECT * FROM nuggies_loans WHERE id = $1",
+  const loanPrecheck = await db.query<{ id: string; borrower_user_id: string; status: string }>(
+    "SELECT id, borrower_user_id, status FROM nuggies_loans WHERE id = $1",
     [loanId]
   );
-  if (!loan.rows[0]) { res.status(404).json({ error: "Loan not found" }); return; }
-  if (loan.rows[0].status !== "pending") { res.status(400).json({ error: "Loan not in pending state" }); return; }
-  if (String(loan.rows[0].borrower_user_id) !== String(userId)) {
+  if (!loanPrecheck.rows[0]) { res.status(404).json({ error: "Loan not found" }); return; }
+  if (loanPrecheck.rows[0].status !== "pending") { res.status(400).json({ error: "Loan not in pending state" }); return; }
+  if (String(loanPrecheck.rows[0].borrower_user_id) !== String(userId)) {
     res.status(403).json({ error: "Not the intended borrower" });
     return;
   }
-
-  const principal = parseInt(loan.rows[0].principal, 10);
-  const collateral = parseInt(loan.rows[0].collateral, 10);
-  const lenderDiscordId = await db.query<{ discord_user_id: string }>(
-    "SELECT discord_user_id FROM users WHERE id = $1",
-    [loan.rows[0].lender_user_id]
-  );
-  const lenderDId = lenderDiscordId.rows[0]?.discord_user_id;
 
   const client = await db.connect();
   try {
     await client.query("BEGIN");
 
-    // Lock collateral from borrower if required
+    // Status-guarded UPDATE is the FIRST statement in the tx: this is the
+    // real concurrency guard (the SELECT above is just a cheap early-exit).
+    // Two concurrent accepts on the same loan now race on this single atomic
+    // UPDATE instead of the plain pre-transaction status check — only one can
+    // flip pending -> active, so principal can never transfer twice.
+    const accepted = await client.query<{
+      id: string; lender_user_id: string; borrower_user_id: string;
+      principal: string; amount_due: string; collateral: string; due_at: string;
+    }>(
+      `UPDATE nuggies_loans
+       SET status = 'active'
+       WHERE id = $1 AND status = 'pending'
+       RETURNING id, lender_user_id, borrower_user_id, principal, amount_due, collateral, due_at`,
+      [loanId]
+    );
+    if (accepted.rowCount === 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "Loan no longer available" });
+      return;
+    }
+    const loanRow = accepted.rows[0];
+    if (String(loanRow.borrower_user_id) !== String(userId)) {
+      // Can't happen given the precheck above (borrower can't change on a
+      // pending loan), but don't transfer money on a state we don't expect.
+      await client.query("ROLLBACK");
+      res.status(403).json({ error: "Not the intended borrower" });
+      return;
+    }
+
+    const principal = parseInt(loanRow.principal, 10);
+    const collateral = parseInt(loanRow.collateral, 10);
+    const lenderUserId = BigInt(loanRow.lender_user_id);
+
+    // Lock both balance rows FOR UPDATE in ascending user-id order — same
+    // deadlock-safe pattern as executeTrade (nuggiesLedger.ts) — before
+    // touching either. Ensures the borrower's balance row exists too so the
+    // collateral debit below always finds a row to lock.
+    const [firstId, secondId] = lenderUserId < userId ? [lenderUserId, userId] : [userId, lenderUserId];
+    await client.query(
+      `INSERT INTO nuggies_balances (user_id, balance) VALUES ($1, 0)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [firstId]
+    );
+    await client.query("SELECT balance FROM nuggies_balances WHERE user_id = $1 FOR UPDATE", [firstId]);
+    await client.query(
+      `INSERT INTO nuggies_balances (user_id, balance) VALUES ($1, 0)
+       ON CONFLICT (user_id) DO NOTHING`,
+      [secondId]
+    );
+    await client.query("SELECT balance FROM nuggies_balances WHERE user_id = $1 FOR UPDATE", [secondId]);
+
+    // Collateral from borrower, if required
     if (collateral > 0) {
-      const balRow = await client.query<{ balance: string }>(
-        "SELECT balance FROM nuggies_balances WHERE user_id = $1 FOR UPDATE",
+      const borrowerBal = await client.query<{ balance: string }>(
+        "SELECT balance FROM nuggies_balances WHERE user_id = $1",
         [userId]
       );
-      const bal = parseInt(balRow.rows[0]?.balance ?? "0", 10);
+      const bal = parseInt(borrowerBal.rows[0]?.balance ?? "0", 10);
       if (bal < collateral) {
         await client.query("ROLLBACK");
         res.status(400).json({ error: "Insufficient Nuggies for collateral" });
@@ -902,21 +940,36 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
       );
     }
 
+    // Re-check lender balance inside the tx (locked above) — friendly 400
+    // instead of letting the nuggies_balances CHECK (balance >= 0) constraint
+    // fail the UPDATE as an uncaught 500. A pending offer can outlive the
+    // lender's ability to cover it (they may have spent since offering).
+    const lenderBal = await client.query<{ balance: string }>(
+      "SELECT balance FROM nuggies_balances WHERE user_id = $1",
+      [lenderUserId]
+    );
+    const lenderBalance = parseInt(lenderBal.rows[0]?.balance ?? "0", 10);
+    if (lenderBalance < principal) {
+      throw new InsufficientFundsError();
+    }
+
     // Transfer principal from lender to borrower
     await client.query(
       "UPDATE nuggies_balances SET balance = balance - $1, updated_at = NOW() WHERE user_id = $2",
-      [principal, loan.rows[0].lender_user_id]
+      [principal, lenderUserId]
     );
+    // Borrower credit is outside applyTransaction, so lifetime_earned needs
+    // its own increment here (mirrors applyTransaction's GREATEST(amount, 0)
+    // rule) to keep the denormalized column in sync with the ledger.
     await client.query(
-      `INSERT INTO nuggies_balances (user_id, balance) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET balance = nuggies_balances.balance + $2, updated_at = NOW()`,
-      [userId, principal]
+      "UPDATE nuggies_balances SET balance = balance + $1, lifetime_earned = lifetime_earned + $1, updated_at = NOW() WHERE user_id = $2",
+      [principal, userId]
     );
     await client.query(
       `INSERT INTO nuggies_transactions (user_id, amount, type, reason, reference_id)
        VALUES ($1, $2, $3, $4, $5)`,
       [
-        loan.rows[0].lender_user_id,
+        lenderUserId,
         -principal,
         NUGGIES_TX_TYPE.loan_out,
         formatNuggiesReason({ type: NUGGIES_TX_TYPE.loan_out, amount: -principal }),
@@ -935,21 +988,27 @@ nuggiesRouter.post("/loan/:id/accept", requireBotOrSession, async (req, res) => 
       ]
     );
 
-    await client.query(
-      "UPDATE nuggies_loans SET status = 'active' WHERE id = $1",
-      [loanId]
-    );
-
     await client.query("COMMIT");
-    res.json({ ok: true, principal, dueAt: loan.rows[0].due_at });
+
+    const lenderDiscordId = await db.query<{ discord_user_id: string }>(
+      "SELECT discord_user_id FROM users WHERE id = $1",
+      [lenderUserId]
+    );
+    const lenderDId = lenderDiscordId.rows[0]?.discord_user_id ?? null;
+
+    res.json({ ok: true, principal, dueAt: loanRow.due_at });
     void recordEvent({
       eventType: "nuggies.loan_accepted",
       actorDiscordUserId: discordUserId,
-      targetDiscordUserId: lenderDId ?? null,
+      targetDiscordUserId: lenderDId,
       payload: { loanId, principal }
     });
   } catch (err) {
     await client.query("ROLLBACK");
+    if (err instanceof InsufficientFundsError) {
+      res.status(400).json({ error: "Lender no longer has sufficient Nuggies to cover this loan" });
+      return;
+    }
     throw err;
   } finally {
     client.release();
@@ -1018,10 +1077,15 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
       ]
     );
 
-    // Lender receives amount_due
+    // Lender receives amount_due. Outside applyTransaction, so
+    // lifetime_earned needs its own increment (mirrors applyTransaction's
+    // GREATEST(amount, 0) rule) to keep the denormalized column in sync.
     await client.query(
-      `INSERT INTO nuggies_balances (user_id, balance) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET balance = nuggies_balances.balance + $2, updated_at = NOW()`,
+      `INSERT INTO nuggies_balances (user_id, balance, lifetime_earned) VALUES ($1, $2, $2)
+       ON CONFLICT (user_id) DO UPDATE
+         SET balance = nuggies_balances.balance + $2,
+             lifetime_earned = nuggies_balances.lifetime_earned + $2,
+             updated_at = NOW()`,
       [lenderId, amountDue]
     );
     await client.query(
@@ -1036,10 +1100,15 @@ nuggiesRouter.post("/loan/:id/repay", requireBotOrSession, async (req, res) => {
       ]
     );
 
-    // Return collateral to borrower
+    // Return collateral to borrower. Outside applyTransaction, so
+    // lifetime_earned needs its own increment (mirrors applyTransaction's
+    // GREATEST(amount, 0) rule) to keep the denormalized column in sync —
+    // same treatment as every other positive credit path (e.g. loan_in
+    // principal at accept already counts toward lifetime_earned, so a
+    // returned collateral credit counts too for consistency).
     if (collateral > 0) {
       await client.query(
-        "UPDATE nuggies_balances SET balance = balance + $1, updated_at = NOW() WHERE user_id = $2",
+        "UPDATE nuggies_balances SET balance = balance + $1, lifetime_earned = lifetime_earned + $1, updated_at = NOW() WHERE user_id = $2",
         [collateral, userId]
       );
       await client.query(
@@ -1238,15 +1307,41 @@ nuggiesRouter.post("/market/:id/buy", requireBotOrSession, async (req, res) => {
     return;
   }
 
-  const price = parseInt(listing.rows[0].price, 10);
-  const fee = Math.max(1, Math.round(price * feePct / 100));
-  const sellerReceives = price - fee;
-  const sellerId = listing.rows[0].seller_user_id;
-  const itemId = parseInt(listing.rows[0].item_id, 10);
-
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+
+    // Status-guarded UPDATE is the FIRST statement in the tx: two concurrent
+    // buys on the same listing now race on this single atomic UPDATE instead
+    // of the plain pre-transaction SELECT above (which is only a cheap
+    // early-exit for the common case). Whoever's UPDATE actually flips the
+    // row wins; the loser gets 0 rows back and 409s before touching balances.
+    const sold = await client.query<{
+      id: string; seller_user_id: string; item_id: string; price: string;
+    }>(
+      `UPDATE nuggies_market_listings
+       SET status = 'sold', buyer_user_id = $1, resolved_at = NOW()
+       WHERE id = $2 AND status = 'active'
+       RETURNING id, seller_user_id, item_id, price`,
+      [buyerId, listingId]
+    );
+    if (sold.rowCount === 0) {
+      await client.query("ROLLBACK");
+      res.status(409).json({ error: "Listing already sold" });
+      return;
+    }
+    const row = sold.rows[0];
+    const price = parseInt(row.price, 10);
+    const fee = Math.max(1, Math.round(price * feePct / 100));
+    const sellerReceives = price - fee;
+    const sellerId = row.seller_user_id;
+    const itemId = parseInt(row.item_id, 10);
+
+    if (String(sellerId) === String(buyerId)) {
+      await client.query("ROLLBACK");
+      res.status(400).json({ error: "Cannot buy your own listing" });
+      return;
+    }
 
     // Deduct from buyer
     const buyerBal = await client.query<{ balance: string }>(
@@ -1276,10 +1371,15 @@ nuggiesRouter.post("/market/:id/buy", requireBotOrSession, async (req, res) => {
       ]
     );
 
-    // Credit seller (minus fee — fee burns)
+    // Credit seller (minus fee — fee burns). Outside applyTransaction, so
+    // lifetime_earned needs its own increment to stay in sync with the
+    // ledger (mirrors applyTransaction's GREATEST(amount, 0) rule).
     await client.query(
-      `INSERT INTO nuggies_balances (user_id, balance) VALUES ($1, $2)
-       ON CONFLICT (user_id) DO UPDATE SET balance = nuggies_balances.balance + $2, updated_at = NOW()`,
+      `INSERT INTO nuggies_balances (user_id, balance, lifetime_earned) VALUES ($1, $2, $2)
+       ON CONFLICT (user_id) DO UPDATE
+         SET balance = nuggies_balances.balance + $2,
+             lifetime_earned = nuggies_balances.lifetime_earned + $2,
+             updated_at = NOW()`,
       [sellerId, sellerReceives]
     );
     await client.query(
@@ -1302,12 +1402,6 @@ nuggiesRouter.post("/market/:id/buy", requireBotOrSession, async (req, res) => {
     await client.query(
       "INSERT INTO nuggies_inventory (user_id, item_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
       [buyerId, itemId]
-    );
-
-    // Mark listing sold
-    await client.query(
-      "UPDATE nuggies_market_listings SET status = 'sold', buyer_user_id = $1, resolved_at = NOW() WHERE id = $2",
-      [buyerId, listingId]
     );
 
     await client.query("COMMIT");

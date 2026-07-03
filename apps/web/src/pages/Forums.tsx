@@ -1,7 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { putClientState } from "../api/clientState.js";
+import { appQueryKeys } from "../lib/queryClient.js";
 import { IslandButton, IslandCard, IslandEmptyState, islandInputStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
 import type {
@@ -156,6 +158,31 @@ function ForumHeader() {
 
 // ── Forum Home ──────────────────────────────────────────────────────────────
 
+// Fetches one page of the thread feed for a given filter combo + offset.
+// Thrown errors surface via react-query's error state for the first page
+// (see ForumHome's threadFeedQuery); "load more" pages catch this themselves
+// since they're not covered by the query — see loadMoreFeed below.
+async function fetchThreadFeedPage(
+  sort: ForumFeedSort,
+  categoryFilter: string | null,
+  typeFilter: ForumThreadType | null,
+  offset: number
+): Promise<ForumFeedThread[]> {
+  const params = new URLSearchParams();
+  params.set("sort", sort);
+  params.set("limit", String(FEED_PAGE_SIZE));
+  params.set("offset", String(offset));
+  if (categoryFilter) params.set("category", categoryFilter);
+  if (typeFilter) params.set("type", typeFilter);
+  const r = await apiFetch(`/forums/threads?${params.toString()}`);
+  if (!r.ok) {
+    const data = await r.json().catch(() => null);
+    throw new Error(data?.error ?? `Feed load failed (${r.status})`);
+  }
+  const data = await r.json();
+  return (data.threads ?? []) as ForumFeedThread[];
+}
+
 function ForumHome({
   profile,
   onSelectCategory,
@@ -170,9 +197,6 @@ function ForumHome({
   const [categories, setCategories] = useState<ForumCategory[] | null>(null);
   const [shellError, setShellError] = useState<string | null>(null);
   const [stats, setStats] = useState<ForumStats | null>(null);
-  const [feed, setFeed] = useState<ForumFeedThread[] | null>(null);
-  const [feedLoading, setFeedLoading] = useState(false);
-  const [feedError, setFeedError] = useState<string | null>(null);
   const [sort, setSort] = useState<ForumFeedSort>("latest");
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<ForumThreadType | null>(null);
@@ -233,37 +257,56 @@ function ForumHome({
     }
   }, []);
 
+  // First page of the thread feed goes through react-query — keyed on the
+  // filter combo so switching sort/category/type and coming back hits cache
+  // (instant, no spinner) instead of always re-fetching. "Load more" beyond
+  // page one is a manual accumulation on top, same as before: it's paging
+  // through a live list, not something cache/staleTime should paper over.
+  const threadFeedQuery = useQuery({
+    queryKey: appQueryKeys.forumThreadFeed(sort, categoryFilter, typeFilter),
+    queryFn: () => fetchThreadFeedPage(sort, categoryFilter, typeFilter, 0),
+    staleTime: 60_000,
+  });
+  const [extraPages, setExtraPages] = useState<ForumFeedThread[]>([]);
   const [feedHasMore, setFeedHasMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [loadMoreLoading, setLoadMoreLoading] = useState(false);
+
+  const firstPage = threadFeedQuery.data;
+  const feed = firstPage === undefined ? null : [...firstPage, ...extraPages];
+  const feedLoading = threadFeedQuery.isLoading || loadMoreLoading;
+  const feedError = threadFeedQuery.isError
+    ? (threadFeedQuery.error instanceof Error ? threadFeedQuery.error.message : "Feed load failed")
+    : loadMoreError;
+
+  // Reset accumulated "load more" pages whenever the underlying first page
+  // changes (filter switch or refetch) so stale extra pages don't linger
+  // appended to a different filter's results.
+  useEffect(() => {
+    setExtraPages([]);
+    setLoadMoreError(null);
+    setFeedHasMore((firstPage?.length ?? 0) === FEED_PAGE_SIZE);
+  }, [firstPage]);
 
   const loadFeed = useCallback(async (offset = 0) => {
-    setFeedLoading(true);
-    setFeedError(null);
+    if (offset === 0) {
+      await threadFeedQuery.refetch();
+      return;
+    }
+    setLoadMoreLoading(true);
+    setLoadMoreError(null);
     try {
-      const params = new URLSearchParams();
-      params.set("sort", sort);
-      params.set("limit", String(FEED_PAGE_SIZE));
-      params.set("offset", String(offset));
-      if (categoryFilter) params.set("category", categoryFilter);
-      if (typeFilter) params.set("type", typeFilter);
-      const r = await apiFetch(`/forums/threads?${params.toString()}`);
-      if (!r.ok) {
-        const data = await r.json().catch(() => null);
-        throw new Error(data?.error ?? `Feed load failed (${r.status})`);
-      }
-      const data = await r.json();
-      const batch: ForumFeedThread[] = data.threads ?? [];
-      setFeed((cur) => (offset === 0 ? batch : [...(cur ?? []), ...batch]));
+      const batch = await fetchThreadFeedPage(sort, categoryFilter, typeFilter, offset);
+      setExtraPages((cur) => [...cur, ...batch]);
       setFeedHasMore(batch.length === FEED_PAGE_SIZE);
     } catch (err) {
-      setFeedError(err instanceof Error ? err.message : "Feed load failed");
-      if (offset === 0) setFeed([]);
+      setLoadMoreError(err instanceof Error ? err.message : "Feed load failed");
     } finally {
-      setFeedLoading(false);
+      setLoadMoreLoading(false);
     }
-  }, [sort, categoryFilter, typeFilter]);
+  }, [sort, categoryFilter, typeFilter, threadFeedQuery]);
 
   useEffect(() => { void loadShell(); }, [loadShell]);
-  useEffect(() => { void loadFeed(); }, [loadFeed]);
 
   useEffect(() => {
     const q = search.trim();

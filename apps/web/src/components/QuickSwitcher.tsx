@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { islandTheme } from "../theme.js";
+import { useModalFocus } from "../hooks/useModalFocus.js";
 import type { CrewOwnedGame, GuildMember, PageId } from "../types.js";
 
 type SwitcherItem = {
@@ -76,6 +77,19 @@ export function QuickSwitcher({
     };
   }, [open]);
 
+  // This dialog already focuses its search input on open (above) and locks
+  // scroll (above) — skip those two so the hook doesn't fight either. What
+  // it adds: Tab trapping within the dialog, window-level Escape (today
+  // Escape only closes while the input itself has focus — the arrow-key nav
+  // below stays untouched), and restoring focus to whatever opened the
+  // switcher (e.g. Ctrl/Cmd+K) once it closes.
+  const dialogRef = useModalFocus<HTMLDivElement>({
+    isOpen: open,
+    onClose,
+    skipInitialFocus: true,
+    skipScrollLock: true
+  });
+
   const items = useMemo<SwitcherItem[]>(() => {
     const pages: SwitcherItem[] = PAGE_ENTRIES.filter((p) => !p.adminOnly || isAdmin).map((p) => ({
       key: `page-${p.id}`,
@@ -143,6 +157,7 @@ export function QuickSwitcher({
         }}
       />
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Quick switcher"

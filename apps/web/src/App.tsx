@@ -1,14 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollRestoration, useLocation, useNavigate } from "react-router";
 import { SITE_BRAND_NAME } from "@island/shared";
-import { API_BASE_URL, apiFetch } from "./api/client.js";
+import { API_BASE_URL, AUTH_EXPIRED_EVENT, apiFetch } from "./api/client.js";
 import { putClientState } from "./api/clientState.js";
 import { consumePendingLoginReturn, LoginScreen } from "./pages/LoginScreen.js";
 import { HomePage } from "./pages/Home.js";
 import { useLoginOverlay } from "./scene/LoginOverlayContext.js";
 import { NotFoundPage } from "./pages/NotFound.js";
 import { preloadRankBadge } from "./lib/preloadRankBadge.js";
-import { AuthBootShell } from "./components/AuthBootShell.js";
+import { AuthBootShell, IslandUnreachableScreen } from "./components/AuthBootShell.js";
 import {
   islanderIdFromPath,
   pageFromPath,
@@ -90,6 +90,13 @@ function PageLoadingFallback() {
 export function App() {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+  // Distinguishes "the API is unreachable" (network error / 5xx / bad boot
+  // response) from "logged out" (401/403). Only meaningful while
+  // isAuthenticated is still null (i.e. the very first boot probe) — once a
+  // profile load succeeds or explicitly rejects, this is moot and stays
+  // false. Render checks this before falling back to the login screen so a
+  // backend outage shows a retry card instead of implying "please log in".
+  const [bootUnreachable, setBootUnreachable] = useState(false);
   const [loginExiting, setLoginExiting] = useState(false);
   const exitSafetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { setLoginOverlayActive } = useLoginOverlay();
@@ -425,7 +432,12 @@ export function App() {
       if (isCancelled) return;
       const playReturnVideo = authed && consumePendingLoginReturn();
       if (playReturnVideo) setLoginExiting(true);
-      setIsAuthenticated(authed);
+      // loadProfile already sets isAuthenticated for every outcome it can
+      // distinguish (true on success, false on 401/403). It deliberately
+      // leaves isAuthenticated untouched on a network/5xx failure (setting
+      // bootUnreachable instead) so this boot-time caller doesn't need to —
+      // and must not — force it to false here, or an unreachable API would
+      // render the login screen instead of the retry card.
       if (authed) {
         await Promise.all([
           loadGuildMembers(true),
@@ -478,6 +490,31 @@ export function App() {
     // Only fire when auth flips true; intentionally not depending on location.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
+
+  // Session-expiry UX: apiFetch dispatches this on any 401 (see api/client.ts),
+  // including from a pre-login probe where there's no active session to
+  // expire — so this only reacts when isAuthenticatedRef says a session was
+  // actually live. The listener is added once and stays added for the app's
+  // lifetime (pushToast is stable/memoized, so this effect never re-runs);
+  // current auth state is read via a ref updated on every isAuthenticated
+  // change rather than depending on isAuthenticated directly, since that
+  // would tear the listener down and re-add it on every login/logout.
+  const isAuthenticatedRef = useRef(isAuthenticated);
+  useEffect(() => {
+    isAuthenticatedRef.current = isAuthenticated;
+  }, [isAuthenticated]);
+
+  const { pushToast } = toastQueue;
+  useEffect(() => {
+    const onAuthExpired = () => {
+      if (isAuthenticatedRef.current !== true) return;
+      setProfileData(null);
+      setIsAuthenticated(false);
+      pushToast("The tide took your session. Sign in again.", "info");
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+  }, [pushToast]);
 
   // Server-sent events give near-instant freshness for member presence and
   // game-night changes. This is additive on top of the polling fallbacks below —
@@ -597,21 +634,27 @@ export function App() {
     }
     try {
       const response = await apiFetch(`/profile/me`, { credentials: "include" });
-      const data = (await response.json()) as { profile?: MeProfile | null };
       if (response.status === 401 || response.status === 403) {
         setProfileData(null);
         setIsAuthenticated(false);
+        setBootUnreachable(false);
         if (!silent) {
           setStatus("Session expired. Login with Discord.");
         }
         return false;
       }
       if (!response.ok) {
+        // Server reached us but returned an error (5xx, etc) — the API is up
+        // but unhealthy, not "you're logged out". Distinct from the 401/403
+        // branch above so the boot screen doesn't misrepresent an outage as
+        // a login prompt.
         throw new Error(`Profile load failed (${response.status})`);
       }
+      const data = (await response.json()) as { profile?: MeProfile | null };
       const profile = data.profile ?? null;
       setProfileData(profile);
       setIsAuthenticated(true);
+      setBootUnreachable(false);
       if (profile) {
         preloadRankBadge(profile.lifetimeEarned ?? 0);
         setProfileSteamVisibility(profile.steamVisibility);
@@ -630,6 +673,12 @@ export function App() {
       }
       return true;
     } catch (error) {
+      // Network failure (fetch rejected — offline, DNS, CORS, connection
+      // refused) or the throw above for a non-ok, non-401/403 response.
+      // Neither means "logged out": leave isAuthenticated untouched (so an
+      // already-authenticated session isn't kicked to the login screen by a
+      // transient blip) and flag the outage for the boot-time retry screen.
+      setBootUnreachable(true);
       if (!silent) {
         setStatus(error instanceof Error ? error.message : "Profile load failed");
       }
@@ -1728,6 +1777,10 @@ export function App() {
       }
     };
   }, [loginExiting, handleLoginExitComplete]);
+
+  if (isAuthenticated === null && bootUnreachable) {
+    return <IslandUnreachableScreen onRetry={() => void loadProfile(true)} />;
+  }
 
   if (isAuthenticated === null) {
     return <AuthBootShell />;
