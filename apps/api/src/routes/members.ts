@@ -781,7 +781,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
             SELECT
               p.app_id,
               g.name,
-              p.completion_pct,
+              p.completion_pct::float8 AS completion_pct,
               SUM(COALESCE(p.achievements_unlocked, 0)) OVER () AS total_unlocked
             FROM shareable_user_game_progress p
             INNER JOIN games g ON g.app_id = p.app_id

@@ -360,6 +360,7 @@ export function ForumThreadPanel({
             idx={idx + 1}
             canEdit={profile?.discordUserId === post.author.discordUserId || isAdmin}
             isOwner={profile?.discordUserId === post.author.discordUserId}
+            isThreadAuthor={post.author.discordUserId === thread.author.discordUserId}
             copied={copied === post.id}
             onReact={(reaction) => reactPost(post.id, reaction)}
             onQuote={thread.isLocked ? undefined : () => quotePost(post)}
@@ -416,6 +417,7 @@ function PostCard({
   idx,
   canEdit,
   isOwner,
+  isThreadAuthor,
   copied,
   onReact,
   onQuote,
@@ -428,6 +430,7 @@ function PostCard({
   idx: number;
   canEdit: boolean;
   isOwner: boolean;
+  isThreadAuthor: boolean;
   copied: boolean;
   onReact: (reaction: ForumReactionKey) => void;
   onQuote?: () => void;
@@ -479,7 +482,7 @@ function PostCard({
           <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
             @{post.author.username}
           </div>
-          {post.isOp ? <IslandTag tone="primary">Op</IslandTag> : null}
+          {isThreadAuthor && !post.isOp ? <IslandTag tone="primary">OP</IslandTag> : null}
         </div>
 
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>

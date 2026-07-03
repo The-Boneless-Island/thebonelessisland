@@ -1596,7 +1596,7 @@ steamRouter.get("/game/:appId", async (req, res) => {
         COALESCE(gm.display_name, gm.username, dp.username) AS display_name,
         p.achievements_unlocked AS unlocked,
         p.achievements_total AS total,
-        p.completion_pct
+        p.completion_pct::float8 AS completion_pct
       FROM shareable_user_game_progress p
       INNER JOIN users u ON u.id = p.user_id
       INNER JOIN guild_members gm
