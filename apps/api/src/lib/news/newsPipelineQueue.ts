@@ -361,12 +361,15 @@ export async function getPipelineQueueCounts(): Promise<{
   };
 }
 
-export function startPipelineQueueWorker(): void {
-  if (!queueEnabled()) return;
-  void reconcileInterruptedQueueJobs().then(() => {
-    kickPipelineQueueWorker();
-    setInterval(() => {
-      void processPipelineQueue();
-    }, 12_000);
-  });
+// Returns the poll interval's handle (or null if the queue is disabled) so
+// the caller can register it for graceful-shutdown cleanup — without this,
+// the timer would keep firing processPipelineQueue() (which queries the db
+// pool) after SIGTERM has started tearing that pool down.
+export async function startPipelineQueueWorker(): Promise<NodeJS.Timeout | null> {
+  if (!queueEnabled()) return null;
+  await reconcileInterruptedQueueJobs();
+  kickPipelineQueueWorker();
+  return setInterval(() => {
+    void processPipelineQueue();
+  }, 12_000);
 }
