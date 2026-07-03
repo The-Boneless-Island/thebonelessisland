@@ -8,9 +8,14 @@ import { loadPipelineJob, savePipelineJob } from "./newsPipelineJobs.js";
 //   2. Re-queue thin recent summaries so the new full-context prompt regenerates
 //      them.
 // Self-guarding via a news_pipeline_jobs row (kind "offtopic_sweep"): once the
-// job reaches "done" it never runs again; a crashed/errored run may re-run on
-// the next boot.
+// job reaches "done" at the current SWEEP_VERSION it never runs again; a
+// crashed/errored run may re-run on the next boot, and bumping SWEEP_VERSION in
+// a later deploy re-runs the sweep once under the improved logic. Admins can
+// also force a run via POST /news/general/off-topic-sweep.
 
+// Bump to re-run the sweep once on the next deploy (e.g. after improving the
+// classifier). v2: numeric row ids for verdict matching + named leak examples.
+const SWEEP_VERSION = 2;
 const SWEEP_BATCH_SIZE = 20;
 // 20 verdicts × long URL ids can pass 1500 tokens; a truncated array fails the
 // parse and silently skips the whole batch, so leave generous headroom.
@@ -31,6 +36,10 @@ const CLASSIFIER_SYSTEM_PROMPT = `You are a strict classifier for a video-gaming
 IN SCOPE (gaming: true): video games on any platform; game studios/publishers/developers; announcements, patches, DLC, releases, delays; gaming hardware (consoles, handhelds, GPUs, peripherals) framed for gaming; game storefronts/launchers/subscription services; esports; game-industry business (layoffs, acquisitions, earnings of game companies); modding; game-development tech when the story is about making games; gaming-adjacent platforms (Steam, Discord, Twitch, Xbox/PlayStation/Nintendo services) when they materially affect how people play or gather around games.
 
 OUT OF SCOPE (gaming: false): general tech/AI/internet-infrastructure news with no direct, material gaming consequence; movies/TV/streaming (including fan art or artist tributes to non-game films); digital-art or CG showcases that aren't about game development; phones, EVs, crypto, science, politics, celebrity news; business news of non-gaming companies.
+
+Two real examples that are NOT gaming (both leaked into this feed before):
+- "Artist Creates Immersive and Beautiful Tribute to Disney's Coco" — fan art of a film; still not gaming even though it is digital art from a game-art site.
+- "Cloudflare to Filter Web Crawlers Serving AI Companies" — internet infrastructure; a hypothetical "could affect gaming wikis" link does not make it gaming.
 
 When uncertain, return gaming: true — only flag CLEAR non-gaming stories. Do not manufacture a gaming link to keep a story.
 
@@ -60,13 +69,16 @@ function parseClassifierArray(text: string): ClassifierVerdict[] {
 /**
  * One-shot post-deploy off-topic sweep. All errors caught internally — safe to
  * fire-and-forget. Marks its pipeline job "done" only on a clean completion so a
- * crash re-runs on the next boot.
+ * crash re-runs on the next boot. `force: true` (admin endpoint) ignores the
+ * run-once guard — the sweep is idempotent, a forced re-run just costs AI calls.
  */
-export async function runOffTopicSweepOnce(): Promise<void> {
+export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Promise<void> {
   try {
-    // Guard: skip forever once a prior run reached "done".
-    const prior = await loadPipelineJob("offtopic_sweep");
-    if (prior?.state === "done") return;
+    // Guard: skip once a prior run reached "done" at (or above) this version.
+    const prior = await loadPipelineJob<{ version?: number }>("offtopic_sweep");
+    if (!opts.force && prior?.state === "done" && (prior.progress?.version ?? 0) >= SWEEP_VERSION) {
+      return;
+    }
 
     // Bail quietly (without marking done) when AI is disabled/unconfigured — a
     // later boot with AI enabled will retry.
@@ -80,7 +92,12 @@ export async function runOffTopicSweepOnce(): Promise<void> {
       throw err;
     }
 
-    await savePipelineJob("offtopic_sweep", "running", {}, { startedAt: new Date(), finishedAt: null, error: null });
+    await savePipelineJob(
+      "offtopic_sweep",
+      "running",
+      { version: SWEEP_VERSION },
+      { startedAt: new Date(), finishedAt: null, error: null }
+    );
 
     const cards = await db.query<LiveCard>(
       `
@@ -106,8 +123,11 @@ export async function runOffTopicSweepOnce(): Promise<void> {
     for (let i = 0; i < cards.rows.length; i += SWEEP_BATCH_SIZE) {
       const batch = cards.rows.slice(i, i + SWEEP_BATCH_SIZE);
       scanned += batch.length;
+      // Numeric row ids as classifier ids: short and reliably echoed back.
+      // v1 used the URL external_id and long URLs risk echo drift — a mismatch
+      // silently keeps the card (conservative, but defeats the sweep).
       const payload = batch.map((c) => ({
-        id: c.external_id,
+        id: String(c.id),
         title: c.title,
         subtitle: c.ai_subtitle ?? "",
         summaryHead: c.summary_head
@@ -126,9 +146,9 @@ export async function runOffTopicSweepOnce(): Promise<void> {
         );
         const verdicts = parseClassifierArray(result.text);
         const nonGaming = new Set(
-          verdicts.filter((v) => !v.gaming).map((v) => v.id)
+          verdicts.filter((v) => !v.gaming).map((v) => v.id.trim())
         );
-        const parkIds = batch.filter((c) => nonGaming.has(c.external_id)).map((c) => c.id);
+        const parkIds = batch.filter((c) => nonGaming.has(String(c.id))).map((c) => c.id);
         if (parkIds.length > 0) {
           // ai_curated_at stays set so parked rows never re-enter the queue.
           await db.query(
@@ -142,7 +162,7 @@ export async function runOffTopicSweepOnce(): Promise<void> {
           parked += parkIds.length;
           console.log(
             `[generalNews] off-topic sweep parked ${parkIds.length} card(s): ${batch
-              .filter((c) => nonGaming.has(c.external_id))
+              .filter((c) => nonGaming.has(String(c.id)))
               .map((c) => c.external_id)
               .join(" | ")}`
           );
@@ -180,18 +200,27 @@ export async function runOffTopicSweepOnce(): Promise<void> {
     await savePipelineJob(
       "offtopic_sweep",
       "done",
-      { scanned, parked, requeued },
+      { version: SWEEP_VERSION, scanned, parked, requeued },
       { finishedAt: new Date(), error: null }
     );
     console.log(
       `[generalNews] off-topic sweep done: scanned=${scanned}, parked=${parked}, requeued=${requeued}`
     );
 
-    // Fire-and-forget a curation pass so regeneration of re-queued cards starts
-    // immediately. No import cycle: generalNewsIngestion does not import this file.
+    // Drain the re-queued rows now instead of a single kick: the per-pass pool
+    // is small (~18 rows), so one pass can strand the rest invisible (re-queued
+    // rows have ai_curated_at NULL and drop out of the feed) until some later
+    // trigger. Loop until the curator reports nothing left, bounded. A return
+    // of 0 also covers the lock-busy case (the queue worker owns it then).
+    // No import cycle: generalNewsIngestion does not import this file.
     if (requeued > 0) {
       const { curateUncuratedGeneralNews } = await import("../generalNewsIngestion.js");
-      void curateUncuratedGeneralNews({ reportRun: false }).catch((err) => {
+      void (async () => {
+        for (let pass = 0; pass < 20; pass++) {
+          const curated = await curateUncuratedGeneralNews({ reportRun: false });
+          if (curated === 0) break;
+        }
+      })().catch((err) => {
         console.error("[generalNews] off-topic sweep post-curation failed:", err);
       });
     }
