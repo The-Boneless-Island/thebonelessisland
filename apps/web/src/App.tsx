@@ -14,7 +14,8 @@ import {
   pageFromPath,
   pathForForumThread,
   pathForIslander,
-  pathForPage
+  pathForPage,
+  pathForPlanNight
 } from "./lib/routes.js";
 
 // Route-level code splitting: each routed page is lazy-loaded so its bundle is
@@ -1494,17 +1495,22 @@ export function App() {
     setSelectedMemberIds(nightAttendees.map((attendee) => attendee.discordUserId));
   }
 
-  // Library "Plan" seed: resolve the owners of the chosen game from the crew
-  // library, seed them as the selected members (which auto-refires the composer
-  // recommendation), bump the scroll nonce so Games scrolls to its composer, and
-  // hop over to Games.
-  function onPlan(appId: number) {
+  // Resolve the owners of a game from the crew library and seed them as the
+  // selected planner members (auto-refires the composer recommendation).
+  // Shared by the Library "Plan" shortcut and the Games-page `?plan=` deep
+  // link consumption effect.
+  function onSeedMembersForGame(appId: number) {
     const game = crewGames.find((row) => row.appId === appId);
     const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
     setSelectedMemberIds(ownerIds);
-    setComposerScrollNonce((nonce) => nonce + 1);
-    navigateToPage("games");
-    toastQueue.pushToast(`Planning around ${game?.name ?? "this game"}`, "info");
+  }
+
+  // Library "Plan" shortcut: hand off to the Games page via the `?plan=`
+  // deep link. Games.tsx's PlanNightCard owns seeding members, preselecting
+  // the game itself, scrolling to the composer, and toasting once the crew
+  // library data (and its own effects) are ready.
+  function onPlan(appId: number) {
+    navigate(pathForPlanNight(appId));
   }
 
   function openProfile(discordUserId: string) {
@@ -1923,6 +1929,7 @@ export function App() {
           onRemoveSelectedMembersFromNight={removeSelectedMembersFromNight}
           onNavigate={navigateToPage}
           onSendChatMessage={sendChatMessage}
+          onSeedMembersForGame={onSeedMembersForGame}
         />
       ) : null}
 
