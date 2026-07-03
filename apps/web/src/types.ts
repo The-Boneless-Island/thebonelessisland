@@ -157,6 +157,7 @@ export type CrewOwnedGame = {
   headerImageUrl: string | null;
   ownerCount: number;
   owners: CrewOwner[];
+  totalPlaytimeMinutes: number;
 };
 
 export type CrewWishlistGame = {

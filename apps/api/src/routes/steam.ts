@@ -1031,6 +1031,7 @@ type CrewGameRow = {
   header_image_url: string | null;
   owner_count: number;
   owners: CrewGameOwnerJson[];
+  total_playtime_minutes: number;
 };
 
 steamRouter.get("/crew-games", async (req, res) => {
@@ -1074,7 +1075,8 @@ steamRouter.get("/crew-games", async (req, res) => {
               ORDER BY COALESCE(gm.display_name, gm.username, dp.username) ASC
             ),
             '[]'::json
-          ) AS owners
+          ) AS owners,
+          COALESCE(SUM(ug.playtime_minutes), 0)::int AS total_playtime_minutes
         FROM shareable_user_games ug
         INNER JOIN games g ON g.app_id = ug.app_id
         INNER JOIN users u ON u.id = ug.user_id
@@ -1129,7 +1131,8 @@ steamRouter.get("/crew-games", async (req, res) => {
       tags: row.tags,
       headerImageUrl: row.header_image_url,
       ownerCount: row.owner_count,
-      owners: row.owners
+      owners: row.owners,
+      totalPlaytimeMinutes: row.total_playtime_minutes
     }))
   });
 
