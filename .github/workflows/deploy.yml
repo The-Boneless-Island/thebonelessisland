@@ -20,6 +20,17 @@ env:
 on:
   push:
     branches: [main]
+    # Docs-only merges (this file's own worktree writes plan/README updates
+    # constantly) shouldn't trigger a full build+push+SSM deploy — there's
+    # nothing in these paths that changes any of the three images or the box
+    # config. Keep this list narrow: anything under `docs/` or `.cursor/` is
+    # genuinely docs, but don't add app source directories here even if a
+    # change "looks docs-only" (e.g. a comment-only diff) — the deploy is
+    # cheap to skip correctly and expensive to skip incorrectly.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".cursor/**"
 
 concurrency:
   group: deploy-prod
@@ -100,17 +111,48 @@ jobs:
         # dies with "no space left on device". Pruning first reclaims old images
         # (running containers' images are protected; named volumes are untouched, so
         # Postgres data is safe) and lets the pull always have room.
+        #
+        # `--replace-all` (not `--add`) on `git config safe.directory`: this script
+        # reruns on every deploy, and `--add` appends a duplicate entry to
+        # ~/.gitconfig each time — harmless functionally, but the file grows forever
+        # and duplicate entries make `git config --get-all` confusing when debugging
+        # the box by hand. `--replace-all` keeps exactly one entry.
+        #
+        # `up -d --wait --wait-timeout 240`: makes the deploy step honest. Without
+        # `--wait`, `up -d` returns as soon as containers are *started*, not once
+        # they're actually healthy — so a migration that exits 1 (api container
+        # stuck unhealthy/restarting) previously still reported deploy success. Now
+        # compose blocks until every service with a healthcheck reports healthy (or
+        # the 240s timeout elapses) and exits non-zero if it doesn't, which the `||`
+        # below catches to print diagnostics before failing the Actions job for real.
         run: |
           set -euo pipefail
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${{ vars.INSTANCE_ID }}" \
             --document-name AWS-RunShellScript \
             --comment "deploy ${GITHUB_SHA::7}" \
-            --parameters commands='["set -e","export HOME=/root","cd /home/ssm-user/thebonelessisland","git config --global --add safe.directory /home/ssm-user/thebonelessisland","git fetch origin main","git reset --hard origin/main","export IMAGE_TAG=${{ github.sha }}","docker system prune -af","docker compose -f infra/docker-compose.yml --profile prod pull","docker compose -f infra/docker-compose.yml --profile prod up -d","docker image prune -f"]' \
+            --parameters commands='["set -e","export HOME=/root","cd /home/ssm-user/thebonelessisland","git config --global --replace-all safe.directory /home/ssm-user/thebonelessisland","git fetch origin main","git reset --hard origin/main","export IMAGE_TAG=${{ github.sha }}","docker system prune -af","docker compose -f infra/docker-compose.yml --profile prod pull","docker compose -f infra/docker-compose.yml --profile prod up -d --wait --wait-timeout 240 || { echo \"--- deploy failed: compose did not reach healthy within the wait timeout ---\"; docker compose -f infra/docker-compose.yml --profile prod ps; echo \"--- last 100 api log lines ---\"; docker compose -f infra/docker-compose.yml --profile prod logs --tail=100 api; exit 1; }","docker image prune -f"]' \
             --query "Command.CommandId" --output text)
           echo "SSM command id: $CMD_ID"
-          aws ssm wait command-executed --command-id "$CMD_ID" --instance-id "${{ vars.INSTANCE_ID }}" || true
-          STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "${{ vars.INSTANCE_ID }}" --query Status --output text)
+
+          # Poll get-command-invocation ourselves instead of `aws ssm wait
+          # command-executed`: that waiter gives up (WaiterError) after its fixed
+          # retry budget on a command that's still InProgress and, worse, was being
+          # swallowed here with `|| true` — so a genuinely still-running (or hung)
+          # remote script was falling through to read a stale/empty Status as if the
+          # command had finished. Poll on our own terminal-status check instead, capped
+          # at ~10 minutes (60 x 10s), which comfortably covers the compose --wait
+          # timeout above (240s) plus image pulls and the git/prune steps before it.
+          TERMINAL_STATUSES="Success Failed Cancelled TimedOut Undeliverable Terminated"
+          STATUS="InProgress"
+          for _ in $(seq 1 60); do
+            STATUS=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "${{ vars.INSTANCE_ID }}" --query Status --output text)
+            case " $TERMINAL_STATUSES " in
+              *" $STATUS "*) break ;;
+            esac
+            sleep 10
+          done
+
           echo "----- stdout -----"
           aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "${{ vars.INSTANCE_ID }}" --query StandardOutputContent --output text
           echo "----- stderr -----"
