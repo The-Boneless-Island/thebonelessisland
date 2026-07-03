@@ -2,10 +2,11 @@ import { useState, useEffect, memo } from "react";
 import { Link, useNavigate } from "react-router";
 import { describeActivityFeedEvent } from "@island/shared";
 import { apiFetch } from "../api/client.js";
-import { IslandCard, IslandSkeletonRow, accentHex, islandTagStyle } from "../islandUi.js";
+import { IslandCard, IslandSkeletonRow, bannerBackground, islandTagStyle } from "../islandUi.js";
 import { NuggieBadge } from "../components/NuggieBadge.js";
 import { islandTheme } from "../theme.js";
 import { activityHref, pathForIslander } from "../lib/routes.js";
+import { presenceTextOf, statusOf } from "../lib/presence.js";
 import type { ActivityActor, ActivityEvent, GameNight, GuildMember, NuggiesLeaderboardEntry, PageId } from "../types.js";
 
 type CommunityPageProps = {
@@ -90,23 +91,6 @@ function Hero() {
   );
 }
 
-function memberStatus(m: GuildMember): { label: string; color: string } {
-  if (m.inVoice) return { label: "live", color: islandTheme.color.dangerAccent };
-  if (m.presenceStatus === "online") return { label: "online", color: islandTheme.color.successAccent };
-  if (m.presenceStatus === "idle") return { label: "idle", color: islandTheme.palette.sandWarmAccent };
-  if (m.presenceStatus === "dnd") return { label: "dnd", color: islandTheme.color.dangerAccent };
-  return { label: "offline", color: islandTheme.color.textMuted };
-}
-
-function memberPresenceText(m: GuildMember): string {
-  if (m.richPresenceText) return m.richPresenceText;
-  if (m.inVoice) return "In voice";
-  if (m.presenceStatus === "online") return "Online";
-  if (m.presenceStatus === "idle") return "Idle";
-  if (m.presenceStatus === "dnd") return "Do not disturb";
-  return "Offline";
-}
-
 function CrewCarousel({
   members,
   isAdmin,
@@ -162,16 +146,11 @@ function CrewCard({
   onNavigate: (page: PageId) => void;
   openProfile: (discordUserId: string) => void;
 }) {
-  const status = memberStatus(member);
+  const status = statusOf(member);
   const color = communityColorFor(member.discordUserId);
   // Real Discord banner > accent-color gradient > hashed-color gradient. The
   // banner makes member cards personal instead of eight identical tints.
-  const accent = accentHex(member.accentColor);
-  const bannerBackground = member.bannerUrl
-    ? `url("${member.bannerUrl}") center/cover`
-    : accent
-      ? `linear-gradient(135deg, ${accent}88, ${islandTheme.color.panelMutedBg})`
-      : `linear-gradient(135deg, ${color}55, ${islandTheme.color.panelMutedBg})`;
+  const banner = bannerBackground(member.bannerUrl, member.accentColor, member.discordUserId);
   return (
     <article
       style={{
@@ -186,7 +165,7 @@ function CrewCard({
         border: `1px solid ${islandTheme.color.cardBorder}`
       }}
     >
-      <div style={{ height: 90, background: bannerBackground, position: "relative" }}>
+      <div style={{ height: 90, background: banner, position: "relative" }}>
         <span
           className="island-mono"
           style={{
@@ -240,7 +219,7 @@ function CrewCard({
           className="island-mono"
           style={{ fontSize: 12, color: islandTheme.color.primaryGlow, marginTop: 4 }}
         >
-          {memberPresenceText(member)}
+          {presenceTextOf(member)}
         </div>
         <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
           {isAdmin ? (

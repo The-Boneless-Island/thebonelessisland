@@ -1,12 +1,17 @@
 import { type ReactNode, type RefObject } from "react";
+import { useNavigate } from "react-router";
 import { useDayNight, type DayNightMode, type DayNightPreference } from "../scene/useDayNight.js";
 import { islandTheme } from "../theme.js";
-import type { MeProfile, PageId } from "../types.js";
+import { bannerBackground } from "../islandUi.js";
+import { statusOf } from "../lib/presence.js";
+import { pathForIslander } from "../lib/routes.js";
+import type { GuildMember, MeProfile, PageId } from "../types.js";
 import { UserAvatar, getInitials } from "./Topbar.js";
 
 type UserMenuProps = {
   menuRef: RefObject<HTMLDivElement | null>;
   profile: MeProfile | null;
+  selfMember: GuildMember | null;
   page: PageId;
   isAdmin: boolean;
   onClose: () => void;
@@ -17,18 +22,39 @@ type UserMenuProps = {
 export function UserMenu({
   menuRef,
   profile,
+  selfMember,
   page,
   isAdmin,
   onClose,
   onNavigate,
   onLogout
 }: UserMenuProps) {
+  const navigate = useNavigate();
   const { mode, preference, cyclePreference } = useDayNight();
   const initials = getInitials(profile?.displayName ?? profile?.username ?? "??");
   const handle = profile?.username ?? "guest";
-  const inVoice = profile?.inVoice ?? false;
+  // Live status/banner/roles come from selfMember (already-polled member list,
+  // refreshed ~180s + SSE-invalidated) — /profile/me is fetched once at boot
+  // and would otherwise go stale for the rest of the session. Fall back to
+  // profile so the menu isn't empty during the brief boot race before the
+  // member list has loaded once.
+  const inVoice = selfMember?.inVoice ?? profile?.inVoice ?? false;
+  const status = statusOf({
+    inVoice,
+    presenceStatus: selfMember?.presenceStatus ?? profile?.presenceStatus ?? null
+  });
+  // Keep the richer /profile/me presence text (it composes a Steam "in-game"
+  // fallback that the crew-facing member list doesn't carry) — see
+  // composePresenceText in apps/api/src/lib/presence.ts.
   const presence = profile?.richPresenceText?.trim() ?? null;
   const steamLinked = Boolean(profile?.steamId64);
+  const isBooster = Boolean(profile?.premiumSince);
+  const roleNames = (selfMember?.roleNames ?? profile?.roleNames ?? []).slice(0, 3);
+  const banner = bannerBackground(
+    selfMember?.bannerUrl ?? profile?.bannerUrl,
+    selfMember?.accentColor ?? profile?.accentColor,
+    profile?.discordUserId ?? handle
+  );
 
   return (
     <div
@@ -54,10 +80,7 @@ export function UserMenu({
       <div
         style={{
           height: 36,
-          background:
-            mode === "day"
-              ? "linear-gradient(135deg, #fbbf24 0%, #f97316 50%, #ec4899 100%)"
-              : "linear-gradient(135deg, #1e3a8a 0%, #0c4a6e 50%, #0e7490 100%)",
+          background: banner,
           flexShrink: 0
         }}
       />
@@ -77,27 +100,26 @@ export function UserMenu({
             }}
           >
             <UserAvatar profile={profile} initials={initials} size={40} />
-            {inVoice ? (
-              <span
-                aria-label="In voice"
-                style={{
-                  position: "absolute",
-                  bottom: 0,
-                  right: -1,
-                  width: 12,
-                  height: 12,
-                  borderRadius: 999,
-                  background: islandTheme.color.primaryGlow,
-                  border: `2px solid ${islandTheme.color.panelBg}`,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 6
-                }}
-              >
-                🎙
-              </span>
-            ) : null}
+            <span
+              aria-label={status.label}
+              title={status.label}
+              style={{
+                position: "absolute",
+                bottom: 0,
+                right: -1,
+                width: 12,
+                height: 12,
+                borderRadius: 999,
+                background: status.color,
+                border: `2px solid ${islandTheme.color.panelBg}`,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 6
+              }}
+            >
+              {inVoice ? "🎙" : null}
+            </span>
           </div>
 
           {/* Name + handle */}
@@ -128,6 +150,49 @@ export function UserMenu({
             </div>
           </div>
         </div>
+
+        {/* Status + booster + roles */}
+        {isBooster || roleNames.length > 0 ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap", marginTop: 8 }}>
+            {isBooster ? (
+              <span
+                className="island-mono"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "2px 7px",
+                  borderRadius: 999,
+                  background: "rgba(244,114,182,0.14)",
+                  color: "#f472b6",
+                  flexShrink: 0
+                }}
+              >
+                💎 Booster
+              </span>
+            ) : null}
+            {roleNames.map((role) => (
+              <span
+                key={role}
+                className="island-mono"
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: "2px 7px",
+                  borderRadius: 999,
+                  border: `1px solid ${islandTheme.color.cardBorder}`,
+                  color: islandTheme.color.textSubtle,
+                  flexShrink: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 110
+                }}
+              >
+                {role}
+              </span>
+            ))}
+          </div>
+        ) : null}
 
         {/* Rich presence */}
         {presence ? (
@@ -173,6 +238,16 @@ export function UserMenu({
         >
           View profile
         </NavItem>
+
+        {profile?.discordUserId ? (
+          <NavItem
+            icon="🏝️"
+            active={page === "islander-profile"}
+            onClick={() => { onClose(); navigate(pathForIslander(profile.discordUserId)); }}
+          >
+            View islander card
+          </NavItem>
+        ) : null}
 
         {isAdmin ? (
           <NavItem
