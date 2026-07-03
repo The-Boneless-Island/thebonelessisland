@@ -76,7 +76,7 @@ type GeneralNewsRow = {
  * Returns curated general gaming news from external sources.
  * Triggers background ingestion to top-up the feed if needed.
  */
-generalNewsRouter.get("/general", async (req, res) => {
+generalNewsRouter.get("/general", requireSession, async (req, res) => {
   try {
     const userId = req.session?.userId as string | undefined;
     const { sql, params } = buildGeneralNewsFeedQuery(userId);
@@ -334,7 +334,7 @@ generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentR
     res.json({ ok: true, embedded, remaining });
   } catch (err) {
     console.error("[generalNews] embed-backfill error:", err);
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
+    res.status(500).json({ ok: false, error: "Backfill failed" });
   }
 });
 
@@ -427,7 +427,7 @@ generalNewsRouter.post("/general/image-backfill", requireSession, requireParentR
     res.json({ ok: true, ...result });
   } catch (err) {
     console.error("[generalNews] image-backfill error:", err);
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Backfill failed" });
+    res.status(500).json({ ok: false, error: "Backfill failed" });
   }
 });
 
@@ -545,7 +545,7 @@ generalNewsRouter.post("/general/reset-corpus", requireSession, requireParentRol
     console.error("[generalNews] POST /news/general/reset-corpus error:", err);
     res.status(500).json({
       ok: false,
-      error: err instanceof Error ? err.message : "Corpus reset failed"
+      error: "Corpus reset failed"
     });
   }
 });
@@ -589,7 +589,7 @@ generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireP
     });
   } catch (err) {
     console.error("[generalNews] POST /news/general/retire-stale-backlog error:", err);
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Retire failed" });
+    res.status(500).json({ ok: false, error: "Retire failed" });
   }
 });
 
@@ -617,7 +617,7 @@ generalNewsRouter.get("/general/debug-curate-one", requireSession, requireParent
     res.json({ ok: true, debug });
   } catch (err) {
     console.error("[generalNews] GET /news/general/debug-curate-one error:", err);
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Debug curate failed" });
+    res.status(500).json({ ok: false, error: "Debug curate failed" });
   }
 });
 
@@ -649,7 +649,7 @@ generalNewsRouter.post("/general/autopilot/run", requireSession, requireParentRo
     res.json({ ok: true, result });
   } catch (err) {
     console.error("[generalNews] POST /news/general/autopilot/run error:", err);
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Autopilot failed" });
+    res.status(500).json({ ok: false, error: "Autopilot failed" });
   }
 });
 

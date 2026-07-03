@@ -8,7 +8,7 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm run dev -w @island/web\" \"npm run dev -w @island/api\" \"npm run dev -w @island/bot\"",
-    "build": "npm run build --workspaces",
+    "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces",
     "format": "prettier --write .",
     "db:up": "docker compose -f infra/docker-compose.yml up -d",
