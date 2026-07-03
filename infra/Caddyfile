@@ -38,6 +38,19 @@
 	}
 }
 
+# ── Container healthcheck ───────────────────────────────────────────────────
+# Matched only by `Host: localhost` — i.e. the docker-compose healthcheck's
+# wget from inside this container. It can't live in the hostname site blocks
+# below: those never match a localhost request (and their :80 listeners are
+# just Caddy's auto HTTPS redirects), so a probe there would be answered by
+# nothing at all. `http://` prefix keeps Caddy from trying to provision TLS
+# for "localhost". Proves the Caddy process is up and serving — not that the
+# SPA build or api proxy are healthy — which is exactly the failure mode a
+# container healthcheck needs to catch.
+http://localhost {
+	respond /healthz 200
+}
+
 # ── Apex: static SPA ────────────────────────────────────────────────────────
 bonelessisland.com {
 	tls /certs/origin-cert.pem /certs/origin-key.pem
@@ -107,6 +120,20 @@ www.bonelessisland.com {
 api.bonelessisland.com {
 	tls /certs/origin-cert.pem /certs/origin-key.pem
 	import security_headers
+
+	# Compress JSON responses (the api's entire response body shape) — same
+	# rationale as the apex site: cheaper egress, faster TTFB for the SPA's
+	# API calls. zstd first, gzip fallback for clients that don't send it.
+	encode zstd gzip
+
+	# Caps request bodies edge-side, ahead of Express even seeing the bytes.
+	# 10MB comfortably covers the forum image upload path (sharp re-encodes to
+	# WebP after this, so the raw upload is the largest legitimate body this
+	# api accepts) while capping how much a malicious/broken client can make
+	# Caddy buffer before Express's own body-size limits would reject it.
+	request_body {
+		max_size 10MB
+	}
 
 	# /internal/* serves the bot only, over the private docker network
 	# (API_BASE_URL=http://api:3000). It never needs public reachability —

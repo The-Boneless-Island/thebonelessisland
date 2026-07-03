@@ -64,6 +64,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # Largest share of the box's 2GB — Postgres benefits most from spare
+    # memory (shared_buffers, OS page cache for the working set). The other
+    # three services are capped smaller so this has room: 768+256+128+640 =
+    # 1792m, leaving ~250m host headroom for the kernel/docker/ssm-agent on a
+    # 2GB box.
+    mem_limit: 640m
 
   api:
     profiles: ["prod"]
@@ -87,6 +93,43 @@ services:
     # the internal network. Migrations run automatically on boot (server.ts).
     expose:
       - "3000"
+    volumes:
+      # Forum image uploads (apps/api/src/lib/forumUploads.ts). Without this the
+      # api container is stateless-by-accident: every `docker compose up` that
+      # recreates the container (every deploy) silently deletes anything a member
+      # uploaded, because the files only ever lived in the container's writable
+      # layer. The path must match forumUploads.ts's default exactly — it resolves
+      # uploads to `path.join(process.cwd(), "data", "uploads")`, and the
+      # Dockerfile sets WORKDIR /app/apps/api before CMD, so cwd is
+      # /app/apps/api and the default resolves to this same path.
+      - boneless_uploads:/app/apps/api/data/uploads
+    # Caps the api container's memory so a leak/spike can't starve the box (2GB
+    # total, four services). 512m is the Node heap ceiling (NODE_OPTIONS below);
+    # 768m gives headroom above the heap for non-heap memory (buffers, native
+    # deps like sharp's libvips) before the OOM killer would step in.
+    mem_limit: 768m
+    environment:
+      NODE_OPTIONS: --max-old-space-size=512
+    healthcheck:
+      # Hits the app's own readiness probe (server.ts) instead of just "is the
+      # process up" — it reports 503 while migrations are still running or have
+      # failed, so compose (and deploy.yml's --wait) won't call the api healthy
+      # until it can actually serve traffic. Plain `node -e` avoids depending on
+      # curl/wget being present in the api image.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # Migrations run on every boot (server.ts) before the api starts serving,
+      # so the first healthy check needs enough slack to cover a full migration
+      # run, not just process startup.
+      start_period: 90s
 
   bot:
     profiles: ["prod"]
@@ -100,8 +143,18 @@ services:
     env_file:
       - ../.env
     depends_on:
-      - api
+      api:
+        # Wait for the api's own healthcheck (not just "container started") —
+        # the bot's /internal/* calls (announcements, settings cache,
+        # slash-command autocomplete) 404/500 until the api has finished
+        # migrating and is actually accepting requests.
+        condition: service_healthy
     # Outbound only (Discord gateway). No ports.
+    # 256m covers discord.js's gateway cache + the bot's own small heap; the
+    # box has far more headroom to spare here than on the api container.
+    mem_limit: 256m
+    environment:
+      NODE_OPTIONS: --max-old-space-size=192
     # Liveness via a heartbeat file the process touches every 30s (ready +
     # each announcement-poll tick — see apps/bot/src/index.ts touchHeartbeat).
     # `-mmin -2` = modified within the last 2 minutes, comfortably wider than
@@ -128,7 +181,12 @@ services:
     restart: unless-stopped
     logging: *default-logging
     depends_on:
-      - api
+      api:
+        # Deliberately NOT service_healthy: the SPA is static and can serve
+        # (with the api proxy 502ing briefly) while the api boots/migrates.
+        # Gating web on api health would turn every migration run into full
+        # site downtime instead of a degraded-api window.
+        condition: service_started
     ports:
       - "80:80"
       - "443:443"
@@ -137,7 +195,25 @@ services:
       - ./certs:/certs:ro
       # Persist Caddy's state dir.
       - boneless_caddy_data:/data
+    # Caddy + a small static build; the lightest service on the box by far.
+    mem_limit: 128m
+    healthcheck:
+      # /healthz is an internal-only route in infra/Caddyfile that just
+      # confirms the Caddy process is up and serving — it doesn't prove the
+      # SPA build or the api proxy work, but "Caddy didn't start" is the
+      # failure mode this actually catches. wget is busybox's, bundled in
+      # caddy:2-alpine; there's no curl in this image.
+      test: ["CMD", "wget", "-qO-", "http://localhost/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
 volumes:
   boneless_pg_data:
   boneless_caddy_data:
+  # Forum upload files (see the api service's volumes entry above). Named
+  # volume so it survives `docker compose up` container recreation on every
+  # deploy — only `docker compose down -v` or an explicit `docker volume rm`
+  # touches it.
+  boneless_uploads:

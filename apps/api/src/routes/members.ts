@@ -226,18 +226,62 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
     }
   }
 
+  // Per-member row payload for the batched upsert below, as one JSON array
+  // (not parallel UNNEST arrays): role_ids/role_names are themselves arrays,
+  // and Postgres UNNEST on a genuine multi-dimensional array (text[][])
+  // flattens every element instead of yielding one text[] per row, so a
+  // plain UNNEST over parallel arrays can't carry them correctly. JSONB
+  // nests without that ambiguity, and jsonb_to_recordset unpacks it back
+  // into a typed rowset (including array-typed columns) in one pass.
+  const memberRows = normalized.map((member) => {
+    const voiceChannelId = voiceChannelByUserId.get(member.id) ?? null;
+    const inVoice = Boolean(voiceChannelId);
+    // Only voice state is observable here. Don't fabricate an "offline"
+    // claim when the user is simply not in a voice channel — Discord's
+    // online/idle/dnd presence is not pulled by this sync.
+    const richPresenceText = inVoice ? "In a voice channel" : null;
+    return {
+      discord_user_id: member.id,
+      username: member.username,
+      display_name: member.displayName,
+      global_name: member.globalName,
+      avatar_url: member.avatarUrl,
+      guild_avatar_url: member.guildAvatarUrl,
+      role_ids: member.roleIds,
+      role_names: member.roleNames,
+      in_voice: inVoice,
+      voice_channel_id: voiceChannelId,
+      rich_presence_text: richPresenceText,
+      joined_at_guild: member.joinedAtGuild,
+      premium_since: member.premiumSince
+    };
+  });
+
   const client = await db.connect();
   try {
     await client.query("BEGIN");
-    await client.query(`UPDATE guild_members SET in_guild = FALSE WHERE guild_id = $1`, [getGuildId()]);
 
-    for (const member of normalized) {
-      const voiceChannelId = voiceChannelByUserId.get(member.id) ?? null;
-      const inVoice = Boolean(voiceChannelId);
-      // Only voice state is observable here. Don't fabricate an "offline"
-      // claim when the user is simply not in a voice channel — Discord's
-      // online/idle/dnd presence is not pulled by this sync.
-      const richPresenceText = inVoice ? "In a voice channel" : null;
+    // Demote only members who dropped out of this sync's roster (left,
+    // kicked, banned) instead of flipping every row to FALSE and relying on
+    // the upsert below to flip the surviving majority straight back to TRUE —
+    // that pattern double-versions every still-present member on every sync.
+    await client.query(
+      `
+        UPDATE guild_members
+           SET in_guild = FALSE
+         WHERE guild_id = $1
+           AND in_guild
+           AND discord_user_id <> ALL($2::text[])
+      `,
+      [getGuildId(), normalized.map((member) => member.id)]
+    );
+
+    if (memberRows.length > 0) {
+      // Batched upsert — one round trip instead of one INSERT...ON CONFLICT
+      // per member. IS DISTINCT FROM guards skip the write entirely for a
+      // member whose synced fields are byte-identical to what's already
+      // stored (the common case: this sync runs every 60s, most members
+      // don't change every tick).
       await client.query(
         `
           INSERT INTO guild_members (
@@ -258,7 +302,38 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
             in_guild,
             last_synced_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[], $9::text[], $10, $11, $12, $13::timestamptz, $14::timestamptz, TRUE, NOW())
+          SELECT
+            $1::text,
+            t.discord_user_id,
+            t.username,
+            t.display_name,
+            t.global_name,
+            t.avatar_url,
+            t.guild_avatar_url,
+            t.role_ids,
+            t.role_names,
+            t.in_voice,
+            t.voice_channel_id,
+            t.rich_presence_text,
+            t.joined_at_guild::timestamptz,
+            t.premium_since::timestamptz,
+            TRUE,
+            NOW()
+          FROM jsonb_to_recordset($2::jsonb) AS t(
+            discord_user_id text,
+            username text,
+            display_name text,
+            global_name text,
+            avatar_url text,
+            guild_avatar_url text,
+            role_ids text[],
+            role_names text[],
+            in_voice boolean,
+            voice_channel_id text,
+            rich_presence_text text,
+            joined_at_guild text,
+            premium_since text
+          )
           ON CONFLICT (guild_id, discord_user_id)
           DO UPDATE SET
             username = EXCLUDED.username,
@@ -275,23 +350,21 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
             premium_since = EXCLUDED.premium_since,
             in_guild = TRUE,
             last_synced_at = NOW()
+          WHERE guild_members.username IS DISTINCT FROM EXCLUDED.username
+             OR guild_members.display_name IS DISTINCT FROM EXCLUDED.display_name
+             OR guild_members.global_name IS DISTINCT FROM EXCLUDED.global_name
+             OR guild_members.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url
+             OR guild_members.guild_avatar_url IS DISTINCT FROM EXCLUDED.guild_avatar_url
+             OR guild_members.role_ids IS DISTINCT FROM EXCLUDED.role_ids
+             OR guild_members.role_names IS DISTINCT FROM EXCLUDED.role_names
+             OR guild_members.in_voice IS DISTINCT FROM EXCLUDED.in_voice
+             OR guild_members.voice_channel_id IS DISTINCT FROM EXCLUDED.voice_channel_id
+             OR guild_members.rich_presence_text IS DISTINCT FROM EXCLUDED.rich_presence_text
+             OR guild_members.joined_at_guild IS DISTINCT FROM EXCLUDED.joined_at_guild
+             OR guild_members.premium_since IS DISTINCT FROM EXCLUDED.premium_since
+             OR NOT guild_members.in_guild
         `,
-        [
-          getGuildId(),
-          member.id,
-          member.username,
-          member.displayName,
-          member.globalName,
-          member.avatarUrl,
-          member.guildAvatarUrl,
-          member.roleIds,
-          member.roleNames,
-          inVoice,
-          voiceChannelId,
-          richPresenceText,
-          member.joinedAtGuild,
-          member.premiumSince
-        ]
+        [getGuildId(), JSON.stringify(memberRows)]
       );
     }
 
@@ -663,10 +736,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
       `
         SELECT
           nb.balance,
-          COALESCE((
-            SELECT SUM(amount) FROM nuggies_transactions
-            WHERE user_id = $1 AND amount > 0
-          ), 0)::text AS lifetime_earned,
+          COALESCE(nb.lifetime_earned, 0)::text AS lifetime_earned,
           t.name AS title_name
         FROM (SELECT $1::bigint AS uid) _
         LEFT JOIN nuggies_balances nb ON nb.user_id = _.uid

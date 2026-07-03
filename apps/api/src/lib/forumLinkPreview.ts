@@ -5,12 +5,18 @@
 //   * http/https only.
 //   * DNS-resolve the host and reject private/reserved IP ranges — re-checked
 //     on every redirect hop (manual redirect handling, max 3 hops).
+//   * The resolved-and-vetted address is pinned for the actual connection
+//     (undici Agent with a fixed `connect.lookup`), so a DNS answer that
+//     changes between the check and the request (rebinding) can't slip a
+//     private address past the guard — the fetch physically cannot resolve
+//     the hostname again.
 //   * 5s total timeout, read at most 512 KB, only parse text/html.
 //   * Failures are cached as status='failed' and not retried more than once
 //     per day per URL.
 
 import { promises as dns } from "node:dns";
 import { isIP } from "node:net";
+import { Agent } from "undici";
 import { db } from "../db/client.js";
 
 const MAX_HOPS = 3;
@@ -83,17 +89,44 @@ export function isBlockedIp(ip: string): boolean {
   return true;
 }
 
-/** Resolve a hostname and throw if it (or any resolved address) is private. */
-async function assertHostResolvesPublic(hostname: string): Promise<void> {
+type PinnedAddress = { address: string; family: 4 | 6 };
+
+/**
+ * Resolve a hostname, throw if it (or any resolved address) is private, and
+ * return one vetted address to pin the subsequent connection to. Resolving
+ * again inside fetch() (ordinary DNS-backed connect) would let a rebinding
+ * attacker answer this lookup with a public IP and the next one — the one
+ * fetch() actually connects to — with a private one; pinning closes that gap.
+ */
+async function resolvePinnedAddress(hostname: string): Promise<PinnedAddress> {
   if (isIP(hostname)) {
     if (isBlockedIp(hostname)) throw new Error("blocked address");
-    return;
+    return { address: hostname, family: isIP(hostname) === 6 ? 6 : 4 };
   }
   const addrs = await dns.lookup(hostname, { all: true });
   if (addrs.length === 0) throw new Error("no address");
   for (const a of addrs) {
     if (isBlockedIp(a.address)) throw new Error("blocked address");
   }
+  const first = addrs[0]!;
+  return { address: first.address, family: first.family === 6 ? 6 : 4 };
+}
+
+/**
+ * Build a per-request undici dispatcher whose connect step always resolves
+ * the target hostname to the single pinned address — the DNS answer used for
+ * the SSRF check above is the only one that can ever be dialed. Host header
+ * and TLS SNI are untouched (they come from the request URL, not the
+ * dispatcher), so this only constrains which socket gets opened.
+ */
+function createPinnedDispatcher(pinned: PinnedAddress): Agent {
+  return new Agent({
+    connect: {
+      lookup: (_hostname, _options, callback) => {
+        callback(null, [{ address: pinned.address, family: pinned.family }]);
+      }
+    }
+  });
 }
 
 function decodeEntities(s: string): string {
@@ -142,44 +175,60 @@ async function fetchPreview(rawUrl: string): Promise<LinkPreview> {
     for (let hop = 0; hop <= MAX_HOPS; hop++) {
       const u = new URL(current);
       if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error("bad scheme");
-      await assertHostResolvesPublic(u.hostname);
+      const pinned = await resolvePinnedAddress(u.hostname);
+      const dispatcher = createPinnedDispatcher(pinned);
 
-      const res = await fetch(current, {
-        redirect: "manual",
-        signal: controller.signal,
-        headers: { "user-agent": "BonelessIsland-LinkPreview/1.0", accept: "text/html" }
-      });
+      let res: Response;
+      try {
+        res = await fetch(current, {
+          redirect: "manual",
+          signal: controller.signal,
+          headers: { "user-agent": "BonelessIsland-LinkPreview/1.0", accept: "text/html" },
+          dispatcher
+        } as RequestInit & { dispatcher: Agent });
+      } catch (err) {
+        void dispatcher.close();
+        throw err;
+      }
 
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get("location");
+        void dispatcher.close();
         if (!loc) throw new Error("redirect without location");
         current = new URL(loc, current).toString();
         continue;
       }
-      if (!res.ok) throw new Error(`status ${res.status}`);
+      if (!res.ok) {
+        void dispatcher.close();
+        throw new Error(`status ${res.status}`);
+      }
 
-      const ct = res.headers.get("content-type") ?? "";
-      if (!ct.includes("text/html")) throw new Error("not html");
+      try {
+        const ct = res.headers.get("content-type") ?? "";
+        if (!ct.includes("text/html")) throw new Error("not html");
 
-      // Read at most MAX_BYTES.
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("no body");
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (value) {
-          chunks.push(value);
-          total += value.length;
-          if (total >= MAX_BYTES) {
-            void reader.cancel();
-            break;
+        // Read at most MAX_BYTES.
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("no body");
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            total += value.length;
+            if (total >= MAX_BYTES) {
+              void reader.cancel();
+              break;
+            }
           }
         }
+        const html = Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, MAX_BYTES).toString("utf8");
+        return parsePreview(current, html);
+      } finally {
+        void dispatcher.close();
       }
-      const html = Buffer.concat(chunks.map((c) => Buffer.from(c))).subarray(0, MAX_BYTES).toString("utf8");
-      return parsePreview(current, html);
     }
     throw new Error("too many redirects");
   } finally {
