@@ -1,10 +1,57 @@
 # Auto-approve and auto-merge low-risk Dependabot PRs.
 #
-# Minor + patch updates (including the grouped minor-and-patch PR, docker digest/
-# minor bumps, and minor action bumps) are approved and set to auto-merge. GitHub
-# then merges them only once the required `lint-build-scan` check passes, so CI is
-# still the gate. Major bumps fall through untouched and wait for a human, since
-# they can break (this is how react-router 7 -> 8 was handled by hand).
+# GitHub then merges an approved PR only once the required `lint-build-scan`
+# check passes, so CI is still the gate. ci.yml also runs a `boot-smoke` job
+# (migrations + readiness on a fresh DB), but it is NOT yet in the branch-
+# protection required-checks list — add it there for it to actually block
+# these auto-merges (see the note at the top of ci.yml). Major bumps always
+# fall through untouched and wait for a human, since they can break (this is
+# how react-router 7 -> 8 was handled by hand).
+#
+# Auto-approve is narrowed per ecosystem + dependency-type because merges
+# here deploy straight to prod (main -> deploy.yml, no staging) and there is
+# no runtime test suite beyond the CI boot-smoke job — that job proves the
+# app boots and passes readiness, not that any given feature still behaves
+# correctly. So the riskier the bump, the more we lean on a human review:
+#   - npm runtime (production) deps: patch only. A "minor" bump to express/
+#     pg/discord.js etc. can change runtime behavior in ways boot-smoke can't
+#     catch; require a human to look.
+#   - npm devDependencies: minor + patch. These never ship in a running
+#     container (tsx runs source directly, no compiled dev-tooling artifact),
+#     so the blast radius on prod is effectively zero.
+#   - GitHub Actions: minor + patch, unchanged from before. These run in CI,
+#     not prod, and a break surfaces immediately as a failed required check
+#     rather than a silent prod regression.
+#   - Docker base images: digest + patch only. This repo pins floating major
+#     tags (node:26-alpine, caddy:2-alpine — see the Dockerfiles), so in
+#     practice every docker PR here is a digest-only bump (no tag/semver
+#     change at all — fetch-metadata reports update-type as an empty string
+#     for those, confirmed by inspecting this workflow's own real run logs;
+#     no digest-only docker PR has fired here yet, so this is inferred from
+#     "no semver diff exists to classify," not observed directly). The
+#     `update-type == ''` arm covers that digest case; the explicit
+#     semver-patch arm covers a future versioned-tag pin. Minor/major tag
+#     bumps still require a human either way.
+#
+# `package-ecosystem` values below (npm_and_yarn / github_actions / docker)
+# are taken verbatim from this workflow's own historical run logs (`gh run
+# view --log` on real PRs: #42 fetch-metadata major bump -> package-ecosystem
+# "github_actions", dependency-type "direct:production"; #74 npm
+# minor-and-patch group -> package-ecosystem "npm_and_yarn"). That
+# `dependency-type: direct:production` shows up on a GitHub Actions bump too
+# is exactly why every branch below checks `package-ecosystem` explicitly —
+# dependency-type alone is NOT npm-exclusive and can't safely discriminate
+# ecosystems on its own.
+#
+# Grouping interaction: dependabot.yml groups all npm minor+patch bumps
+# (across every workspace, runtime and dev together) into one PR. A grouped
+# PR's update-type/dependency-type outputs reflect the HIGHEST-risk member of
+# the group, so if the group contains even one runtime minor bump, the whole
+# PR reports dependency-type "direct:production" (mixed) at semver-minor and
+# will NOT auto-merge here — it waits for a human, same as an ungrouped
+# runtime-minor PR would. A group containing only dev-dependency and/or
+# runtime-patch bumps auto-merges. No dedicated dev-only npm group exists, so
+# a pure all-devDependencies week still auto-merges via the shared group.
 name: Dependabot auto-merge
 
 on: pull_request
@@ -25,10 +72,59 @@ jobs:
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
-      - name: Approve and enable auto-merge for minor/patch
+      # npm runtime (production) dependency: patch only. Minor bumps to
+      # express/pg/discord.js/etc. wait for a human — see rationale above.
+      - name: Approve and enable auto-merge — npm runtime, patch only
         if: >-
-          steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+          steps.meta.outputs.package-ecosystem == 'npm_and_yarn' &&
+          steps.meta.outputs.dependency-type == 'direct:production' &&
           steps.meta.outputs.update-type == 'version-update:semver-patch'
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # npm devDependencies: minor + patch. Never ship in the running
+      # container, so a bad bump can't reach prod behavior.
+      - name: Approve and enable auto-merge — npm devDependencies, minor/patch
+        if: >-
+          steps.meta.outputs.package-ecosystem == 'npm_and_yarn' &&
+          steps.meta.outputs.dependency-type == 'direct:development' &&
+          (steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+           steps.meta.outputs.update-type == 'version-update:semver-patch')
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # GitHub Actions bumps: minor + patch, same as before this PR. These
+      # only affect CI, not the prod runtime.
+      - name: Approve and enable auto-merge — github-actions, minor/patch
+        if: >-
+          steps.meta.outputs.package-ecosystem == 'github_actions' &&
+          (steps.meta.outputs.update-type == 'version-update:semver-minor' ||
+           steps.meta.outputs.update-type == 'version-update:semver-patch')
+        run: |
+          gh pr review --approve "$PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker base images: digest + patch only, never minor/major. This repo
+      # pins floating major tags (node:26-alpine, caddy:2-alpine), so real
+      # docker PRs here are digest-only bumps — fetch-metadata reports no
+      # update-type for those (empty string), hence the first arm. The
+      # semver-patch arm covers a future versioned-tag pin.
+      - name: Approve and enable auto-merge — docker, digest/patch only
+        if: >-
+          steps.meta.outputs.package-ecosystem == 'docker' &&
+          (steps.meta.outputs.update-type == '' ||
+           steps.meta.outputs.update-type == 'version-update:semver-patch')
         run: |
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"

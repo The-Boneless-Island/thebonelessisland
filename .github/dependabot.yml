@@ -20,7 +20,14 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      # Batch all same-major bumps across every workspace into one PR.
+      # Batch all same-major bumps across every workspace into one PR. Note
+      # this mixes runtime (production) and devDependencies bumps into one
+      # group — dependabot-auto-merge.yml's npm-runtime auto-approve step is
+      # patch-only, so a group containing even one runtime *minor* bump
+      # reports the group's dependency-type as the mixed/highest-risk value
+      # and does NOT auto-merge; it waits for a human, same as an ungrouped
+      # runtime-minor PR would. See that workflow's top comment for the full
+      # per-branch rationale.
       minor-and-patch:
         update-types:
           - "minor"
