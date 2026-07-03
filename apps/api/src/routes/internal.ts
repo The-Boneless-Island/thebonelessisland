@@ -210,7 +210,7 @@ internalRouter.post(
       res.json({ text: result.text, provider: result.provider, model: result.model });
     } catch (err) {
       console.error("[internal] POST /bot/nuggie-chat error:", err);
-      res.status(502).json({ error: err instanceof Error ? err.message : "Nuggie chat failed" });
+      res.status(502).json({ error: "Nuggie chat failed" });
     }
   }
 );

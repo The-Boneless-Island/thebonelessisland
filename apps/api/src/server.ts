@@ -37,6 +37,7 @@ import { runNewsPipelineHealthSweep } from "./lib/news/newsCurationHealth.js";
 import { reconcileInterruptedPipelineJobs } from "./lib/news/newsPipelineJobs.js";
 import { startPipelineQueueWorker, getPipelineQueueCounts, isPipelineQueueEnabled } from "./lib/news/newsPipelineQueue.js";
 import { runNewsRetentionSweep } from "./lib/news/newsRetention.js";
+import { runRetentionSweep as runGeneralRetentionSweep } from "./lib/retention.js";
 import { enqueueGameNewsIngest, getGameNewsIngestQueueStatus } from "./lib/gameNewsIngestQueue.js";
 import { getMemberSyncStatus } from "./lib/memberSyncFlight.js";
 import { resolveCrewLibraryAppIds } from "./lib/patchAlerts.js";
@@ -261,7 +262,7 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, migrations: "ok" });
 });
 
-app.get("/health/ready", async (_req, res) => {
+app.get("/health/ready", defaultLimiter, async (_req, res) => {
   if (migrationFailure !== null) {
     res.status(503).json({ ok: false, reason: "migrations_failed" });
     return;
@@ -607,6 +608,16 @@ async function bootstrap() {
     });
   trackedTimeout(runRetentionSweep, 7 * 60 * 1000);
   trackedInterval(runRetentionSweep, 24 * 60 * 60 * 1000);
+
+  // Nightly retention: activity_events / bot_announcements / game_news prune.
+  // Staggered a couple minutes after the news retention sweep above so the
+  // two don't land on the pool in the same tick at boot.
+  const runGeneralRetention = () =>
+    runGeneralRetentionSweep().catch((err) => {
+      console.error("[retention] sweep failed:", err);
+    });
+  setTimeout(runGeneralRetention, 9 * 60 * 1000);
+  setInterval(runGeneralRetention, 24 * 60 * 60 * 1000);
 
   // Crew-library patch alerts: poll Steam/RSS sources on a tighter cadence than
   // the lazy page-load ingest so Discord alerts land within ~20 minutes.
