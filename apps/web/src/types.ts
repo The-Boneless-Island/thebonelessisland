@@ -114,6 +114,7 @@ export type MeProfile = {
   steamLastSyncedAt: string | null;
   steam: SteamSummary | null;
   roleNames: string[];
+  isAdmin: boolean;
   inVoice: boolean;
   presenceStatus: PresenceStatus | null;
   richPresenceText: string | null;

@@ -51,12 +51,12 @@ const RAW: SettingMeta[] = [
     type: "string"
   },
   {
-    key: "parent_role_name",
+    key: "admin_role_name",
     label: "Admin Role Name",
     description: "The exact Discord role name whose holders get admin access here. Case-sensitive.",
     whenToChange: "When the role you use for admins is renamed in Discord, or when promoting a different role to admin.",
-    example: "Parent",
-    ifWrong: "Every current admin will lose access on next login. You'll need DB access to restore the value if you lock yourself out.",
+    example: "Admin",
+    ifWrong: "Every current admin will lose access on next login. You'll need DB access to restore the value if you lock yourself out. Changing this together with the Discord Server ID in the same session can lock you out immediately — change one, confirm you're still in, then change the other.",
     tags: ["discord", "role", "admin", "permission", "access"],
     dangerLevel: "high",
     domain: "people",
@@ -362,7 +362,7 @@ const RAW: SettingMeta[] = [
     description:
       "Discord webhook URL for news pipeline alerts (zero-curate ingests, validation spikes, periodic backlog sweep). Empty = off — degraded state only logs to Sentry/server logs.",
     whenToChange:
-      "Set a Parents-only Discord channel webhook so you're pinged when curation stalls or backlogs grow. Alerts dedupe (6–12h cooldown).",
+      "Set an admin-only Discord channel webhook so you're pinged when curation stalls or backlogs grow. Alerts dedupe (6–12h cooldown).",
     tags: ["news", "discord", "webhook", "alert", "curation"],
     dangerLevel: "low",
     domain: "content",

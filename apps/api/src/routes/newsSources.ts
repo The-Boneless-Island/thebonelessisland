@@ -1,13 +1,13 @@
 import express from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { PROVIDERS } from "../lib/news/providers/index.js";
 import type { NewsSourceRow, SourceKind } from "../lib/news/providers/index.js";
 
 export const newsSourcesRouter = express.Router();
 newsSourcesRouter.use(requireSession);
-newsSourcesRouter.use(requireParentRole);
+newsSourcesRouter.use(requireAdminRole);
 
 // ── Schemas ───────────────────────────────────────────────────────────────────
 

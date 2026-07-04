@@ -196,8 +196,12 @@ The admin reorg that shipped to `apps/web/src/pages/admin/`. The reasoning:
   inputs use an explicit Save button disabled until dirty.
 - **Danger zone is a place, not a sprinkle.** High-risk settings render together in a
   distinct red block and require typing a confirm phrase. `discord_guild_id` and
-  `parent_role_name` are the two most dangerous settings (they break bot permissions /
-  role mapping for the whole community) and get an isolated `/admin/guild` page.
+  `admin_role_name` are the two most dangerous settings (they break bot permissions /
+  role mapping for the whole community) and get an isolated `/admin/guild` page. They're
+  also mutually load-bearing for your own access — changing the guild ID re-evaluates
+  your admin check against the *new* guild immediately, before you get a chance to also
+  fix the role name, which self-locks you out. Change one, confirm you're still admin,
+  then change the other.
 - **Search indexes settings + pages + sections** (badged ⚙ / 📄 / §), mounted in the
   admin header everywhere with a `/` shortcut; results deep-link to `route#anchor`
   with a brief border flash.

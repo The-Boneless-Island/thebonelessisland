@@ -254,7 +254,7 @@ export function UserMenu({
             icon="🛡️"
             active={page === "admin"}
             onClick={() => { onClose(); onNavigate("admin"); }}
-            badge="PARENT"
+            badge="ADMIN"
             badgeColor="#f59e0b"
           >
             Admin panel

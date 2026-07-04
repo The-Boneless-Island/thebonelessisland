@@ -11,7 +11,7 @@ import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { env } from "../config.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { officialThreadUrl } from "../lib/officialAnnounce.js";
 import { getAISetting, getGuildId } from "../lib/serverSettings.js";
@@ -340,7 +340,7 @@ shareRouter.post("/", requireSession, shareLimiter, async (req, res) => {
 
 const DISCORD_TEXT_CHANNEL_TYPES = new Set([0, 5]); // GUILD_TEXT, GUILD_ANNOUNCEMENT
 
-shareRouter.get("/admin/discord/channels", requireParentRole, async (_req, res) => {
+shareRouter.get("/admin/discord/channels", requireAdminRole, async (_req, res) => {
   try {
     const guildId = getGuildId();
     if (!guildId || !env.DISCORD_BOT_TOKEN) {
@@ -401,7 +401,7 @@ const reorderSchema = z.object({
   order: z.array(z.number().int().positive()).min(1)
 });
 
-shareRouter.get("/admin/targets", requireParentRole, async (_req, res) => {
+shareRouter.get("/admin/targets", requireAdminRole, async (_req, res) => {
   try {
     const result = await db.query<{
       id: string;
@@ -431,7 +431,7 @@ shareRouter.get("/admin/targets", requireParentRole, async (_req, res) => {
   }
 });
 
-shareRouter.post("/admin/targets", requireParentRole, async (req, res) => {
+shareRouter.post("/admin/targets", requireAdminRole, async (req, res) => {
   try {
     const body = targetCreateSchema.parse(req.body);
     const result = await db.query<{ id: string }>(
@@ -451,7 +451,7 @@ shareRouter.post("/admin/targets", requireParentRole, async (req, res) => {
   }
 });
 
-shareRouter.patch("/admin/targets/:id", requireParentRole, async (req, res) => {
+shareRouter.patch("/admin/targets/:id", requireAdminRole, async (req, res) => {
   try {
     const id = parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id)) {
@@ -479,7 +479,7 @@ shareRouter.patch("/admin/targets/:id", requireParentRole, async (req, res) => {
   }
 });
 
-shareRouter.delete("/admin/targets/:id", requireParentRole, async (req, res) => {
+shareRouter.delete("/admin/targets/:id", requireAdminRole, async (req, res) => {
   try {
     const id = parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id)) {
@@ -494,7 +494,7 @@ shareRouter.delete("/admin/targets/:id", requireParentRole, async (req, res) => 
   }
 });
 
-shareRouter.post("/admin/targets/reorder", requireParentRole, async (req, res) => {
+shareRouter.post("/admin/targets/reorder", requireAdminRole, async (req, res) => {
   try {
     const body = reorderSchema.parse(req.body);
     await Promise.all(

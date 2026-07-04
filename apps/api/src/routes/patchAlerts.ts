@@ -1,10 +1,10 @@
 import express from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 
 export const patchAlertsRouter = express.Router();
-patchAlertsRouter.use(requireSession, requireParentRole);
+patchAlertsRouter.use(requireSession, requireAdminRole);
 
 patchAlertsRouter.get("/roles", async (_req, res) => {
   const result = await db.query<{

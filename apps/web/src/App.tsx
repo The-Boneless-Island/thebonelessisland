@@ -347,7 +347,7 @@ export function App() {
     () => guildMembers.find((m) => m.discordUserId === profileData?.discordUserId) ?? null,
     [guildMembers, profileData?.discordUserId]
   );
-  const isAdmin = Boolean(profileData?.roleNames.includes("Parent"));
+  const isAdmin = Boolean(profileData?.isAdmin);
 
   useEffect(() => {
     try {

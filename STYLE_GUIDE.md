@@ -107,7 +107,7 @@ The scene video is the primary background. Surfaces must stay translucent enough
 - Cards: `panelBg` background + `cardBorder` border + glass blur.
 
 ## Information Architecture
-- Top nav: a **MegaMenu** with three hover groups — **Games** · **Community** · **Nuggies** — plus an **Admin** link (gated to Parent role). Home is the root route reached via the brand logo (no "Home" nav item); "Crew Achievements" lives under Community.
+- Top nav: a **MegaMenu** with three hover groups — **Games** · **Community** · **Nuggies** — plus an **Admin** link (gated to the configured admin role). Home is the root route reached via the brand logo (no "Home" nav item); "Crew Achievements" lives under Community.
 - User menu (avatar dropdown): banner gradient, large avatar with presence dot, name/handle, rich presence card showing live Discord activity (Playing/Streaming/Listening) → Steam in-game title → legacy voice text → hidden when absent, View profile, Steam link state, Theme toggle row, Sign out
 - Sub-routes:
   - **Library** under Games (full Steam library with co-ownership)

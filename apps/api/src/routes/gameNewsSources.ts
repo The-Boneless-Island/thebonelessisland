@@ -2,12 +2,12 @@ import express from "express";
 import Parser from "rss-parser";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { getGuildId } from "../lib/serverSettings.js";
 
 export const gameNewsSourcesRouter = express.Router();
 gameNewsSourcesRouter.use(requireSession);
-gameNewsSourcesRouter.use(requireParentRole);
+gameNewsSourcesRouter.use(requireAdminRole);
 
 const rssParser = new Parser({ timeout: 8000 });
 

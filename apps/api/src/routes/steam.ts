@@ -4,7 +4,7 @@ import { z } from "zod";
 import { env } from "../config.js";
 import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { enrichGameMetadataFromSteam, enrichMissingGameImages } from "../lib/gameCatalogEnrichment.js";
 import { resolveGameNamesFromAppList } from "../lib/steamAppList.js";
 import { syncAchievementSchema } from "../lib/steamAchievementSchema.js";
@@ -559,7 +559,7 @@ async function runProfileContextSync(userId: string, steamId64: string): Promise
   return result;
 }
 
-steamRouter.get("/profile-context-stats", requireParentRole, async (_req, res) => {
+steamRouter.get("/profile-context-stats", requireAdminRole, async (_req, res) => {
   const result = await db.query<{
     total_linked: number;
     groups_synced_users: number;

@@ -39,8 +39,8 @@ export function getGuildId(): string {
   return cached("discord_guild_id") || env.DISCORD_GUILD_ID;
 }
 
-export function getParentRoleName(): string {
-  return cached("parent_role_name") || env.PARENT_ROLE_NAME;
+export function getAdminRoleName(): string {
+  return cached("admin_role_name") || env.ADMIN_ROLE_NAME;
 }
 
 /** Returns the raw (unmasked) value for a setting key, or null if not found. */
@@ -65,7 +65,7 @@ export type PublicSetting = {
 const ENV_DEFAULTS: Record<string, string> = {
   discord_guild_id: env.DISCORD_GUILD_ID || "(not set in environment)",
   guild_display_name: "",
-  parent_role_name: env.PARENT_ROLE_NAME || "(not set in environment)",
+  admin_role_name: env.ADMIN_ROLE_NAME || "(not set in environment)",
   ai_provider: "",
   ai_model: "",
   ai_enabled: "",

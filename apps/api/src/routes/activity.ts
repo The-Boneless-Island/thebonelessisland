@@ -1,7 +1,7 @@
 import express from "express";
 import { type AuditScope } from "@island/shared";
 import { db } from "../db/client.js";
-import { requireBotOrSession, requireParentRole } from "../lib/auth.js";
+import { requireBotOrSession, requireAdminRole } from "../lib/auth.js";
 import { filterHiddenSteamEvents } from "../lib/steamPrivacy.js";
 
 export const activityRouter = express.Router();
@@ -160,9 +160,9 @@ function encodeCursor(createdAt: string, id: string): string {
   return `${createdAt}|${id}`;
 }
 
-// ── Parent-only admin audit (Entra-style filters) ─────────────────────────────
+// ── Admin-only audit (Entra-style filters) ─────────────────────────────
 
-activityRouter.get("/admin/audit", requireParentRole, async (req, res) => {
+activityRouter.get("/admin/audit", requireAdminRole, async (req, res) => {
   const scopeRaw = String(req.query.scope ?? "admin");
   const scope: AuditScope =
     scopeRaw === "economy" || scopeRaw === "moderation" || scopeRaw === "community" || scopeRaw === "all"

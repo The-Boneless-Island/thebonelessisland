@@ -1,6 +1,6 @@
 import express from "express";
 import { z } from "zod";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { ensureSettingsLoaded, getAISetting, getPublicSettings, upsertSetting } from "../lib/serverSettings.js";
 import { AIDisabledError, AINotConfiguredError, getAIProvider } from "../lib/ai/index.js";
 import { getTodayCostUsd } from "../lib/ai/usageTally.js";
@@ -8,7 +8,7 @@ import { env } from "../config.js";
 
 export const settingsRouter = express.Router();
 
-settingsRouter.get("/", requireSession, requireParentRole, async (_req, res) => {
+settingsRouter.get("/", requireSession, requireAdminRole, async (_req, res) => {
   await ensureSettingsLoaded();
   res.json({ settings: getPublicSettings() });
 });
@@ -18,7 +18,7 @@ const patchSchema = z.object({
   value: z.string()
 });
 
-settingsRouter.patch("/", requireSession, requireParentRole, async (req, res) => {
+settingsRouter.patch("/", requireSession, requireAdminRole, async (req, res) => {
   const { key, value } = patchSchema.parse(req.body);
   const discordUserId = String(res.locals.userId);
   await upsertSetting(key, value, discordUserId);
@@ -37,7 +37,7 @@ const aiTestSchema = z.object({
  * Returns today's persisted AI spend + call count and the configured warn
  * threshold. UI uses this for a small chip + (when over) a banner.
  */
-settingsRouter.get("/ai-cost-today", requireSession, requireParentRole, async (_req, res) => {
+settingsRouter.get("/ai-cost-today", requireSession, requireAdminRole, async (_req, res) => {
   const today = await getTodayCostUsd();
   const rawThreshold = getAISetting("ai_daily_cost_warn_usd") ?? "5";
   const threshold = parseFloat(rawThreshold);
@@ -63,7 +63,7 @@ interface AIModelOption {
  * setting. This NEVER 4xx/5xx: on any failure it returns 200 with models: []
  * and a short error string so the UI degrades to the Custom-id input.
  */
-settingsRouter.get("/ai-models", requireSession, requireParentRole, async (req, res) => {
+settingsRouter.get("/ai-models", requireSession, requireAdminRole, async (req, res) => {
   const provider = ((req.query.provider as string) || getAISetting("ai_provider") || "").toLowerCase();
 
   let models: AIModelOption[] = [];
@@ -143,7 +143,7 @@ settingsRouter.get("/ai-models", requireSession, requireParentRole, async (req, 
   res.json({ provider, models, ...(error ? { error } : {}) });
 });
 
-settingsRouter.post("/ai/test", requireSession, requireParentRole, async (req, res) => {
+settingsRouter.post("/ai/test", requireSession, requireAdminRole, async (req, res) => {
   const { provider, model, apiKey } = aiTestSchema.parse(req.body);
 
   try {

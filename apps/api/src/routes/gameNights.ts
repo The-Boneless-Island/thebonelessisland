@@ -1,8 +1,8 @@
 import express from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { getGuildId, getParentRoleName } from "../lib/serverSettings.js";
-import { isValidBotSecret, requireSession, requireParentRole } from "../lib/auth.js";
+import { getGuildId, getAdminRoleName } from "../lib/serverSettings.js";
+import { isValidBotSecret, requireSession, requireAdminRole } from "../lib/auth.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { broadcast } from "../lib/eventBus.js";
 import { whatCanWePlay } from "../lib/recommend.js";
@@ -13,7 +13,7 @@ const createGameNightSchema = z.object({
   scheduledFor: z.iso.datetime(),
   attendeeIds: z.array(z.string().trim().min(1)).optional(),
   selectedAppId: z.number().int().positive().nullish(),
-  // Default: the host joins as an attendee. A parent-role admin may set this
+  // Default: the host joins as an attendee. An admin-role holder may set this
   // false to create a night for others without being counted as a player.
   joinAsHost: z.boolean().optional()
 });
@@ -55,9 +55,9 @@ async function gameExists(appId: number): Promise<boolean> {
   return Boolean(result.rows[0]);
 }
 
-// Parent-role check usable mid-handler (the requireParentRole middleware would
+// Admin-role check usable mid-handler (the requireAdminRole middleware would
 // reject a non-admin host outright, but a host may set their own night's game).
-async function isParentRole(discordUserId: string): Promise<boolean> {
+async function isAdminRole(discordUserId: string): Promise<boolean> {
   const guildId = getGuildId();
   if (!guildId) return false;
   const result = await db.query<{ role_names: string[] }>(
@@ -69,7 +69,7 @@ async function isParentRole(discordUserId: string): Promise<boolean> {
     `,
     [guildId, discordUserId]
   );
-  return (result.rows[0]?.role_names ?? []).includes(getParentRoleName());
+  return (result.rows[0]?.role_names ?? []).includes(getAdminRoleName());
 }
 
 export const gameNightRouter = express.Router();
@@ -144,8 +144,8 @@ gameNightRouter.get("/", requireSession, async (_req, res) => {
     return;
   }
 
-  // Parent-role admins can manage any night's game; computed once per request.
-  const isAdmin = await isParentRole(discordUserId);
+  // Admin-role holders can manage any night's game; computed once per request.
+  const isAdmin = await isAdminRole(discordUserId);
 
   const nights = await db.query<{
     id: number;
@@ -292,7 +292,7 @@ gameNightRouter.post("/", requireSession, async (req, res) => {
   const gameNightId = created.rows[0]?.id;
   if (gameNightId) {
     // Host auto-joins as an attendee unless a parent-role admin opted out.
-    const hostOptsOut = body.joinAsHost === false && (await isParentRole(discordUserId));
+    const hostOptsOut = body.joinAsHost === false && (await isAdminRole(discordUserId));
     const attendeeIds = Array.from(
       new Set([...(body.attendeeIds ?? []), ...(hostOptsOut ? [] : [discordUserId])])
     );
@@ -318,11 +318,11 @@ gameNightRouter.post("/", requireSession, async (req, res) => {
   res.status(201).json({ id: gameNightId });
 });
 
-// ── Admin (Parent-only) game-night management ────────────────────────────────
+// ── Admin (admin-role-only) game-night management ────────────────────────────────
 
 // Every game night, including past/ended ones, with host + locked pick. Powers
 // the admin management table (the public GET "/" only returns upcoming nights).
-gameNightRouter.get("/admin/all", requireParentRole, async (_req, res) => {
+gameNightRouter.get("/admin/all", requireAdminRole, async (_req, res) => {
   const nights = await db.query<{
     id: number;
     title: string;
@@ -392,7 +392,7 @@ gameNightRouter.get("/admin/all", requireParentRole, async (_req, res) => {
   });
 });
 
-gameNightRouter.patch("/:id", requireParentRole, async (req, res) => {
+gameNightRouter.patch("/:id", requireAdminRole, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: "Invalid game night id" });
@@ -446,7 +446,7 @@ gameNightRouter.patch("/:id", requireParentRole, async (req, res) => {
   res.json({ ok: true });
 });
 
-gameNightRouter.delete("/:id", requireParentRole, async (req, res) => {
+gameNightRouter.delete("/:id", requireAdminRole, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: "Invalid game night id" });
@@ -498,7 +498,7 @@ gameNightRouter.patch("/:id/game", requireSession, async (req, res) => {
   // Only the host who created the night (or a parent-role admin) may set/clear
   // the game. A non-admin host can still manage their own night.
   const isHost = row.created_by_user_id === user.id;
-  if (!isHost && !(await isParentRole(discordUserId))) {
+  if (!isHost && !(await isAdminRole(discordUserId))) {
     res.status(403).json({ error: "Only the host or an admin can set the game" });
     return;
   }

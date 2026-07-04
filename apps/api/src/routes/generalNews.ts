@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "../db/client.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { ingestAndCurateGeneralNews, curateUncuratedGeneralNews, backfillMissingImages, maybeBackgroundIngest, debugCurateOne } from "../lib/generalNewsIngestion.js";
 import {
   backfillEmbeddings,
@@ -247,7 +247,7 @@ generalNewsRouter.delete("/general/mutes", requireSession, async (req, res) => {
  * POST /news/general/ingest
  * Admin endpoint — manually trigger ingestion + curation.
  */
-generalNewsRouter.post("/general/ingest", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.post("/general/ingest", requireSession, requireAdminRole, async (_req, res) => {
   try {
     if (isPipelineQueueEnabled()) {
       const queued = await enqueueOrRunIngest(true);
@@ -275,7 +275,7 @@ generalNewsRouter.post("/general/ingest", requireSession, requireParentRole, asy
  * POST /news/general/curate
  * Admin endpoint — curate any un-curated rows without re-fetching.
  */
-generalNewsRouter.post("/general/curate", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.post("/general/curate", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const remainingRow = await db.query<{ c: string }>(
       `SELECT COUNT(*)::text AS c FROM general_news WHERE ai_curated_at IS NULL`
@@ -317,7 +317,7 @@ generalNewsRouter.post("/general/curate", requireSession, requireParentRole, asy
  * `limit` rows (default 200) per call so the request stays bounded; the admin
  * UI can poll repeatedly until count returns 0.
  */
-generalNewsRouter.post("/general/embed-backfill", requireSession, requireParentRole, async (req, res) => {
+generalNewsRouter.post("/general/embed-backfill", requireSession, requireAdminRole, async (req, res) => {
   try {
     if (!(await isEmbeddingColumnAvailable())) {
       res.status(400).json({
@@ -358,7 +358,7 @@ function isGeneralNewsBackgroundJobRunning(): boolean {
 generalNewsRouter.post(
   "/general/embed-backfill/start",
   requireSession,
-  requireParentRole,
+  requireAdminRole,
   async (_req, res) => {
     if (isEmbedBackfillJobRunning()) {
       res.status(409).json({ ok: false, error: "Embed backfill already running", job: getEmbedBackfillJob() });
@@ -393,7 +393,7 @@ generalNewsRouter.post(
 generalNewsRouter.post(
   "/general/embed-backfill/cancel",
   requireSession,
-  requireParentRole,
+  requireAdminRole,
   (_req, res) => {
     if (!isEmbedBackfillJobRunning()) {
       res.status(409).json({ ok: false, error: "No embed backfill job running" });
@@ -410,7 +410,7 @@ generalNewsRouter.post(
 generalNewsRouter.get(
   "/general/embed-backfill/status",
   requireSession,
-  requireParentRole,
+  requireAdminRole,
   (_req, res) => {
     res.json({ ok: true, job: getEmbedBackfillJob() });
   }
@@ -421,7 +421,7 @@ generalNewsRouter.get(
  * Admin — run the full cover fallback ladder (og → body → sibling → game art → island default).
  * Bounded per call (default 50); poll until remaining returns 0.
  */
-generalNewsRouter.post("/general/image-backfill", requireSession, requireParentRole, async (req, res) => {
+generalNewsRouter.post("/general/image-backfill", requireSession, requireAdminRole, async (req, res) => {
   try {
     const limit = Math.min(200, Math.max(1, parseInt(String((req.body as { limit?: number } | undefined)?.limit ?? 50), 10)));
     const result = await backfillMissingImages(limit);
@@ -437,7 +437,7 @@ generalNewsRouter.post("/general/image-backfill", requireSession, requireParentR
  * Admin endpoint — kicks off background re-curation. Returns 202 immediately.
  * Poll /news/general/recurate/status for progress.
  */
-generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, async (req, res) => {
+generalNewsRouter.post("/general/recurate", requireSession, requireAdminRole, async (req, res) => {
   if (isRecurateJobRunning()) {
     res.status(409).json({ ok: false, error: "Recurate already running", job: getRecurateJob() });
     return;
@@ -471,7 +471,7 @@ generalNewsRouter.post("/general/recurate", requireSession, requireParentRole, a
  * (after the in-flight curate pass completes, so we don't waste a paid AI
  * call mid-flight).
  */
-generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParentRole, (_req, res) => {
+generalNewsRouter.post("/general/recurate/cancel", requireSession, requireAdminRole, (_req, res) => {
   if (!isRecurateJobRunning()) {
     res.status(409).json({ ok: false, error: "No recurate job running" });
     return;
@@ -484,7 +484,7 @@ generalNewsRouter.post("/general/recurate/cancel", requireSession, requireParent
  * GET /news/general/recurate/status
  * Returns current/last recurate job snapshot for client polling.
  */
-generalNewsRouter.get("/general/recurate/status", requireSession, requireParentRole, (_req, res) => {
+generalNewsRouter.get("/general/recurate/status", requireSession, requireAdminRole, (_req, res) => {
   res.json({ ok: true, job: getRecurateJob() });
 });
 
@@ -493,7 +493,7 @@ generalNewsRouter.get("/general/recurate/status", requireSession, requireParentR
  * Admin — force-runs the off-topic quality sweep (ignores the run-once guard;
  * the sweep is idempotent). Returns 202 immediately; poll the GET below.
  */
-generalNewsRouter.post("/general/off-topic-sweep", requireSession, requireParentRole, (_req, res) => {
+generalNewsRouter.post("/general/off-topic-sweep", requireSession, requireAdminRole, (_req, res) => {
   void runOffTopicSweepOnce({ force: true });
   res.status(202).json({ ok: true, started: true, message: "Off-topic sweep started" });
 });
@@ -502,7 +502,7 @@ generalNewsRouter.post("/general/off-topic-sweep", requireSession, requireParent
  * GET /news/general/off-topic-sweep
  * Admin — current/last sweep job record (state + scanned/parked/requeued counts).
  */
-generalNewsRouter.get("/general/off-topic-sweep", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/off-topic-sweep", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const job = await loadPipelineJob("offtopic_sweep");
     res.json({ ok: true, job });
@@ -516,7 +516,7 @@ generalNewsRouter.get("/general/off-topic-sweep", requireSession, requireParentR
  * POST /news/general/reset-corpus
  * Admin — delete all ingested general news and pipeline history, then optionally re-fetch.
  */
-generalNewsRouter.post("/general/reset-corpus", requireSession, requireParentRole, async (req, res) => {
+generalNewsRouter.post("/general/reset-corpus", requireSession, requireAdminRole, async (req, res) => {
   try {
     const body = req.body as { confirm?: unknown; ingestAfter?: unknown };
     if (body.confirm !== CORPUS_RESET_CONFIRM_PHRASE) {
@@ -579,7 +579,7 @@ generalNewsRouter.post("/general/reset-corpus", requireSession, requireParentRol
  * GET /news/general/diagnostics
  * Admin — breakdown of backlog age, validation, and suggested next step.
  */
-generalNewsRouter.get("/general/diagnostics", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/diagnostics", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const diagnostics = await getNewsPipelineDiagnostics();
     res.json({ ok: true, diagnostics });
@@ -593,7 +593,7 @@ generalNewsRouter.get("/general/diagnostics", requireSession, requireParentRole,
  * POST /news/general/retire-stale-backlog
  * Admin — mark uncurated rows outside the 14-day window as handled (no AI cost).
  */
-generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireAdminRole, async (_req, res) => {
   try {
     if (isGeneralNewsBackgroundJobRunning()) {
       res.status(409).json({ ok: false, error: "Cancel running embed/recurate jobs first" });
@@ -622,7 +622,7 @@ generalNewsRouter.post("/general/retire-stale-backlog", requireSession, requireP
  * GET /news/general/queue/status
  * Admin — serial pipeline queue depth and active job.
  */
-generalNewsRouter.get("/general/queue/status", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/queue/status", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const status = await getPipelineQueueStatus();
     res.json({ ok: true, ...status });
@@ -636,7 +636,7 @@ generalNewsRouter.get("/general/queue/status", requireSession, requireParentRole
  * GET /news/general/debug-curate-one
  * Admin — run AI curation on the newest article without writing to DB (diagnostics).
  */
-generalNewsRouter.get("/general/debug-curate-one", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/debug-curate-one", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const debug = await debugCurateOne();
     res.json({ ok: true, debug });
@@ -650,7 +650,7 @@ generalNewsRouter.get("/general/debug-curate-one", requireSession, requireParent
  * GET /news/general/autopilot/status
  * Admin — last autopilot pass + tuning caps.
  */
-generalNewsRouter.get("/general/autopilot/status", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/autopilot/status", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const status = await getAutopilotStatus();
     res.json({ ok: true, ...status });
@@ -664,7 +664,7 @@ generalNewsRouter.get("/general/autopilot/status", requireSession, requireParent
  * POST /news/general/autopilot/run
  * Admin — manual bounded recovery pass (same as the 6h sweep).
  */
-generalNewsRouter.post("/general/autopilot/run", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.post("/general/autopilot/run", requireSession, requireAdminRole, async (_req, res) => {
   try {
     if (isGeneralNewsBackgroundJobRunning()) {
       res.status(409).json({ ok: false, error: "Cancel running embed/recurate jobs first" });
@@ -682,7 +682,7 @@ generalNewsRouter.post("/general/autopilot/run", requireSession, requireParentRo
  * GET /news/general/health
  * Admin — pipeline health snapshot (cards, failures, embeddings, last run).
  */
-generalNewsRouter.get("/general/health", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/health", requireSession, requireAdminRole, async (_req, res) => {
   try {
     const health = await getNewsPipelineHealth();
     res.json({ ok: true, health });
@@ -696,7 +696,7 @@ generalNewsRouter.get("/general/health", requireSession, requireParentRole, asyn
  * GET /news/general/validation-failures
  * Admin — counts + recent failures from the AI curation pipeline.
  */
-generalNewsRouter.get("/general/validation-failures", requireSession, requireParentRole, async (_req, res) => {
+generalNewsRouter.get("/general/validation-failures", requireSession, requireAdminRole, async (_req, res) => {
   const countRow = await db.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM general_news WHERE ai_validation_failed = TRUE`
   );
@@ -742,7 +742,7 @@ generalNewsRouter.get("/general/validation-failures", requireSession, requirePar
  * or are otherwise unresolved. These are informational only — the ladder ran correctly; these are
  * just long-tail posts where no real cover could be found. Not a pipeline error.
  */
-generalNewsRouter.get("/general/fallback-art-cards", requireSession, requireParentRole, async (req, res) => {
+generalNewsRouter.get("/general/fallback-art-cards", requireSession, requireAdminRole, async (req, res) => {
   try {
     const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? "100"), 10) || 100));
     const cards = await listLiveCardsOnFallbackArt(limit);

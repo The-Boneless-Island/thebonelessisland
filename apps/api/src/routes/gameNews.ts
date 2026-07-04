@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "../db/client.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { enqueueGameNewsIngest } from "../lib/gameNewsIngestQueue.js";
 import { getAISetting, getGuildId } from "../lib/serverSettings.js";
 import { curateUncuratedNews, forceCurateNews } from "../lib/newsCurator.js";
@@ -271,7 +271,7 @@ gameNewsRouter.get("/news", async (_req, res) => {
   });
 });
 
-gameNewsRouter.post("/news/curate", requireParentRole, async (_req, res) => {
+gameNewsRouter.post("/news/curate", requireAdminRole, async (_req, res) => {
   const guildId = getGuildId();
   if (!guildId) {
     res.status(503).json({ error: "Guild not configured" });
