@@ -63,16 +63,21 @@ export function useModalFocus<T extends HTMLElement>({
         const container = containerRef.current;
         if (!container) return;
         const first = focusableElements(container)[0];
-        (first ?? container).focus();
+        // preventScroll: a dialog whose fixed positioning was previously
+        // mis-anchored (containing-block bug, now fixed via portaling) could
+        // otherwise cause the browser to scroll the page to bring the
+        // newly-focused element into view — jarring even once portaled
+        // correctly, since the dialog already covers the viewport.
+        (first ?? container).focus({ preventScroll: true });
       });
       return () => {
         cancelAnimationFrame(raf);
-        previouslyFocusedRef.current?.focus?.();
+        previouslyFocusedRef.current?.focus?.({ preventScroll: true });
       };
     }
 
     return () => {
-      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current?.focus?.({ preventScroll: true });
     };
   }, [isOpen, skipInitialFocus]);
 

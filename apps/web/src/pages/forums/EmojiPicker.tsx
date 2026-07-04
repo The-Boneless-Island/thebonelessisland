@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type RefObject } from "react";
 import { apiFetch } from "../../api/client.js";
+import { PortalPopover } from "../../components/PortalPopover.js";
 import { islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { ForumCustomEmoji, ForumReaction } from "../../types.js";
@@ -45,31 +46,26 @@ const gridBtnStyle: CSSProperties = {
  * from GET /forums/emojis. Loaded via React.lazy from ReactionBar so it ships
  * as its own chunk. Selecting any entry calls onPick with the reaction key in
  * the shape the API expects (legacy key, raw Unicode string, or "c:<id>").
+ *
+ * Renders through the shared PortalPopover (anchored to the "+" trigger in
+ * ReactionBar) rather than its own absolute-positioned div — the post it
+ * lives in sits inside cards that can clip or trap a plain position:absolute
+ * child (overflow:hidden / isolation:isolate), and the app's blurred "main"
+ * element makes position:fixed misbehave too. PortalPopover owns outside-
+ * click, Escape, and positioning.
  */
 export function EmojiPicker({
+  anchorRef,
   onPick,
   onClose
 }: {
+  anchorRef: RefObject<HTMLElement | null>;
   onPick: (reaction: ForumReaction) => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("quick");
   const [search, setSearch] = useState("");
   const [guildEmoji, setGuildEmoji] = useState<ForumCustomEmoji[] | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", onDoc);
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
 
   useEffect(() => {
     if (tab !== "island" || guildEmoji !== null) return;
@@ -91,25 +87,14 @@ export function EmojiPicker({
   }, [search]);
 
   return (
-    <div
-      ref={wrapRef}
-      role="dialog"
-      aria-label="Add reaction"
-      style={{
-        position: "absolute",
-        bottom: "calc(100% + 6px)",
-        left: 0,
-        width: 280,
-        maxWidth: "90vw",
-        background: islandTheme.color.menuBg,
-        border: `1px solid ${islandTheme.color.border}`,
-        borderRadius: 12,
-        boxShadow: islandTheme.shadow.menu,
-        zIndex: 50,
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden"
-      }}
+    <PortalPopover
+      open
+      onClose={onClose}
+      anchorRef={anchorRef}
+      side="top"
+      align="left"
+      ariaLabel="Add reaction"
+      style={{ width: 280, maxWidth: "90vw", display: "flex", flexDirection: "column", overflow: "hidden" }}
     >
       <div style={{ display: "flex", borderBottom: `1px solid ${islandTheme.color.cardBorder}` }}>
         <button type="button" className="island-btn" style={tabBtnStyle(tab === "quick")} onClick={() => setTab("quick")}>
@@ -216,6 +201,6 @@ export function EmojiPicker({
           )}
         </div>
       ) : null}
-    </div>
+    </PortalPopover>
   );
 }

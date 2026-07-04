@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../../api/client.js";
 import { SharePopover } from "../../components/SharePopover.js";
 import { IslandButton, IslandCard, IslandTag } from "../../islandUi.js";
@@ -17,18 +17,8 @@ import type {
 import { AttachmentGallery, ImageDropzone, MarkdownEditor } from "./forumEditor.js";
 import { formatAbsolute, formatRelative, listRowStyle } from "./forumShared.js";
 import { BackLink, GameChip, LinkPreviewCard, PinGlyph, LockGlyph, TypeChip } from "./forumUi.js";
+import { POST_ACTION_BAR_CSS, PostActionBar } from "./PostActionBar.js";
 import { ReactionBar } from "./ReactionBar.js";
-
-const ghostBtn: CSSProperties = {
-  background: "transparent",
-  border: `1px solid ${islandTheme.color.cardBorder}`,
-  color: islandTheme.color.textSubtle,
-  borderRadius: 999,
-  padding: "4px 10px",
-  fontSize: 12,
-  cursor: "pointer",
-  font: "inherit"
-};
 
 export function ForumThreadPanel({
   threadId,
@@ -272,6 +262,7 @@ export function ForumThreadPanel({
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      <style>{POST_ACTION_BAR_CSS}</style>
       <div
         className="bi-forum-sticky-head"
         style={{
@@ -464,13 +455,28 @@ function PostCard({
   return (
     <IslandCard
       id={`post-${post.id}`}
+      className="bi-post-hover-target"
       style={{
+        position: "relative",
         padding: 0,
         overflow: "hidden",
         scrollMarginTop: 80,
         borderColor: post.isOp ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder
       }}
     >
+      {!post.isDeleted ? (
+        <PostActionBar
+          postId={post.id}
+          fallbackUrl={`${window.location.origin}/forums/thread/${post.threadId}/post/${post.id}`}
+          canEdit={canEdit}
+          isOwner={isOwner}
+          onQuote={onQuote}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onReport={onReport}
+          onReact={onReact}
+        />
+      ) : null}
       <div
         style={{
           display: "grid",
@@ -553,27 +559,7 @@ function PostCard({
                 myReactions={post.myReactions}
                 customEmoji={customEmoji}
                 onToggle={onReact}
-              />
-              <span aria-hidden="true" style={{ width: 1, alignSelf: "stretch", background: islandTheme.color.cardBorder, margin: "2px 2px" }} />
-              {onQuote ? (
-                <button type="button" className="island-btn" onClick={onQuote} style={ghostBtn}>Quote</button>
-              ) : null}
-              {canEdit ? (
-                <button type="button" className="island-btn" onClick={onEdit} style={ghostBtn}>Edit</button>
-              ) : null}
-              {canEdit ? (
-                <button type="button" className="island-btn" onClick={onDelete} style={{ ...ghostBtn, color: islandTheme.color.dangerText }}>Delete</button>
-              ) : null}
-              {!isOwner ? (
-                <button type="button" className="island-btn" onClick={onReport} style={ghostBtn}>Report</button>
-              ) : null}
-              <SharePopover
-                contentType="forum_post"
-                contentId={post.id}
-                fallbackTitle="Boneless Island forum post"
-                fallbackUrl={`${window.location.origin}/forums/thread/${post.threadId}/post/${post.id}`}
-                variant="label"
-                align="left"
+                showAddButton={false}
               />
             </div>
           ) : null}
