@@ -5,25 +5,39 @@ import { islandInputStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { ForumCustomEmoji, ForumReaction } from "../../types.js";
 import emojiData from "../../data/emoji.json" with { type: "json" };
-import { REACTION_META } from "./forumShared.js";
+import { isCustomEmojiKey } from "./forumShared.js";
 
 type EmojiGroup = { category: string; items: { e: string; n: string }[] };
 const EMOJI_GROUPS = emojiData as EmojiGroup[];
 
-type Tab = "quick" | "unicode" | "island";
+const MRU_STORAGE_KEY = "bi:emoji-mru";
+const MRU_STORED_MAX = 24;
+const MRU_SHOWN_MAX = 16;
 
-const tabBtnStyle = (active: boolean): CSSProperties => ({
-  flex: 1,
-  padding: "6px 8px",
-  fontSize: 12,
-  fontWeight: 700,
-  cursor: "pointer",
-  font: "inherit",
-  background: active ? islandTheme.color.panelMutedBg : "transparent",
-  color: active ? islandTheme.color.textPrimary : islandTheme.color.textMuted,
-  border: "none",
-  borderBottom: `2px solid ${active ? islandTheme.color.primary : "transparent"}`
-});
+/** Read the MRU list from localStorage. Never throws — private browsing (or a
+ * corrupt value) just yields an empty list. */
+function readMru(): string[] {
+  try {
+    const raw = window.localStorage.getItem(MRU_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((v): v is string => typeof v === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** Push `reaction` to the front of the MRU list (deduped), cap it, and persist. */
+function pushMru(reaction: string): string[] {
+  const next = [reaction, ...readMru().filter((r) => r !== reaction)].slice(0, MRU_STORED_MAX);
+  try {
+    window.localStorage.setItem(MRU_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Private browsing / storage disabled / quota — MRU just won't persist.
+  }
+  return next;
+}
 
 const gridBtnStyle: CSSProperties = {
   width: 32,
@@ -39,16 +53,69 @@ const gridBtnStyle: CSSProperties = {
   font: "inherit"
 };
 
+const sectionHeaderStyle: CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  background: islandTheme.color.menuBg,
+  fontSize: 11,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
+  color: islandTheme.color.textMuted,
+  padding: "4px 2px",
+  fontWeight: 700
+};
+
+function EmojiGrid({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(34px, 1fr))", gap: 2 }}>
+      {children}
+    </div>
+  );
+}
+
+function EmojiCell({
+  title,
+  ariaLabel,
+  onClick,
+  children
+}: {
+  title: string;
+  ariaLabel: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className="island-btn"
+      style={gridBtnStyle}
+      title={title}
+      aria-label={ariaLabel}
+      onClick={onClick}
+      onMouseEnter={(e) => { e.currentTarget.style.background = islandTheme.color.panelMutedBg; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+    >
+      {children}
+    </button>
+  );
+}
+
 /**
- * Forum reaction picker: quick row (5 legacy reactions), a searchable Unicode
- * emoji grid grouped by category (sourced from the vendored data/emoji.json —
- * no CDN fetch, CSP-safe), and an "Island" tab of guild custom emoji fetched
- * from GET /forums/emojis. Loaded via React.lazy from ReactionBar so it ships
- * as its own chunk. Selecting any entry calls onPick with the reaction key in
- * the shape the API expects (legacy key, raw Unicode string, or "c:<id>").
+ * Forum reaction picker: one flat, scrollable, Discord-style panel (no tabs).
+ * Top to bottom: a live search box, a client-only "Frequently used" row (MRU,
+ * localStorage-backed, hidden while searching), a "The Boneless Island"
+ * section of guild custom emoji (fetched once on mount from
+ * GET /forums/emojis), then the 8 Unicode categories sourced from the
+ * vendored data/emoji.json (no CDN fetch, CSP-safe). Loaded via React.lazy
+ * from ReactionBar/PostActionBar so it ships as its own chunk. Selecting any
+ * entry calls onPick with the reaction key in the shape the API expects (raw
+ * Unicode string, or "c:<id>") — the legacy 5-key quick row is gone from the
+ * picker entirely (REACTION_META is still used to *render* reactions already
+ * stored on old posts, just not to add new ones).
  *
- * Renders through the shared PortalPopover (anchored to the "+" trigger in
- * ReactionBar) rather than its own absolute-positioned div — the post it
+ * Renders through the shared PortalPopover (anchored to the reaction trigger
+ * in PostActionBar) rather than its own absolute-positioned div — the post it
  * lives in sits inside cards that can clip or trap a plain position:absolute
  * child (overflow:hidden / isolation:isolate), and the app's blurred "main"
  * element makes position:fixed misbehave too. PortalPopover owns outside-
@@ -63,28 +130,65 @@ export function EmojiPicker({
   onPick: (reaction: ForumReaction) => void;
   onClose: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>("quick");
   const [search, setSearch] = useState("");
   const [guildEmoji, setGuildEmoji] = useState<ForumCustomEmoji[] | null>(null);
+  const [mru, setMru] = useState<string[]>(() => readMru());
 
+  // Fetch once per picker mount — there are no tabs anymore to lazily gate this on.
   useEffect(() => {
-    if (tab !== "island" || guildEmoji !== null) return;
     let cancelled = false;
     apiFetch("/forums/emojis")
       .then((r) => r.json())
       .then((d) => { if (!cancelled) setGuildEmoji(Array.isArray(d?.emojis) ? d.emojis : []); })
       .catch(() => { if (!cancelled) setGuildEmoji([]); });
     return () => { cancelled = true; };
-  }, [tab, guildEmoji]);
+  }, []);
+
+  const guildEmojiById = useMemo(() => {
+    const map = new Map<string, ForumCustomEmoji>();
+    (guildEmoji ?? []).forEach((ge) => map.set(ge.id, ge));
+    return map;
+  }, [guildEmoji]);
+
+  const q = search.trim().toLowerCase();
+
+  const filteredGuildEmoji = useMemo(() => {
+    const list = guildEmoji ?? [];
+    if (!q) return list;
+    return list.filter((ge) => ge.name.toLowerCase().includes(q));
+  }, [guildEmoji, q]);
 
   const filteredGroups = useMemo(() => {
-    const q = search.trim().toLowerCase();
     if (!q) return EMOJI_GROUPS;
     return EMOJI_GROUPS.map((g) => ({
       category: g.category,
       items: g.items.filter((it) => it.n.includes(q))
     })).filter((g) => g.items.length > 0);
-  }, [search]);
+  }, [q]);
+
+  const mruEntries = useMemo(() => {
+    if (q) return [];
+    return mru
+      .map((key) => {
+        if (isCustomEmojiKey(key)) {
+          const custom = guildEmojiById.get(key.slice(2));
+          return custom ? { key, custom } : null;
+        }
+        return { key, custom: null as ForumCustomEmoji | null };
+      })
+      .filter((v): v is { key: string; custom: ForumCustomEmoji | null } => v !== null)
+      .slice(0, MRU_SHOWN_MAX);
+  }, [mru, q, guildEmojiById]);
+
+  // "No matches" should never flash while the guild emoji fetch is still in
+  // flight — a loading section counts as visible content, not an empty result.
+  const hasAnyMatch =
+    mruEntries.length > 0 || filteredGuildEmoji.length > 0 || guildEmoji === null || filteredGroups.length > 0;
+
+  function pick(reaction: string) {
+    setMru(pushMru(reaction));
+    onPick(reaction);
+  }
 
   return (
     <PortalPopover
@@ -96,111 +200,93 @@ export function EmojiPicker({
       ariaLabel="Add reaction"
       style={{ width: 280, maxWidth: "90vw", display: "flex", flexDirection: "column", overflow: "hidden" }}
     >
-      <div style={{ display: "flex", borderBottom: `1px solid ${islandTheme.color.cardBorder}` }}>
-        <button type="button" className="island-btn" style={tabBtnStyle(tab === "quick")} onClick={() => setTab("quick")}>
-          Quick
-        </button>
-        <button type="button" className="island-btn" style={tabBtnStyle(tab === "unicode")} onClick={() => setTab("unicode")}>
-          Emoji
-        </button>
-        <button type="button" className="island-btn" style={tabBtnStyle(tab === "island")} onClick={() => setTab("island")}>
-          Island
-        </button>
+      <style>{`
+        /* Desktop: the popover surface sizes to content, so the scroll body
+           below gets its own explicit ~420px cap. Mobile (≤560px —
+           PortalPopover's own bottom-sheet breakpoint) already bounds the
+           whole sheet at 70vh via PortalPopover itself, so the body here
+           drops its own cap and just flexes to fill whatever the sheet gives
+           it (flex: 1 1 auto + min-height: 0 is what lets it shrink-to-fit
+           and scroll internally instead of growing past the sheet). */
+        .bi-emoji-picker-body { max-height: 420px; }
+        @media (max-width: 560px) {
+          .bi-emoji-picker-body { max-height: none; }
+        }
+      `}</style>
+      <div style={{ padding: 8, borderBottom: `1px solid ${islandTheme.color.cardBorder}`, flexShrink: 0 }}>
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search emoji…"
+          autoFocus
+          style={{ ...islandInputStyle, width: "100%", fontSize: 13, padding: "0.4rem 0.6rem" }}
+        />
       </div>
+      <div className="bi-emoji-picker-body" style={{ flex: "1 1 auto", minHeight: 0, overflowY: "auto", padding: "0 8px 8px" }}>
+        {!hasAnyMatch ? (
+          <p style={{ margin: 0, padding: 12, fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
+            No matches.
+          </p>
+        ) : (
+          <>
+            {mruEntries.length > 0 ? (
+              <div style={{ marginBottom: 8 }}>
+                <div className="island-mono" style={sectionHeaderStyle}>Frequently used</div>
+                <EmojiGrid>
+                  {mruEntries.map(({ key, custom }) =>
+                    custom ? (
+                      <EmojiCell key={key} title={`:${custom.name}:`} ariaLabel={custom.name} onClick={() => pick(key)}>
+                        <img src={custom.url} alt={custom.name} style={{ width: 20, height: 20 }} />
+                      </EmojiCell>
+                    ) : (
+                      <EmojiCell key={key} title={key} ariaLabel={key} onClick={() => pick(key)}>
+                        {key}
+                      </EmojiCell>
+                    )
+                  )}
+                </EmojiGrid>
+              </div>
+            ) : null}
 
-      {tab === "quick" ? (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: 12 }}>
-          {REACTION_META.map((r) => (
-            <button
-              key={r.key}
-              type="button"
-              className="island-btn"
-              style={gridBtnStyle}
-              title={r.label}
-              aria-label={r.label}
-              onClick={() => onPick(r.key)}
-            >
-              {r.emoji}
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      {tab === "unicode" ? (
-        <div style={{ display: "flex", flexDirection: "column", maxHeight: 320 }}>
-          <div style={{ padding: 8 }}>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search emoji…"
-              autoFocus
-              style={{ ...islandInputStyle, width: "100%", fontSize: 13, padding: "0.4rem 0.6rem" }}
-            />
-          </div>
-          <div style={{ overflowY: "auto", padding: "0 8px 8px" }}>
-            {filteredGroups.length === 0 ? (
-              <p style={{ margin: 0, padding: 12, fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
-                No matches.
-              </p>
-            ) : (
-              filteredGroups.map((g) => (
-                <div key={g.category} style={{ marginBottom: 8 }}>
-                  <div
-                    className="island-mono"
-                    style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.06em", color: islandTheme.color.textMuted, padding: "4px 2px" }}
-                  >
-                    {g.category}
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
-                    {g.items.map((it) => (
-                      <button
-                        key={it.e}
-                        type="button"
-                        className="island-btn"
-                        style={gridBtnStyle}
-                        title={it.n}
-                        aria-label={it.n}
-                        onClick={() => onPick(it.e)}
-                      >
-                        {it.e}
-                      </button>
+            {guildEmoji === null || filteredGuildEmoji.length > 0 || (guildEmoji.length === 0 && !q) ? (
+              <div style={{ marginBottom: 8 }}>
+                <div className="island-mono" style={sectionHeaderStyle}>The Boneless Island</div>
+                {guildEmoji === null ? (
+                  <p style={{ margin: 0, padding: 12, fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
+                    Loading…
+                  </p>
+                ) : guildEmoji.length === 0 ? (
+                  <p style={{ margin: 0, padding: 12, fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
+                    No custom emoji yet.
+                  </p>
+                ) : (
+                  <EmojiGrid>
+                    {filteredGuildEmoji.map((ge) => (
+                      <EmojiCell key={ge.id} title={`:${ge.name}:`} ariaLabel={ge.name} onClick={() => pick(`c:${ge.id}`)}>
+                        <img src={ge.url} alt={ge.name} style={{ width: 24, height: 24 }} />
+                      </EmojiCell>
                     ))}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      ) : null}
+                  </EmojiGrid>
+                )}
+              </div>
+            ) : null}
 
-      {tab === "island" ? (
-        <div style={{ maxHeight: 320, overflowY: "auto", padding: 8 }}>
-          {guildEmoji === null ? (
-            <p style={{ margin: 0, padding: 12, fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>Loading…</p>
-          ) : guildEmoji.length === 0 ? (
-            <p style={{ margin: 0, padding: 12, fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
-              No custom emoji yet.
-            </p>
-          ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {guildEmoji.map((ge) => (
-                <button
-                  key={ge.id}
-                  type="button"
-                  className="island-btn"
-                  style={{ ...gridBtnStyle, width: 34, height: 34 }}
-                  title={`:${ge.name}:`}
-                  aria-label={ge.name}
-                  onClick={() => onPick(`c:${ge.id}`)}
-                >
-                  <img src={ge.url} alt={ge.name} style={{ width: 22, height: 22 }} />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : null}
+            {filteredGroups.map((g) => (
+              <div key={g.category} style={{ marginBottom: 8 }}>
+                <div className="island-mono" style={sectionHeaderStyle}>{g.category}</div>
+                <EmojiGrid>
+                  {g.items.map((it) => (
+                    <EmojiCell key={it.e} title={it.n} ariaLabel={it.n} onClick={() => pick(it.e)}>
+                      {it.e}
+                    </EmojiCell>
+                  ))}
+                </EmojiGrid>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
     </PortalPopover>
   );
 }
