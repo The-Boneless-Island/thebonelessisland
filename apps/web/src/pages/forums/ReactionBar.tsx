@@ -1,14 +1,7 @@
-import { Suspense, lazy, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import { islandTheme } from "../../theme.js";
 import type { ForumCustomEmojiMap, ForumReaction } from "../../types.js";
-import { REACTION_META } from "./forumShared.js";
-
-const EmojiPicker = lazy(() => import("./EmojiPicker.js").then((m) => ({ default: m.EmojiPicker })));
-
-/** True for a "c:<snowflake>" Discord custom-emoji reaction key. */
-export function isCustomEmojiKey(key: string): boolean {
-  return /^c:\d{17,20}$/.test(key);
-}
+import { isCustomEmojiKey, REACTION_META } from "./forumShared.js";
 
 const reactionPillBase: CSSProperties = {
   borderRadius: 999,
@@ -59,42 +52,42 @@ function ReactionPill({
 }
 
 /**
- * Renders one post's reaction bar: the 5 legacy quick-react keys, plus any
- * arbitrary Unicode-emoji or Discord-custom-emoji keys already present on the
- * post (from other members' reactions), plus (unless showAddButton is false)
- * a "+" button opening the full EmojiPicker. Reaction keys are never
+ * Renders one post's reaction chip row: the legacy quick-react keys (in their
+ * REACTION_META order) plus any arbitrary Unicode-emoji or Discord-custom-
+ * emoji keys, but ONLY for keys that actually have a count > 0 on this post —
+ * a post nobody has reacted to renders no chips (and this component returns
+ * null outright, so it takes up no space). Reaction keys are never
  * interpolated as HTML — legacy keys use the REACTION_META emoji lookup, raw
  * Unicode keys render as plain text, and custom-emoji keys render an <img>
  * pointed at the CDN url from customEmoji.
  *
- * showAddButton defaults to true; PostActionBar (the per-post hover bar) sets
- * it false and renders its own "+" trigger instead, so this only shows the
- * already-placed reaction chips in that layout.
+ * Adding a *new* reaction only happens via PostActionBar's reaction trigger
+ * opening the full EmojiPicker directly — this bar has no "+" of its own.
  */
 export function ReactionBar({
   reactions,
   myReactions,
   customEmoji,
-  onToggle,
-  showAddButton = true
+  onToggle
 }: {
   reactions: Partial<Record<ForumReaction, number>>;
   myReactions: ForumReaction[];
   customEmoji: ForumCustomEmojiMap;
   onToggle: (reaction: ForumReaction) => void;
-  showAddButton?: boolean;
 }) {
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const addTriggerRef = useRef<HTMLButtonElement | null>(null);
-
-  // Extra keys already on the post that aren't part of the legacy quick row —
-  // e.g. another member picked a Unicode emoji or a guild custom emoji first.
+  // Extra keys present on the post that aren't part of the legacy quick row —
+  // e.g. a member picked a Unicode emoji or a guild custom emoji.
   const legacyKeys = new Set(REACTION_META.map((r) => r.key));
   const extraKeys = Object.keys(reactions).filter((k) => !legacyKeys.has(k as (typeof REACTION_META)[number]["key"]));
 
+  const visibleLegacy = REACTION_META.filter((r) => (reactions[r.key] ?? 0) > 0);
+  const visibleExtra = extraKeys.filter((k) => (reactions[k] ?? 0) > 0);
+
+  if (visibleLegacy.length === 0 && visibleExtra.length === 0) return null;
+
   return (
-    <div style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap", position: "relative" }}>
-      {REACTION_META.map((r) => {
+    <div style={{ display: "inline-flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+      {visibleLegacy.map((r) => {
         const count = reactions[r.key] ?? 0;
         const mine = myReactions.includes(r.key);
         return (
@@ -110,7 +103,7 @@ export function ReactionBar({
           </ReactionPill>
         );
       })}
-      {extraKeys.map((key) => {
+      {visibleExtra.map((key) => {
         const count = reactions[key] ?? 0;
         const mine = myReactions.includes(key);
         const custom = isCustomEmojiKey(key) ? customEmoji[key] : undefined;
@@ -132,39 +125,6 @@ export function ReactionBar({
           </ReactionPill>
         );
       })}
-      {showAddButton ? (
-        <button
-          ref={addTriggerRef}
-          type="button"
-          className="island-btn"
-          onClick={() => setPickerOpen((o) => !o)}
-          title="Add reaction"
-          aria-label="Add reaction"
-          aria-expanded={pickerOpen}
-          style={{
-            ...reactionPillBase,
-            background: islandTheme.color.panelMutedBg,
-            color: islandTheme.color.textMuted,
-            border: `1px solid ${islandTheme.color.cardBorder}`,
-            padding: "4px 8px",
-            fontWeight: 700
-          }}
-        >
-          +
-        </button>
-      ) : null}
-      {showAddButton && pickerOpen ? (
-        <Suspense fallback={null}>
-          <EmojiPicker
-            anchorRef={addTriggerRef}
-            onClose={() => setPickerOpen(false)}
-            onPick={(reaction) => {
-              onToggle(reaction);
-              setPickerOpen(false);
-            }}
-          />
-        </Suspense>
-      ) : null}
     </div>
   );
 }

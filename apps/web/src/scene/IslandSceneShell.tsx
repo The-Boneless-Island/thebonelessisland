@@ -646,6 +646,22 @@ function SceneGlobalStyles() {
           .bi-home-top { grid-template-columns: 1fr; }
         }
 
+        /* Home page "Hot this week" + "Activity feed" duo - side by side on
+           wide screens to close the dead horizontal gutter each one left when
+           stacked full-width. align-items: start so the shorter column (often
+           CrewTrending, which is capped at a handful of rows) doesn't stretch
+           to match ActivityFeed's taller scrollable card. */
+        .bi-home-duo {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+          gap: 16px;
+          align-items: start;
+        }
+        .bi-home-duo > * { min-width: 0; }
+        @media (max-width: 980px) {
+          .bi-home-duo { grid-template-columns: 1fr; }
+        }
+
         /* Nuggies page top row: summary cards on the left, activity on the right.
            Collapses to a single column on narrow viewports. */
         .bi-nuggies-top {
@@ -679,11 +695,13 @@ function SceneGlobalStyles() {
         }
         .bi-admin-grid > * { min-width: 0; }
 
-        /* Home trending row â€” stack art above copy on narrow screens */
+        /* Home trending row â€” stack art above copy on narrow screens.
+           Cover art is 72px (down from a prior 92px) so the row stays
+           comfortable at roughly half-width inside the .bi-home-duo grid. */
         .bi-trending-row {
           display: grid;
-          grid-template-columns: 18px 92px minmax(0, 1fr) auto;
-          gap: 12px;
+          grid-template-columns: 18px 72px minmax(0, 1fr) auto;
+          gap: 10px;
           align-items: center;
         }
 

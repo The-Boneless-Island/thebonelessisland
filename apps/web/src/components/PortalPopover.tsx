@@ -119,11 +119,17 @@ export function PortalPopover({
   // Reposition on window resize (debounced); close on scroll rather than
   // trying to track it — simplest option that never lets the popover drift
   // away from its trigger. Scroll listener uses the capture phase so it also
-  // catches scrolling inside any nested scroll container, not just window.
+  // catches scrolling inside any nested scroll container, not just window —
+  // EXCEPT scrolling inside the popover surface itself (e.g. the emoji
+  // picker's own scroll body): that doesn't move the anchor, and closing on
+  // it would make any internally-scrollable popover unusable.
   useEffect(() => {
     if (!open) return;
 
-    const onScroll = () => onClose();
+    const onScroll = (e: Event) => {
+      if (surfaceRef.current?.contains(e.target as Node)) return;
+      onClose();
+    };
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const onResize = () => {
       if (resizeTimer) clearTimeout(resizeTimer);
@@ -190,6 +196,12 @@ export function PortalPopover({
           aria-label={ariaLabel}
           style={{
             ...surfaceBase,
+            // Caller style first: it may carry padding/sizing meant for the
+            // anchored desktop popover (e.g. width: 280). The sheet geometry
+            // below must win or the "full-width" sheet renders as a narrow
+            // strip pinned bottom-left (left+right+width over-constraint
+            // drops `right` in LTR).
+            ...style,
             position: "fixed",
             left: 0,
             right: 0,
@@ -201,8 +213,7 @@ export function PortalPopover({
             borderBottomRightRadius: 0,
             borderTopLeftRadius: 16,
             borderTopRightRadius: 16,
-            animation: "biPortalPopoverSheetIn 180ms ease",
-            ...style
+            animation: "biPortalPopoverSheetIn 180ms ease"
           }}
         >
           {children}

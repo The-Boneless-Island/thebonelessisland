@@ -15,7 +15,10 @@ export const POST_TYPES: PostTypeMeta[] = [
 export const POST_TYPE_BY_KEY: Record<ForumThreadType, PostTypeMeta> =
   Object.fromEntries(POST_TYPES.map((t) => [t.key, t])) as Record<ForumThreadType, PostTypeMeta>;
 
-// The fixed reaction palette. Order here is the display order in the bar.
+// The fixed reaction palette. Order here is the display order in the bar. Not
+// offered in EmojiPicker any more (new reactions are Unicode or custom-emoji
+// only) — kept here because ReactionBar still needs it to render legacy
+// reactions stored on older posts.
 export const REACTION_META: { key: ForumReactionKey; emoji: string; label: string }[] = [
   { key: "nug", emoji: "👍", label: "Nug" },
   { key: "heart", emoji: "❤️", label: "Love" },
@@ -23,6 +26,14 @@ export const REACTION_META: { key: ForumReactionKey; emoji: string; label: strin
   { key: "fire", emoji: "🔥", label: "Fire" },
   { key: "salute", emoji: "🫡", label: "Respect" }
 ];
+
+/** True for a "c:<snowflake>" Discord custom-emoji reaction key. Lives here
+ * (rather than in ReactionBar.tsx) so EmojiPicker.tsx — which ships as its
+ * own React.lazy chunk off PostActionBar — doesn't statically pull in
+ * ReactionBar.tsx just for this one regex. */
+export function isCustomEmojiKey(key: string): boolean {
+  return /^c:\d{17,20}$/.test(key);
+}
 
 export type ForumView =
   | { mode: "home" }

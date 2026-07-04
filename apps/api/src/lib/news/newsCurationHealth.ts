@@ -38,6 +38,8 @@ export type NewsPipelineHealth = {
   liveCards: number;
   validationFailures: number;
   uncuratedBacklog: number;
+  /** Rows parked by the crew-fit second gate (pre_filter_reason crew_irrelevant / crew_irrelevant_sweep). */
+  crewIrrelevant: number;
   liveCardsMissingImages: number;
   /** Cards that resolved all the way to island fallback art — fine, just informational. */
   liveCardsOnFallbackArt: number;
@@ -75,6 +77,7 @@ export async function snapshotPipelineCounts(): Promise<{
   uncuratedBacklog: number;
   merged: number;
   duplicates: number;
+  crewIrrelevant: number;
 }> {
   const r = await db.query<{
     live: string;
@@ -82,6 +85,7 @@ export async function snapshotPipelineCounts(): Promise<{
     uncurated: string;
     merged: string;
     duplicates: string;
+    crew_irrelevant: string;
   }>(
     `
       SELECT
@@ -101,7 +105,13 @@ export async function snapshotPipelineCounts(): Promise<{
           WHERE ai_curated_at IS NOT NULL
             AND ai_relevance_score = 0
             AND ai_summary IS NOT NULL
-        )::text AS duplicates
+        )::text AS duplicates,
+        -- Crew-fit second gate parks (main curator + retro sweep). Genuinely
+        -- gaming news with no hook for this crew — distinct failure mode from
+        -- off_topic_ai / off_topic_ai_sweep.
+        COUNT(*) FILTER (
+          WHERE pre_filter_reason IN ('crew_irrelevant', 'crew_irrelevant_sweep')
+        )::text AS crew_irrelevant
       FROM general_news
     `
   );
@@ -111,7 +121,8 @@ export async function snapshotPipelineCounts(): Promise<{
     validationFailures: parseInt(row?.failed ?? "0", 10),
     uncuratedBacklog: parseInt(row?.uncurated ?? "0", 10),
     merged: parseInt(row?.merged ?? "0", 10),
-    duplicates: parseInt(row?.duplicates ?? "0", 10)
+    duplicates: parseInt(row?.duplicates ?? "0", 10),
+    crewIrrelevant: parseInt(row?.crew_irrelevant ?? "0", 10)
   };
 }
 
@@ -211,6 +222,7 @@ export async function getNewsPipelineHealth(): Promise<NewsPipelineHealth> {
     liveCards: counts.liveCards,
     validationFailures: counts.validationFailures,
     uncuratedBacklog: counts.uncuratedBacklog,
+    crewIrrelevant: counts.crewIrrelevant,
     liveCardsMissingImages,
     liveCardsOnFallbackArt,
     queuePending: queueCounts.pending,

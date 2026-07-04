@@ -275,6 +275,49 @@ Z-index scale after the sweep: MegaMenu desktop 50 · toasts 90 · MegaMenu mobi
 overlay 200 · PortalPopover menus 300 · QuickSwitcher 400 · drawers/wizards 1000.
 Keep new overlays inside this scale.
 
+## Polish sweep 2026-07 (round 3)
+
+Durable lessons from the four-fix round (PRs #102–#105):
+
+- **One-shot URL-param consumption must be ref-guarded.** The Games `?plan=` deep link
+  consumed the param in an effect whose deps included plain-function props from App.tsx —
+  new identities every App render — so the effect re-ran per render while the param was
+  present. Its own state updates (toast, member seed → recommendations POST) re-rendered
+  App at high priority while react-router v7 committed the `setSearchParams` cleanup as
+  an interruptible transition, so the URL never actually cleared and the loop
+  self-sustained: hundreds of toasts, a locked tab, and enough POST spam to trip the API
+  rate limiter (the post-refresh "site down for a minute" was the 429 window). The rule:
+  an effect that consumes a query param and fires side effects gets a `useRef` consumed
+  marker set *before* the side effects — stabilizing dependencies is hygiene, but the
+  ref guard is the correctness fix because it holds under any future dep churn. Sibling
+  param consumers (news `?item=`, loans `?loan=`, forums `?game=`) were audited safe.
+- **The toast queue is capped and self-deduping** (`system/toast.tsx`): max 6 visible,
+  oldest evicted immediately; a push matching an active toast's message+tone restarts
+  that toast's timer instead of appending. Cap/dedup decisions read a synchronous ref
+  mirror of the queue — putting the toast list in `pushToast`'s closure deps would churn
+  its identity (the same unstable-dep class of bug), and functional-setState readback
+  isn't synchronous under burst. Any future runaway-loop bug now costs 6 toasts, not a
+  locked tab.
+- **The emoji picker is one flat scroll, and chips mirror reality.** Tabs made members
+  hunt ("where do our emotes live?"); the rebuilt picker is Discord's shape — search,
+  "Frequently used" (client-side localStorage MRU, `bi:emoji-mru`, unicode + custom keys
+  only), the guild's emoji, then unicode categories under sticky headers. The old
+  always-visible five quick-react chips are gone: a post's chip row now shows exactly the
+  reactions that exist (zero = no row), so the row is signal, not furniture. Legacy keys
+  (`nug`/`heart`/`laugh`/`fire`/`salute`) still render on old posts via `REACTION_META`
+  but are no longer offered — do not delete that map while any stored reaction uses it.
+- **News has two gates, and they must not be collapsed into one field.** `offTopic`
+  answers "is the core subject gaming?"; `crewFit` answers "does THIS crew plausibly
+  care?" (judged against the injected crew context: playtime, library, wishlist, genre
+  gravity). The otome-VN leak proved a single flag can't carry both questions: the story
+  WAS gaming, so the model honestly refused to mark it offTopic and published a card
+  whose own whyMatters admitted nobody would care. That admission is now formalized as
+  the `crewFit: false` signal (parks as `crew_irrelevant`; the one-shot sweep — bump
+  `SWEEP_VERSION` to re-run it — parks live leaks as `crew_irrelevant_sweep`). Both
+  gates carry a when-uncertain-keep bias and canonical real-leak examples in the prompt;
+  fallback-minted results always default `crewFit: true` (fail open — an AI outage must
+  never mass-park the feed).
+
 ## Feature sweep 2026-07
 
 Durable rationale from the eight-workstream sweep (PRs #89–#96). Full per-item detail

@@ -2,10 +2,15 @@ import { db } from "../../db/client.js";
 import { AIDisabledError, AINotConfiguredError, getAIProviderForTask } from "../ai/index.js";
 import { loadPipelineJob, savePipelineJob } from "./newsPipelineJobs.js";
 
-// One-shot retroactive quality sweep (2026-07). Two goals, run once per deploy:
+// One-shot retroactive quality sweep (2026-07). Three goals, run once per deploy:
 //   1. Park AI-judged off-topic live cards that leaked in under the old prompt
 //      (the pre-off-topic-gate curator forced a connection to every story).
-//   2. Re-queue thin recent summaries so the new full-context prompt regenerates
+//   2. Park AI-judged crew-irrelevant live cards — genuinely gaming news, but
+//      with no hook for THIS crew (the SECOND gate, independent of #1; added
+//      v3 after the "Otome Visual Novel" leak — real gaming news the curator's
+//      own whyMatters text admitted the crew wouldn't care about, but which
+//      still published because it correctly wasn't off-topic).
+//   3. Re-queue thin recent summaries so the new full-context prompt regenerates
 //      them.
 // Self-guarding via a news_pipeline_jobs row (kind "offtopic_sweep"): once the
 // job reaches "done" at the current SWEEP_VERSION it never runs again; a
@@ -15,7 +20,8 @@ import { loadPipelineJob, savePipelineJob } from "./newsPipelineJobs.js";
 
 // Bump to re-run the sweep once on the next deploy (e.g. after improving the
 // classifier). v2: numeric row ids for verdict matching + named leak examples.
-const SWEEP_VERSION = 2;
+// v3: added the crew-fit second gate (see goal #2 above).
+const SWEEP_VERSION = 3;
 const SWEEP_BATCH_SIZE = 20;
 // 20 verdicts × long URL ids can pass 1500 tokens; a truncated array fails the
 // parse and silently skips the whole batch, so leave generous headroom.
@@ -29,9 +35,18 @@ type LiveCard = {
   summary_head: string;
 };
 
-type ClassifierVerdict = { id: string; gaming: boolean };
+type ClassifierVerdict = { id: string; gaming: boolean; crewFit: boolean };
 
-const CLASSIFIER_SYSTEM_PROMPT = `You are a strict classifier for a video-gaming news feed. For each card, decide whether its CORE SUBJECT is gaming.
+// Crew context is injected the same way the main curator's prompt does (see
+// generalNewsIngestion.ts) so this classifier's crew-fit verdicts use the same
+// ground truth, not a from-scratch guess. buildCrewContext() is TTL-cached, so
+// this costs at most one extra build per sweep run, not per-card.
+function buildClassifierPrompt(crewContext: string): string {
+  return `You are a strict classifier for a video-gaming news feed. For each card, you make TWO independent decisions.
+
+# Check 1 — gaming relevance
+
+Decide whether the card's CORE SUBJECT is gaming.
 
 IN SCOPE (gaming: true): video games on any platform; game studios/publishers/developers; announcements, patches, DLC, releases, delays; gaming hardware (consoles, handhelds, GPUs, peripherals) framed for gaming; game storefronts/launchers/subscription services; esports; game-industry business (layoffs, acquisitions, earnings of game companies); modding; game-development tech when the story is about making games; gaming-adjacent platforms (Steam, Discord, Twitch, Xbox/PlayStation/Nintendo services) when they materially affect how people play or gather around games.
 
@@ -43,8 +58,25 @@ Two real examples that are NOT gaming (both leaked into this feed before):
 
 When uncertain, return gaming: true — only flag CLEAR non-gaming stories. Do not manufacture a gaming link to keep a story.
 
+# Check 2 — crew fit (SECOND gate, only meaningful when gaming: true)
+
+This is INDEPENDENT of Check 1. It asks: given the Crew context below (games this crew plays/owns/wishlists, weighted genre tags), does THIS crew have any plausible hook into this specific card? A card can be gaming: true and still be crewFit: false — that's the normal case this check exists to catch.
+
+Return crewFit: true when ANY of: the card touches a game/franchise the crew plays, owns, or has wishlisted per the Crew context; it touches a platform/storefront/service the crew uses; it's major industry-wide news any active PC/console gamer would want regardless of taste (big acquisitions, major title launches, platform-wide policy changes, GPU pricing); or it clearly matches the crew's genre gravity (weighted genre tags) even for an unfamiliar title.
+
+Return crewFit: false only when the card is real gaming news but for an audience/genre/platform the Crew context shows zero evidence of interest in.
+
+Real example that leaked live under the old single-gate logic (gaming: true, but should be crewFit: false):
+- "Otome Visual Novel 'Illusion of Itehari: trail' Confirmed for Western Release in 2027" — genuinely gaming news (a real localization announcement), but a niche-genre visual novel with zero overlap with this crew's library, wishlist, or genre preferences.
+
+When uncertain, return crewFit: true — only flag CONFIDENT misses. When gaming: false, still return crewFit: true (it's a don't-care field once Check 1 already parks the card).
+
+Crew context:
+${crewContext}
+
 Return ONLY a JSON array, one object per input card, no prose:
-[{"id": "<id>", "gaming": true}]`;
+[{"id": "<id>", "gaming": true, "crewFit": true}]`;
+}
 
 /** Locate the first balanced JSON array and parse it defensively. */
 function parseClassifierArray(text: string): ClassifierVerdict[] {
@@ -59,7 +91,14 @@ function parseClassifierArray(text: string): ClassifierVerdict[] {
       const obj = row as Record<string, unknown>;
       const id = typeof obj.id === "string" ? obj.id : String(obj.id ?? "");
       if (!id) return [];
-      return [{ id, gaming: obj.gaming === true || obj.gaming === "true" }];
+      const gaming = obj.gaming === true || obj.gaming === "true";
+      // Fail open: only an EXPLICIT false parks — missing or malformed
+      // (null, 1, "True", …) reads as true (keep), mirroring the main
+      // curator's "bias uncertain toward true" rule. This sweep must never
+      // silently park cards over a value a prior classifier version (or a
+      // drifting model) never actually judged.
+      const crewFit = obj.crewFit === false || obj.crewFit === "false" ? false : true;
+      return [{ id, gaming, crewFit }];
     });
   } catch {
     return [];
@@ -118,7 +157,26 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
 
     let scanned = 0;
     let parked = 0;
+    let parkedCrewIrrelevant = 0;
     const ai = getAIProviderForTask("light");
+
+    // Same crew-context ground truth the main curator injects into every
+    // curation call (buildCrewContext() is TTL-cached, so this costs at most
+    // one extra build for this whole sweep run, not per-card/per-batch).
+    const { buildCrewContext, crewContextHasSignal } = await import("../generalNewsIngestion.js");
+    const crewContext = await buildCrewContext();
+    const classifierSystemPrompt = buildClassifierPrompt(crewContext);
+    // Hard guard for the destructive one-shot: with an all-"none" crew
+    // context (zero Steam links — a supported Discord-only configuration),
+    // "no evidence of interest" is true of EVERY card and Check 2 would
+    // mass-park the live feed. Ignore crew-fit verdicts entirely in that
+    // case; the gaming gate (Check 1) still applies.
+    const crewFitEnabled = crewContextHasSignal(crewContext);
+    if (!crewFitEnabled) {
+      console.log(
+        "[generalNews] off-topic sweep: crew context has no signal — crew-fit parking disabled for this run"
+      );
+    }
 
     for (let i = 0; i < cards.rows.length; i += SWEEP_BATCH_SIZE) {
       const batch = cards.rows.slice(i, i + SWEEP_BATCH_SIZE);
@@ -136,7 +194,7 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
       try {
         const result = await ai.complete(
           [
-            { role: "system", content: CLASSIFIER_SYSTEM_PROMPT },
+            { role: "system", content: classifierSystemPrompt },
             {
               role: "user",
               content: `Classify these cards. Return ONLY the JSON array.\n\n${JSON.stringify(payload, null, 2)}`
@@ -145,11 +203,21 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
           { maxTokens: CLASSIFIER_MAX_TOKENS, temperature: 0 }
         );
         const verdicts = parseClassifierArray(result.text);
-        const nonGaming = new Set(
-          verdicts.filter((v) => !v.gaming).map((v) => v.id.trim())
-        );
-        const parkIds = batch.filter((c) => nonGaming.has(String(c.id))).map((c) => c.id);
-        if (parkIds.length > 0) {
+        const verdictById = new Map(verdicts.map((v) => [v.id.trim(), v]));
+
+        const offTopicIds: number[] = [];
+        const crewIrrelevantIds: number[] = [];
+        for (const c of batch) {
+          const v = verdictById.get(String(c.id));
+          if (!v) continue; // no verdict echoed back — leave the card as-is (conservative)
+          if (!v.gaming) {
+            offTopicIds.push(c.id);
+          } else if (crewFitEnabled && !v.crewFit) {
+            crewIrrelevantIds.push(c.id);
+          }
+        }
+
+        if (offTopicIds.length > 0) {
           // ai_curated_at stays set so parked rows never re-enter the queue.
           await db.query(
             `UPDATE general_news
@@ -157,12 +225,30 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
                     ai_summary = NULL,
                     pre_filter_reason = 'off_topic_ai_sweep'
               WHERE id = ANY($1::int[])`,
-            [parkIds]
+            [offTopicIds]
           );
-          parked += parkIds.length;
+          parked += offTopicIds.length;
           console.log(
-            `[generalNews] off-topic sweep parked ${parkIds.length} card(s): ${batch
-              .filter((c) => nonGaming.has(String(c.id)))
+            `[generalNews] off-topic sweep parked ${offTopicIds.length} card(s): ${batch
+              .filter((c) => offTopicIds.includes(c.id))
+              .map((c) => c.external_id)
+              .join(" | ")}`
+          );
+        }
+
+        if (crewIrrelevantIds.length > 0) {
+          await db.query(
+            `UPDATE general_news
+                SET ai_relevance_score = 0,
+                    ai_summary = NULL,
+                    pre_filter_reason = 'crew_irrelevant_sweep'
+              WHERE id = ANY($1::int[])`,
+            [crewIrrelevantIds]
+          );
+          parkedCrewIrrelevant += crewIrrelevantIds.length;
+          console.log(
+            `[generalNews] crew-fit sweep parked ${crewIrrelevantIds.length} card(s): ${batch
+              .filter((c) => crewIrrelevantIds.includes(c.id))
               .map((c) => c.external_id)
               .join(" | ")}`
           );
@@ -200,11 +286,11 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
     await savePipelineJob(
       "offtopic_sweep",
       "done",
-      { version: SWEEP_VERSION, scanned, parked, requeued },
+      { version: SWEEP_VERSION, scanned, parked, parkedCrewIrrelevant, requeued },
       { finishedAt: new Date(), error: null }
     );
     console.log(
-      `[generalNews] off-topic sweep done: scanned=${scanned}, parked=${parked}, requeued=${requeued}`
+      `[generalNews] off-topic sweep done: scanned=${scanned}, parked=${parked}, parkedCrewIrrelevant=${parkedCrewIrrelevant}, requeued=${requeued}`
     );
 
     // Drain the re-queued rows now instead of a single kick: the per-pass pool

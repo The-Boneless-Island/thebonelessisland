@@ -109,6 +109,15 @@ export function App() {
   const lastGuildMembersRef = useRef<string | null>(null);
   const lastGameNightsRef = useRef<string | null>(null);
   const lastSelectedNightRef = useRef<string | null>(null);
+  // Signature (sorted, joined member ids) of the composer request currently
+  // in flight — collapses an identical concurrent burst (e.g. upstream
+  // identity churn making `selectedMemberIds` look "new" while its membership
+  // is unchanged) into one POST. Deliberately no completed-request memo: a
+  // memo taken before the response poisons the guard when the request fails
+  // (stale results pinned for the session), and one taken after suppresses
+  // legitimate refetches on page re-entry. Once a request settles — success
+  // or failure — the same selection may fetch again.
+  const composerRequestInFlightRef = useRef<string | null>(null);
   // Routing: the URL is the source of truth. `page` is derived from the path so
   // refresh / back-forward / shared links all land on the right page; navigation
   // goes through the router via navigateToPage. `null` page → unknown path → 404.
@@ -1392,6 +1401,13 @@ export function App() {
       setComposerRecommendations([]);
       return;
     }
+    // Collapse identical concurrent requests into one POST (see the ref's
+    // comment for why this is in-flight-only, not a completed-request memo).
+    const signature = memberIds.slice().sort().join(",");
+    if (composerRequestInFlightRef.current === signature) {
+      return;
+    }
+    composerRequestInFlightRef.current = signature;
     try {
       const response = await apiFetch("/recommendations/what-can-we-play", {
         method: "POST",
@@ -1414,6 +1430,12 @@ export function App() {
     } catch (error) {
       if (!silent) {
         setStatus(error instanceof Error ? error.message : "Composer recommendation load failed");
+      }
+    } finally {
+      // Only clear if a newer overlapping request hasn't already claimed the
+      // slot (its own finally will clear it).
+      if (composerRequestInFlightRef.current === signature) {
+        composerRequestInFlightRef.current = null;
       }
     }
   }
@@ -1509,28 +1531,42 @@ export function App() {
   // Resolve the owners of a game from the crew library and seed them as the
   // selected planner members (auto-refires the composer recommendation).
   // Shared by the Library "Plan" shortcut and the Games-page `?plan=` deep
-  // link consumption effect.
-  function onSeedMembersForGame(appId: number) {
-    const game = crewGames.find((row) => row.appId === appId);
-    const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
-    setSelectedMemberIds(ownerIds);
-  }
+  // link consumption effect. Stable identity (useCallback) so it's safe as a
+  // child effect dependency; reads `selectedMemberIds` via the functional
+  // setState form (rather than as a closure dep) so the callback doesn't
+  // change identity every time the selection changes. Idempotent against a
+  // redundant re-seed with the same owner set: returns the same array
+  // reference when membership already matches, so callers relying on
+  // identity (e.g. the composer-recommendations effect keyed on
+  // `selectedMemberIds`) don't see a spurious "new" selection.
+  const onSeedMembersForGame = useCallback(
+    (appId: number) => {
+      const game = crewGames.find((row) => row.appId === appId);
+      const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
+      setSelectedMemberIds((current) => {
+        const sortedNext = ownerIds.slice().sort();
+        const sortedCurrent = current.slice().sort();
+        const sameMembership =
+          sortedNext.length === sortedCurrent.length &&
+          sortedNext.every((id, index) => id === sortedCurrent[index]);
+        return sameMembership ? current : ownerIds;
+      });
+    },
+    [crewGames]
+  );
 
   // Library "Plan" shortcut: hand off to the Games page via the `?plan=`
   // deep link. Games.tsx's PlanNightCard owns seeding members, preselecting
   // the game itself, scrolling to the composer, and toasting once the crew
   // library data (and its own effects) are ready.
-  function onPlan(appId: number) {
-    navigate(pathForPlanNight(appId));
-  }
+  const onPlan = useCallback((appId: number) => navigate(pathForPlanNight(appId)), [navigate]);
 
-  function openProfile(discordUserId: string) {
-    navigate(pathForIslander(discordUserId));
-  }
+  const openProfile = useCallback(
+    (discordUserId: string) => navigate(pathForIslander(discordUserId)),
+    [navigate]
+  );
 
-  function openGame(appId: number) {
-    navigate(pathForGamePage(appId));
-  }
+  const openGame = useCallback((appId: number) => navigate(pathForGamePage(appId)), [navigate]);
 
   async function loadSteamExclusions() {
     try {

@@ -1,9 +1,9 @@
 // Discord-style per-post hover action bar (WS1 Part D). Replaces the old
 // always-visible Quote/Edit/Delete/Report row: nothing shows until the post
 // card is hovered/focused-within, then this compact icon row appears pinned
-// to the post's top-right corner. Reaction CHIPS stay in the post footer as
-// before (see ReactionBar with showAddButton=false) — only the "+" trigger
-// moves here, alongside Share/Quote/Edit/Delete/Report.
+// to the post's top-right corner. Reaction CHIPS stay in the post footer
+// (ReactionBar renders only reactions that exist on the post) — adding a NEW
+// reaction happens here, via the react button's EmojiPicker.
 
 import { Suspense, lazy, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { SharePopover } from "../../components/SharePopover.js";
