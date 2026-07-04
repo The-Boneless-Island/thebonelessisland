@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../api/client.js";
-import { IslandButton, IslandCard, islandInputStyle, islandTagStyle } from "../../islandUi.js";
+import { IslandButton, IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../../islandUi.js";
 import { islandTheme } from "../../theme.js";
 import type { ForumBan, ForumCategory, ForumModLogEntry, ForumReport, GuildMember } from "../../types.js";
 import { AdminTabs, Field, smallBtn, SubsectionTitle } from "./adminUi.js";
@@ -17,7 +17,10 @@ export function MembersPage() {
     let cancelled = false;
     async function load() {
       try {
-        const res = await apiFetch("/members");
+        // includeBots=1: admins should still see bot accounts (Nuggie,
+        // PatchBot, etc) in this operational roster view, even though
+        // member-facing surfaces filter them out by default.
+        const res = await apiFetch("/members?includeBots=1");
         if (!res.ok) {
           if (!cancelled) setLoadState("error");
           return;
@@ -206,7 +209,10 @@ function MemberRow({ entry, firstRow }: { entry: GuildMember; firstRow: boolean 
       }}
     >
       <div>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>{entry.displayName}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
+          {entry.displayName}
+          {entry.isBot ? <IslandTag tone="default">BOT</IslandTag> : null}
+        </div>
         <div className="island-mono" style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
           @{entry.username}
         </div>

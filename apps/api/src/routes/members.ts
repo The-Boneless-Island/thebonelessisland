@@ -45,6 +45,7 @@ type DiscordGuildMember = {
     username?: string;
     global_name?: string | null;
     avatar?: string | null;
+    bot?: boolean;
   };
 };
 
@@ -152,6 +153,7 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
       const roleNames = roleIds.map((roleId) => roleNameById.get(roleId) ?? `role:${roleId}`);
       const joinedAtGuild = member.joined_at ?? null;
       const premiumSince = member.premium_since ?? null;
+      const isBot = Boolean(member.user?.bot);
       return {
         id,
         username,
@@ -162,7 +164,8 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
         roleIds,
         roleNames,
         joinedAtGuild,
-        premiumSince
+        premiumSince,
+        isBot
       };
     })
     .filter(
@@ -179,6 +182,7 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
         roleNames: string[];
         joinedAtGuild: string | null;
         premiumSince: string | null;
+        isBot: boolean;
       } => Boolean(row)
     );
 
@@ -254,7 +258,8 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
       voice_channel_id: voiceChannelId,
       rich_presence_text: richPresenceText,
       joined_at_guild: member.joinedAtGuild,
-      premium_since: member.premiumSince
+      premium_since: member.premiumSince,
+      is_bot: member.isBot
     };
   });
 
@@ -300,6 +305,7 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
             rich_presence_text,
             joined_at_guild,
             premium_since,
+            is_bot,
             in_guild,
             last_synced_at
           )
@@ -318,6 +324,7 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
             t.rich_presence_text,
             t.joined_at_guild::timestamptz,
             t.premium_since::timestamptz,
+            t.is_bot,
             TRUE,
             NOW()
           FROM jsonb_to_recordset($2::jsonb) AS t(
@@ -333,7 +340,8 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
             voice_channel_id text,
             rich_presence_text text,
             joined_at_guild text,
-            premium_since text
+            premium_since text,
+            is_bot boolean
           )
           ON CONFLICT (guild_id, discord_user_id)
           DO UPDATE SET
@@ -349,6 +357,7 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
             rich_presence_text = EXCLUDED.rich_presence_text,
             joined_at_guild = EXCLUDED.joined_at_guild,
             premium_since = EXCLUDED.premium_since,
+            is_bot = EXCLUDED.is_bot,
             in_guild = TRUE,
             last_synced_at = NOW()
           WHERE guild_members.username IS DISTINCT FROM EXCLUDED.username
@@ -363,6 +372,7 @@ async function syncGuildMembersInternal(): Promise<MemberSyncResult> {
              OR guild_members.rich_presence_text IS DISTINCT FROM EXCLUDED.rich_presence_text
              OR guild_members.joined_at_guild IS DISTINCT FROM EXCLUDED.joined_at_guild
              OR guild_members.premium_since IS DISTINCT FROM EXCLUDED.premium_since
+             OR guild_members.is_bot IS DISTINCT FROM EXCLUDED.is_bot
              OR NOT guild_members.in_guild
         `,
         [getGuildId(), JSON.stringify(memberRows)]
@@ -386,11 +396,15 @@ export async function syncGuildMembers(): Promise<MemberSyncResult> {
 
 export const membersRouter = express.Router();
 
-membersRouter.get("/", requireSession, privateCache(60), async (_req, res) => {
+membersRouter.get("/", requireSession, privateCache(60), async (req, res) => {
   if (!getGuildId()) {
     res.status(400).json({ error: "DISCORD_GUILD_ID is not configured" });
     return;
   }
+
+  // Member-facing surfaces (Friends Online, Community) should never see bot
+  // accounts (Nuggie, PatchBot, etc). Admin tooling opts back in explicitly.
+  const includeBots = req.query.includeBots === "1";
 
   const members = await db.query<{
     discord_user_id: string;
@@ -407,17 +421,20 @@ membersRouter.get("/", requireSession, privateCache(60), async (_req, res) => {
     presence_status: string | null;
     banner_url: string | null;
     accent_color: number | null;
+    is_bot: boolean;
   }>(
     `
       SELECT gm.discord_user_id, gm.username, gm.display_name, gm.avatar_url, gm.guild_avatar_url,
              gm.role_names, gm.in_voice, gm.voice_channel_id, gm.rich_presence_text,
              gm.activity_name, gm.activity_type, gm.presence_status,
              COALESCE(gm.banner_url, dp.banner_url) AS banner_url,
-             COALESCE(gm.accent_color, dp.accent_color) AS accent_color
+             COALESCE(gm.accent_color, dp.accent_color) AS accent_color,
+             gm.is_bot
       FROM guild_members gm
       LEFT JOIN users u ON u.discord_user_id = gm.discord_user_id
       LEFT JOIN discord_profiles dp ON dp.user_id = u.id
       WHERE gm.guild_id = $1 AND gm.in_guild = TRUE
+        ${includeBots ? "" : "AND gm.is_bot = FALSE"}
       ORDER BY gm.username ASC
       LIMIT 2000
     `,
@@ -439,7 +456,8 @@ membersRouter.get("/", requireSession, privateCache(60), async (_req, res) => {
       activityType: row.activity_type,
       presenceStatus: row.presence_status,
       bannerUrl: row.banner_url,
-      accentColor: row.accent_color
+      accentColor: row.accent_color,
+      isBot: row.is_bot
     }))
   });
 });
@@ -579,6 +597,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
     steam_level: number | null;
     steam_time_created: string | null;
     steam_visibility: string;
+    is_bot: boolean | null;
   }>(
     `
       SELECT
@@ -599,6 +618,7 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
         gm.rich_presence_text,
         gm.activity_name,
         gm.activity_type,
+        gm.is_bot,
         sl.steam_id64,
         sl.persona_name AS steam_persona_name,
         sl.steam_avatar_url,
@@ -627,6 +647,11 @@ membersRouter.get("/:discordUserId/profile", requireSession, async (req, res) =>
   );
   const base = baseResult.rows[0];
   if (!base) {
+    res.status(404).json({ error: "Member not found" });
+    return;
+  }
+  // Bot accounts (Nuggie, PatchBot, etc) don't get a browsable islander profile.
+  if (base.is_bot) {
     res.status(404).json({ error: "Member not found" });
     return;
   }

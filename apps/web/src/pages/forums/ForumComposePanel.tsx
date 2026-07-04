@@ -261,6 +261,8 @@ export function ForumComposePanel({
               type === "memory" ? "Tell the story. Add photos below, tag who was there…"
               : "Lay out your thoughts. **bold**, *italic*, > quote, - lists, `code`, [links](https://)…"
             }
+            uploads={uploads}
+            onUploadsChange={setUploads}
           />
         </div>
         <div style={{ display: "grid", gap: 6, marginBottom: 12 }}>

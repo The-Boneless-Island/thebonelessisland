@@ -170,6 +170,7 @@ export async function buildAndStoreWeeklyDigest(): Promise<DigestPayload> {
       LEFT JOIN guild_members target_gm ON target_gm.discord_user_id = target_user.discord_user_id
       LEFT JOIN games g ON g.app_id = ae.target_app_id
       WHERE ae.created_at >= NOW() - INTERVAL '7 days'
+        AND COALESCE(actor_gm.is_bot, FALSE) = FALSE
       ORDER BY ae.created_at DESC
       LIMIT 6
     `

@@ -875,7 +875,9 @@ async function sweepGuildPresence(): Promise<void> {
     if (!guild) return;
     const members = await guild.members.fetch().catch(() => null);
     if (!members) return;
-    const list = [...members.values()];
+    // Bot accounts (Nuggie, PatchBot, etc) don't get their presence swept —
+    // same rule as the live PresenceUpdate listener above.
+    const list = [...members.values()].filter((member) => !member.user?.bot);
     await runWithConcurrency(list, PRESENCE_SWEEP_CONCURRENCY, async (member) => {
       const status = member.presence?.status ?? "offline";
       const { activityName, activityType } = extractActivity(member.presence?.activities);
@@ -892,6 +894,9 @@ client.on(Events.PresenceUpdate, (_oldPresence, newPresence) => {
   const status = newPresence?.status;
   if (!userId || !status) return;
   if (newPresence.guild?.id && newPresence.guild.id !== guildId) return;
+  // Bot accounts (Nuggie, PatchBot, etc) don't get live presence pushed —
+  // they're filtered from member-facing surfaces and shouldn't show "online".
+  if (newPresence.user?.bot) return;
   const { activityName, activityType } = extractActivity(newPresence.activities);
   void pushPresence(userId, status, activityName, activityType);
 });

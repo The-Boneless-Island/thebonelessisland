@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../../api/client.js";
 import { SharePopover } from "../../components/SharePopover.js";
 import { IslandButton, IslandCard, IslandTag } from "../../islandUi.js";
@@ -17,18 +17,8 @@ import type {
 import { AttachmentGallery, ImageDropzone, MarkdownEditor } from "./forumEditor.js";
 import { formatAbsolute, formatRelative, listRowStyle } from "./forumShared.js";
 import { BackLink, GameChip, LinkPreviewCard, PinGlyph, LockGlyph, TypeChip } from "./forumUi.js";
+import { POST_ACTION_BAR_CSS, PostActionBar } from "./PostActionBar.js";
 import { ReactionBar } from "./ReactionBar.js";
-
-const ghostBtn: CSSProperties = {
-  background: "transparent",
-  border: `1px solid ${islandTheme.color.cardBorder}`,
-  color: islandTheme.color.textSubtle,
-  borderRadius: 999,
-  padding: "4px 10px",
-  fontSize: 12,
-  cursor: "pointer",
-  font: "inherit"
-};
 
 export function ForumThreadPanel({
   threadId,
@@ -272,6 +262,7 @@ export function ForumThreadPanel({
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
+      <style>{POST_ACTION_BAR_CSS}</style>
       <div
         className="bi-forum-sticky-head"
         style={{
@@ -407,6 +398,8 @@ export function ForumThreadPanel({
             rows={5}
             textareaRef={replyRef}
             placeholder="Be cool. Stay on topic. **bold**, *italic*, > quote, lists, `code`…"
+            uploads={replyUploads}
+            onUploadsChange={setReplyUploads}
           />
           <div style={{ marginTop: 10 }}>
             <ImageDropzone uploads={replyUploads} onUploadsChange={setReplyUploads} />
@@ -462,13 +455,28 @@ function PostCard({
   return (
     <IslandCard
       id={`post-${post.id}`}
+      className="bi-post-hover-target"
       style={{
+        position: "relative",
         padding: 0,
         overflow: "hidden",
         scrollMarginTop: 80,
         borderColor: post.isOp ? islandTheme.color.primaryGlow : islandTheme.color.cardBorder
       }}
     >
+      {!post.isDeleted ? (
+        <PostActionBar
+          postId={post.id}
+          fallbackUrl={`${window.location.origin}/forums/thread/${post.threadId}/post/${post.id}`}
+          canEdit={canEdit}
+          isOwner={isOwner}
+          onQuote={onQuote}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onReport={onReport}
+          onReact={onReact}
+        />
+      ) : null}
       <div
         style={{
           display: "grid",
@@ -506,29 +514,30 @@ function PostCard({
         </div>
 
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12, color: islandTheme.color.textMuted, gap: 12, flexWrap: "wrap" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <a
-                href={`/forums/thread/${post.threadId}/post/${post.id}`}
-                onClick={(e) => { e.preventDefault(); onCopyLink(); }}
-                title="Copy link to this post"
-                style={{ color: islandTheme.color.textMuted, textDecoration: "none", fontWeight: 700 }}
-              >
-                #{idx}
-              </a>
-              <span>· {formatAbsolute(post.createdAt)}</span>
-              <button
-                type="button"
-                className="island-btn"
-                onClick={onCopyLink}
-                title="Copy permalink"
-                aria-label="Copy permalink"
-                style={{ background: "transparent", border: "none", color: copied ? islandTheme.color.successSoft : islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 12, padding: 0 }}
-              >
-                {copied ? "✓ copied" : "🔗"}
-              </button>
-            </span>
-            {post.editedAt ? <span style={{ fontStyle: "italic" }}>edited {formatRelative(post.editedAt)}</span> : null}
+          {/* Everything stays in one left-aligned group: the top-right corner is
+              reserved for the hover PostActionBar, so nothing legible may live
+              under it. */}
+          <div style={{ display: "flex", alignItems: "baseline", fontSize: 12, color: islandTheme.color.textMuted, gap: 8, flexWrap: "wrap", paddingRight: 176 }}>
+            <a
+              href={`/forums/thread/${post.threadId}/post/${post.id}`}
+              onClick={(e) => { e.preventDefault(); onCopyLink(); }}
+              title="Copy link to this post"
+              style={{ color: islandTheme.color.textMuted, textDecoration: "none", fontWeight: 700 }}
+            >
+              #{idx}
+            </a>
+            <span>· {formatAbsolute(post.createdAt)}</span>
+            <button
+              type="button"
+              className="island-btn"
+              onClick={onCopyLink}
+              title="Copy permalink"
+              aria-label="Copy permalink"
+              style={{ background: "transparent", border: "none", color: copied ? islandTheme.color.successSoft : islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 12, padding: 0 }}
+            >
+              {copied ? "✓ copied" : "🔗"}
+            </button>
+            {post.editedAt ? <span style={{ fontStyle: "italic" }}>· edited {formatRelative(post.editedAt)}</span> : null}
           </div>
           <div
             style={{
@@ -551,27 +560,7 @@ function PostCard({
                 myReactions={post.myReactions}
                 customEmoji={customEmoji}
                 onToggle={onReact}
-              />
-              <span aria-hidden="true" style={{ width: 1, alignSelf: "stretch", background: islandTheme.color.cardBorder, margin: "2px 2px" }} />
-              {onQuote ? (
-                <button type="button" className="island-btn" onClick={onQuote} style={ghostBtn}>Quote</button>
-              ) : null}
-              {canEdit ? (
-                <button type="button" className="island-btn" onClick={onEdit} style={ghostBtn}>Edit</button>
-              ) : null}
-              {canEdit ? (
-                <button type="button" className="island-btn" onClick={onDelete} style={{ ...ghostBtn, color: islandTheme.color.dangerText }}>Delete</button>
-              ) : null}
-              {!isOwner ? (
-                <button type="button" className="island-btn" onClick={onReport} style={ghostBtn}>Report</button>
-              ) : null}
-              <SharePopover
-                contentType="forum_post"
-                contentId={post.id}
-                fallbackTitle="Boneless Island forum post"
-                fallbackUrl={`${window.location.origin}/forums/thread/${post.threadId}/post/${post.id}`}
-                variant="label"
-                align="left"
+                showAddButton={false}
               />
             </div>
           ) : null}

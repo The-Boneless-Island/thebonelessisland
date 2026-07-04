@@ -6,19 +6,25 @@ import { renderMarkdown, surroundSelection, prefixLines } from "../../lib/markdo
 import { islandTheme } from "../../theme.js";
 import type { ForumAttachment, ForumMember, ForumUpload } from "../../types.js";
 
-type MdAction = "bold" | "italic" | "strike" | "code" | "quote" | "ul" | "ol" | "link" | "image";
+// Toolbar actions that live in the full formatting row (shown on focus, or
+// always on touch/no-hover devices). "image" is intentionally excluded here —
+// it moves to a persistent "+" attach trigger rendered alongside this row.
+type MdAction = "bold" | "italic" | "strike" | "code" | "quote" | "ul" | "ol" | "link";
 
 const MD_TOOLBAR: { action: MdAction; glyph: string; title: string }[] = [
-  { action: "bold", glyph: "B", title: "Bold" },
-  { action: "italic", glyph: "i", title: "Italic" },
-  { action: "strike", glyph: "S", title: "Strikethrough" },
-  { action: "code", glyph: "</>", title: "Code" },
+  { action: "bold", glyph: "B", title: "Bold (Ctrl+B)" },
+  { action: "italic", glyph: "i", title: "Italic (Ctrl+I)" },
+  { action: "strike", glyph: "S", title: "Strikethrough (Ctrl+Shift+X)" },
+  { action: "code", glyph: "</>", title: "Code (Ctrl+E)" },
   { action: "quote", glyph: "❝", title: "Quote" },
   { action: "ul", glyph: "•", title: "Bulleted list" },
   { action: "ol", glyph: "1.", title: "Numbered list" },
-  { action: "link", glyph: "🔗", title: "Link" },
-  { action: "image", glyph: "🖼", title: "Image" }
+  { action: "link", glyph: "🔗", title: "Link (Ctrl+K)" }
 ];
+
+// The small selection-toolbar shown near a text selection on hover-capable
+// devices (see FloatingSelectionToolbar below) — a tight subset of the above.
+const MINI_TOOLBAR: MdAction[] = ["bold", "italic", "strike", "link"];
 
 const mdToolBtn: React.CSSProperties = {
   minWidth: 44,
@@ -34,6 +40,128 @@ const mdToolBtn: React.CSSProperties = {
   cursor: "pointer",
   font: "inherit"
 };
+
+const mdToolBtnSm: React.CSSProperties = {
+  ...mdToolBtn,
+  minWidth: 32,
+  minHeight: 32,
+  height: 32,
+  padding: "0 6px",
+  fontSize: 12
+};
+
+// Enter-to-continue-list: matches the CURRENT LINE (not the whole value) to
+// decide whether Enter should insert a fresh list-item prefix. Captures the
+// leading whitespace + the marker + one trailing space, and separately the
+// rest of the line's content so we can tell an empty item ("- " with nothing
+// typed after it) from a real one.
+const BULLET_LINE_RE = /^(\s*)([-*+])(\s)(.*)$/;
+const ORDERED_LINE_RE = /^(\s*)(\d+)([.)])(\s)(.*)$/;
+
+/** A bare URL and nothing else — used to gate the paste-onto-selection link-wrap. */
+const BARE_URL_RE = /^https?:\/\/\S+$/i;
+
+const MAX_ATTACHMENTS = 10;
+
+/** Result of a batch image upload: what got attached + a user-facing error summary, if any. */
+type UploadBatchResult = { added: ForumUpload[]; error: string | null };
+
+/**
+ * Shared upload path for every "turn image file(s) into ForumUpload records"
+ * flow — the ImageDropzone click/drag target, and MarkdownEditor's inline
+ * paste/drop onto the textarea. One function so upload endpoint, size/rate
+ * limit handling, and partial-failure messaging never drift between them.
+ */
+async function uploadForumImages(files: File[], currentCount: number): Promise<UploadBatchResult> {
+  const slots = MAX_ATTACHMENTS - currentCount;
+  if (slots <= 0) return { added: [], error: `Up to ${MAX_ATTACHMENTS} images per post.` };
+  const list = files.filter((f) => f.type.startsWith("image/")).slice(0, slots);
+  if (list.length === 0) return { added: [], error: null };
+  const added: ForumUpload[] = [];
+  let failed = 0;
+  let lastMsg = "Upload failed";
+  for (const f of list) {
+    try {
+      const fd = new FormData();
+      fd.append("file", f);
+      const r = await apiFetch("/forums/uploads", { method: "POST", body: fd });
+      const data = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(data?.error ?? "Upload failed");
+      added.push(data as ForumUpload);
+    } catch (e) {
+      failed++;
+      if (e instanceof Error && e.message) lastMsg = e.message;
+    }
+  }
+  // Summarize partial failures (don't let one file's error mask the rest),
+  // while still surfacing the server's reason for the last failure.
+  const error =
+    failed > 0
+      ? failed === list.length
+        ? failed === 1
+          ? lastMsg
+          : `All ${failed} uploads failed — ${lastMsg}`
+        : `${failed} of ${list.length} images failed — ${lastMsg}`
+      : null;
+  return { added, error };
+}
+
+/**
+ * Replace `[selStart, selEnd)` in a focused textarea with `text`, undo-stack
+ * friendly. Tries `document.execCommand("insertText", …)` first — despite
+ * being a legacy API, every browser this project supports still implements
+ * it, and it's the only reliable way to keep native Ctrl+Z sane for a
+ * programmatic insert (the browser records its own undo entry instead of us
+ * clobbering `.value` directly). execCommand mutates the DOM value and fires
+ * a real "input" event, which is exactly what a controlled React <textarea>
+ * listens for — so the existing `onChange={(e) => …}` on the element fires
+ * on its own and we must NOT call `onChange` ourselves on that path (it
+ * would double-apply). Falls back to direct value assignment + manual caret
+ * restore (same approach as surroundSelection/prefixLines) only when
+ * execCommand is unavailable/unsupported (e.g. execCommand missing entirely,
+ * or a future browser drops it) and calls `onChange` itself in that case.
+ *
+ * By default the caret ends up right after the inserted text (native
+ * execCommand behavior, mirrored in the fallback). Pass `finalSelection` to
+ * land somewhere else instead (e.g. Ctrl+K needs the caret/selection to sit
+ * INSIDE the inserted `[]()`/`(https://)` template, not after it) — it's
+ * applied identically after either path, so callers never have to reason
+ * about execCommand-succeeded vs. fallback timing.
+ */
+function insertTextAtSelection(
+  ta: HTMLTextAreaElement,
+  onChange: (v: string) => void,
+  selStart: number,
+  selEnd: number,
+  text: string,
+  finalSelection?: { start: number; end: number }
+): void {
+  ta.focus();
+  ta.setSelectionRange(selStart, selEnd);
+  let handled = false;
+  try {
+    handled = typeof document.execCommand === "function" && document.execCommand("insertText", false, text);
+  } catch {
+    handled = false;
+  }
+  if (!handled) {
+    // Fallback: direct value manipulation with manual caret restore.
+    const value = ta.value;
+    onChange(value.slice(0, selStart) + text + value.slice(selEnd));
+  }
+  if (finalSelection) {
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(finalSelection.start, finalSelection.end);
+    });
+  } else if (!handled) {
+    const caret = selStart + text.length;
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+    });
+  }
+}
 
 // Crew member list for @mention autocomplete — fetched once, module-cached.
 let forumMembersCache: ForumMember[] | null = null;
@@ -72,19 +200,35 @@ export function MarkdownEditor({
   onChange,
   rows = 8,
   placeholder,
-  textareaRef
+  textareaRef,
+  uploads,
+  onUploadsChange
 }: {
   value: string;
   onChange: (v: string) => void;
   rows?: number;
   placeholder?: string;
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
+  /**
+   * The same pending-attachment list/setter the parent panel already passes
+   * to its sibling <ImageDropzone>. Optional — when omitted, inline
+   * paste/drop of an image file onto the textarea is disabled (falls back to
+   * default browser paste behavior) since there'd be nowhere to register the
+   * upload for submission. Both current call sites (ForumComposePanel,
+   * ForumThreadPanel's reply box) already own this state, so they pass it
+   * straight through to both MarkdownEditor and ImageDropzone.
+   */
+  uploads?: ForumUpload[];
+  onUploadsChange?: (next: ForumUpload[]) => void;
 }) {
   const internalRef = useRef<HTMLTextAreaElement | null>(null);
   const ref = textareaRef ?? internalRef;
   const [preview, setPreview] = useState(false);
   const members = useForumMembers();
   const [mention, setMention] = useState<{ query: string; start: number } | null>(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [hasSelection, setHasSelection] = useState(false);
 
   const mentionMatches = useMemo(() => {
     if (!mention) return [];
@@ -120,17 +264,38 @@ export function MarkdownEditor({
     if (!ta) return;
     const s = ta.selectionStart ?? value.length;
     const e = ta.selectionEnd ?? value.length;
+    // Each branch's replaced span in the ORIGINAL value: surroundSelection
+    // always replaces exactly [s, e); prefixLines replaces from the start of
+    // the current line (which may be < s) through e. Tracking the exact span
+    // here (rather than diffing old/new value afterwards) lets us hand
+    // execCommand just the replacement text so native undo stays sane.
     let next;
+    let replaceStart = s;
     switch (action) {
       case "bold": next = surroundSelection(value, s, e, "**", "**", "bold text"); break;
       case "italic": next = surroundSelection(value, s, e, "*", "*", "italic text"); break;
       case "strike": next = surroundSelection(value, s, e, "~~", "~~", "struck"); break;
       case "code": next = surroundSelection(value, s, e, "`", "`", "code"); break;
       case "link": next = surroundSelection(value, s, e, "[", "](https://)", "link text"); break;
-      case "image": next = surroundSelection(value, s, e, "![", "](https://)", "alt text"); break;
-      case "quote": next = prefixLines(value, s, e, "> ", "quote"); break;
-      case "ul": next = prefixLines(value, s, e, "- ", "item"); break;
-      case "ol": next = prefixLines(value, s, e, "1. ", "item"); break;
+      case "quote": next = prefixLines(value, s, e, "> ", "quote"); replaceStart = value.lastIndexOf("\n", s - 1) + 1; break;
+      case "ul": next = prefixLines(value, s, e, "- ", "item"); replaceStart = value.lastIndexOf("\n", s - 1) + 1; break;
+      case "ol": next = prefixLines(value, s, e, "1. ", "item"); replaceStart = value.lastIndexOf("\n", s - 1) + 1; break;
+    }
+    const insertText = next.value.slice(replaceStart, next.value.length - (value.length - e));
+    let handled = false;
+    ta.focus();
+    ta.setSelectionRange(replaceStart, e);
+    try {
+      handled = typeof document.execCommand === "function" && document.execCommand("insertText", false, insertText);
+    } catch {
+      handled = false;
+    }
+    if (handled) {
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(next.selStart, next.selEnd);
+      });
+      return;
     }
     onChange(next.value);
     requestAnimationFrame(() => {
@@ -139,10 +304,174 @@ export function MarkdownEditor({
     });
   }
 
+  /**
+   * Upload image file(s) via the same path ImageDropzone uses, then insert
+   * markdown image syntax for each at the current caret and register the
+   * upload(s) in the parent's attachment list — shared by textarea paste and
+   * textarea drop (item 3a/4 in the spec). No-ops quietly if the parent
+   * didn't wire uploads/onUploadsChange (nowhere to register the attachment).
+   */
+  async function uploadAndInsertImages(files: File[]) {
+    if (!onUploadsChange || files.length === 0) return;
+    const ta = ref.current;
+    setUploadBusy(true);
+    setUploadError(null);
+    const currentUploads = uploads ?? [];
+    const { added, error } = await uploadForumImages(files, currentUploads.length);
+    if (added.length) {
+      onUploadsChange([...currentUploads, ...added]);
+      if (ta) {
+        const markdownText = added.map((u) => `![image](${u.url})\n`).join("");
+        const pos = ta.selectionStart ?? value.length;
+        insertTextAtSelection(ta, onChange, pos, ta.selectionEnd ?? pos, markdownText);
+      }
+    }
+    if (error) setUploadError(error);
+    setUploadBusy(false);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const ta = e.currentTarget;
+    const mod = e.ctrlKey || e.metaKey;
+
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "b") { e.preventDefault(); apply("bold"); return; }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "i") { e.preventDefault(); apply("italic"); return; }
+    if (mod && !e.altKey && e.shiftKey && e.key.toLowerCase() === "x") { e.preventDefault(); apply("strike"); return; }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "e") { e.preventDefault(); apply("code"); return; }
+    if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      const s = ta.selectionStart ?? value.length;
+      const end = ta.selectionEnd ?? value.length;
+      if (s === end) {
+        // No selection: insert an empty template, caret inside the link-text brackets.
+        insertTextAtSelection(ta, onChange, s, end, "[]()", { start: s + 1, end: s + 1 });
+      } else {
+        // Wrap the selection as link text, caret lands inside the URL portion.
+        const selected = value.slice(s, end);
+        const urlStart = s + 1 + selected.length + 2;
+        insertTextAtSelection(ta, onChange, s, end, `[${selected}](https://)`, {
+          start: urlStart,
+          end: urlStart + "https://".length
+        });
+      }
+      return;
+    }
+
+    // Enter-to-continue-list (item 2). Only for a genuine, unmodified Enter
+    // keydown while typing — never during IME composition or with a
+    // modifier held (Shift+Enter etc. stay as plain newlines). We split at
+    // the actual caret (like every other line-splitting Enter press): text
+    // left of the caret is tested against the list patterns, text right of
+    // the caret carries over onto the new line after the fresh prefix.
+    if (e.key === "Enter" && !mod && !e.shiftKey && !e.altKey && !e.nativeEvent.isComposing) {
+      const pos = ta.selectionStart ?? value.length;
+      const selEnd = ta.selectionEnd ?? pos;
+      if (pos !== selEnd) return; // let a real (non-collapsed) selection just get replaced normally
+      const lineStart = value.lastIndexOf("\n", pos - 1) + 1;
+      const beforeCaret = value.slice(lineStart, pos);
+
+      const bulletMatch = BULLET_LINE_RE.exec(beforeCaret);
+      const orderedMatch = ORDERED_LINE_RE.exec(beforeCaret);
+      if (bulletMatch) {
+        const [, indent, marker, , content] = bulletMatch;
+        e.preventDefault();
+        if (content.trim() === "") {
+          // Empty bullet + Enter: exit list mode by clearing the line instead
+          // of adding another empty item.
+          insertTextAtSelection(ta, onChange, lineStart, pos, "");
+        } else {
+          insertTextAtSelection(ta, onChange, pos, pos, `\n${indent}${marker} `);
+        }
+        return;
+      }
+      if (orderedMatch) {
+        const [, indent, num, punct, , content] = orderedMatch;
+        e.preventDefault();
+        if (content.trim() === "") {
+          insertTextAtSelection(ta, onChange, lineStart, pos, "");
+        } else {
+          const nextNum = Number(num) + 1;
+          insertTextAtSelection(ta, onChange, pos, pos, `\n${indent}${nextNum}${punct} `);
+        }
+        return;
+      }
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const ta = e.currentTarget;
+    // Safari sometimes reports clipboardData.files as undefined rather than
+    // an empty FileList on a plain-text paste — guard before iterating.
+    const files = e.clipboardData?.files;
+    const imageFiles = files && files.length > 0 ? Array.from(files).filter((f) => f.type.startsWith("image/")) : [];
+    if (imageFiles.length > 0 && onUploadsChange) {
+      e.preventDefault();
+      void uploadAndInsertImages(imageFiles);
+      return;
+    }
+
+    // Bare-URL-onto-selection → turn the selection into a markdown link
+    // (only when something is actually selected; otherwise let the paste
+    // happen normally so the auto-linkify in renderMarkdown handles it).
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    const s = ta.selectionStart ?? 0;
+    const end = ta.selectionEnd ?? 0;
+    if (s !== end && BARE_URL_RE.test(text.trim())) {
+      e.preventDefault();
+      const selected = value.slice(s, end);
+      insertTextAtSelection(ta, onChange, s, end, `[${selected}](${text.trim()})`);
+    }
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLTextAreaElement>) {
+    const files = e.dataTransfer?.files;
+    const imageFiles = files && files.length > 0 ? Array.from(files).filter((f) => f.type.startsWith("image/")) : [];
+    if (imageFiles.length === 0 || !onUploadsChange) return;
+    e.preventDefault();
+    void uploadAndInsertImages(imageFiles);
+  }
+
+  const attachInputRef = useRef<HTMLInputElement | null>(null);
+  const attachDisabled = !onUploadsChange || uploadBusy || (uploads?.length ?? 0) >= MAX_ATTACHMENTS;
+
+  function updateSelectionState() {
+    const ta = ref.current;
+    setHasSelection(Boolean(ta && ta.selectionStart !== ta.selectionEnd));
+  }
+
   return (
-    <div style={{ display: "grid", gap: 6, position: "relative" }}>
+    <div className="bi-md-editor" style={{ display: "grid", gap: 6, position: "relative" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", gap: 4, flexWrap: "wrap", flex: 1, opacity: preview ? 0.4 : 1, pointerEvents: preview ? "none" : "auto" }}>
+        {onUploadsChange ? (
+          <>
+            <button
+              type="button"
+              className="island-btn"
+              title="Attach image"
+              aria-label="Attach image"
+              disabled={attachDisabled}
+              onClick={() => attachInputRef.current?.click()}
+              style={{ ...mdToolBtn, opacity: preview ? 0.4 : 1, pointerEvents: preview ? "none" : "auto" }}
+            >
+              {uploadBusy ? "…" : "+"}
+            </button>
+            <input
+              ref={attachInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                if (e.target.files) void uploadAndInsertImages(Array.from(e.target.files));
+                e.target.value = "";
+              }}
+            />
+          </>
+        ) : null}
+        <div
+          className="bi-md-toolbar-row"
+          style={{ display: "flex", gap: 4, flexWrap: "wrap", flex: 1, opacity: preview ? 0.4 : 1, pointerEvents: preview ? "none" : "auto" }}
+        >
           {MD_TOOLBAR.map((t) => (
             <button
               key={t.action}
@@ -197,16 +526,29 @@ export function MarkdownEditor({
           {value.trim() ? renderMarkdown(value) : <span style={{ color: islandTheme.color.textMuted }}>Nothing to preview yet.</span>}
         </div>
       ) : (
-        <textarea
-          ref={ref}
-          value={value}
-          onChange={(e) => onTextChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-          onBlur={() => window.setTimeout(() => setMention(null), 150)}
-          rows={rows}
-          placeholder={placeholder}
-          style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
-        />
+        <div style={{ position: "relative" }}>
+          <textarea
+            ref={ref}
+            value={value}
+            onChange={(e) => onTextChange(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onBlur={() => { window.setTimeout(() => setMention(null), 150); setHasSelection(false); }}
+            onKeyDown={handleKeyDown}
+            onKeyUp={updateSelectionState}
+            onPaste={handlePaste}
+            onDrop={handleDrop}
+            onDragOver={(e) => { if (e.dataTransfer?.types?.includes("Files")) e.preventDefault(); }}
+            onSelect={updateSelectionState}
+            onMouseUp={updateSelectionState}
+            rows={rows}
+            placeholder={placeholder}
+            style={{ ...islandInputStyle, width: "100%", padding: "10px 14px", fontSize: 14, fontFamily: "inherit", resize: "vertical" }}
+          />
+          <FloatingSelectionToolbar visible={hasSelection} onApply={apply} />
+        </div>
       )}
+      {uploadError ? (
+        <span style={{ fontSize: 12, color: islandTheme.color.dangerSoft }}>{uploadError}</span>
+      ) : null}
       {!preview && mention && mentionMatches.length > 0 ? (
         <div
           style={{
@@ -255,11 +597,93 @@ export function MarkdownEditor({
           ))}
         </div>
       ) : null}
+      <style>{`
+        /*
+         * Contextual toolbar (spec item 5): the full formatting row is
+         * hidden by default and revealed once the user focuses anywhere
+         * within the editor (textarea, its buttons, the mention popup),
+         * via :focus-within on the wrapping .bi-md-editor. Plain CSS rather
+         * than a focus/blur-driven React state so nothing re-renders (and
+         * potentially disturbs textarea selection/caret) just to toggle
+         * this row's visibility.
+         *
+         * Touch/no-hover devices keep it always visible (there's no
+         * reliable floating selection toolbar there — see
+         * FloatingSelectionToolbar, which is hover-only) so formatting
+         * stays reachable.
+         */
+        .bi-md-toolbar-row { display: none; }
+        .bi-md-editor:focus-within .bi-md-toolbar-row { display: flex; }
+        @media (hover: none) {
+          .bi-md-toolbar-row { display: flex !important; }
+          /* No reliable floating toolbar without hover — the always-visible
+             row above is the only formatting affordance on these devices. */
+          .bi-md-mini-toolbar { display: none !important; }
+        }
+      `}</style>
     </div>
   );
 }
 
-const MAX_ATTACHMENTS = 10;
+/**
+ * Small selection-linked mini-toolbar (spec item 6, desktop-only). Getting a
+ * textarea selection's on-screen bounding rect is notoriously fiddly
+ * (textareas don't expose per-character geometry like contentEditable does),
+ * so this ships the documented, explicitly-acceptable fallback: instead of
+ * floating exactly over the selected text, it anchors to a fixed spot in the
+ * textarea's own corner whenever a selection exists, and disappears when the
+ * selection clears. Hidden entirely on (hover: none) devices via CSS, since
+ * touch selection + a corner-anchored popup fights native text-selection
+ * handles more than it helps (those devices keep the full row visible
+ * instead — see the :focus-within/(hover:none) CSS above).
+ */
+function FloatingSelectionToolbar({ visible, onApply }: { visible: boolean; onApply: (action: MdAction) => void }) {
+  if (!visible) return null;
+  return (
+    <div
+      className="bi-md-mini-toolbar"
+      // Mouse-down (not click) + preventDefault so the textarea never loses
+      // focus/selection before `onApply` reads it.
+      onMouseDown={(e) => e.preventDefault()}
+      style={{
+        position: "absolute",
+        top: 6,
+        right: 6,
+        zIndex: 5,
+        display: "flex",
+        gap: 3,
+        padding: 3,
+        borderRadius: 8,
+        background: islandTheme.color.menuBg,
+        backdropFilter: islandTheme.glass.blurMenu,
+        WebkitBackdropFilter: islandTheme.glass.blurMenu,
+        border: `1px solid ${islandTheme.color.border}`,
+        boxShadow: islandTheme.shadow.menu
+      }}
+    >
+      {MINI_TOOLBAR.map((action) => {
+        const t = MD_TOOLBAR.find((m) => m.action === action);
+        if (!t) return null;
+        return (
+          <button
+            key={action}
+            type="button"
+            title={t.title}
+            aria-label={t.title}
+            onClick={() => onApply(action)}
+            style={{
+              ...mdToolBtnSm,
+              fontStyle: action === "italic" ? "italic" : "normal",
+              textDecoration: action === "strike" ? "line-through" : "none"
+            }}
+          >
+            {t.glyph}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function ImageDropzone({
   uploads,
@@ -274,40 +698,11 @@ export function ImageDropzone({
   const [dragOver, setDragOver] = useState(false);
 
   async function handleFiles(files: FileList | File[]) {
-    const slots = MAX_ATTACHMENTS - uploads.length;
-    if (slots <= 0) { setError(`Up to ${MAX_ATTACHMENTS} images per post.`); return; }
-    const list = Array.from(files).filter((f) => f.type.startsWith("image/")).slice(0, slots);
-    if (list.length === 0) return;
     setBusy(true);
     setError(null);
-    const added: ForumUpload[] = [];
-    let failed = 0;
-    let lastMsg = "Upload failed";
-    for (const f of list) {
-      try {
-        const fd = new FormData();
-        fd.append("file", f);
-        const r = await apiFetch("/forums/uploads", { method: "POST", body: fd });
-        const data = await r.json().catch(() => null);
-        if (!r.ok) throw new Error(data?.error ?? "Upload failed");
-        added.push(data as ForumUpload);
-      } catch (e) {
-        failed++;
-        if (e instanceof Error && e.message) lastMsg = e.message;
-      }
-    }
+    const { added, error: err } = await uploadForumImages(Array.from(files), uploads.length);
     if (added.length) onUploadsChange([...uploads, ...added]);
-    // Summarize partial failures (don't let one file's error mask the rest),
-    // while still surfacing the server's reason for the last failure.
-    if (failed > 0) {
-      setError(
-        failed === list.length
-          ? failed === 1
-            ? lastMsg
-            : `All ${failed} uploads failed — ${lastMsg}`
-          : `${failed} of ${list.length} images failed — ${lastMsg}`
-      );
-    }
+    if (err) setError(err);
     setBusy(false);
   }
 
