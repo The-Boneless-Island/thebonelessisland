@@ -407,6 +407,8 @@ export function ForumThreadPanel({
             rows={5}
             textareaRef={replyRef}
             placeholder="Be cool. Stay on topic. **bold**, *italic*, > quote, lists, `code`…"
+            uploads={replyUploads}
+            onUploadsChange={setReplyUploads}
           />
           <div style={{ marginTop: 10 }}>
             <ImageDropzone uploads={replyUploads} onUploadsChange={setReplyUploads} />
