@@ -109,6 +109,13 @@ export function App() {
   const lastGuildMembersRef = useRef<string | null>(null);
   const lastGameNightsRef = useRef<string | null>(null);
   const lastSelectedNightRef = useRef<string | null>(null);
+  // Signature (sorted, joined member ids) of the last member set actually
+  // requested from /recommendations/what-can-we-play, plus whether that
+  // request is still in flight — lets loadComposerRecommendations skip an
+  // exact repeat once a result is already loaded, guarding against any
+  // future identity churn on `selectedMemberIds` re-hammering the endpoint.
+  const lastComposerRequestRef = useRef<string | null>(null);
+  const composerRequestPendingRef = useRef(false);
   // Routing: the URL is the source of truth. `page` is derived from the path so
   // refresh / back-forward / shared links all land on the right page; navigation
   // goes through the router via navigateToPage. `null` page → unknown path → 404.
@@ -1389,9 +1396,27 @@ export function App() {
 
   async function loadComposerRecommendations(memberIds: string[], silent = true) {
     if (memberIds.length === 0) {
+      lastComposerRequestRef.current = null;
       setComposerRecommendations([]);
       return;
     }
+    // Belt-and-braces against future identity churn re-hammering the
+    // recommender: if this exact member set was already requested and a
+    // result is already loaded (not empty, not still in flight), skip the
+    // fetch. Genuinely new member selections always go through — this only
+    // catches exact repeats, e.g. an unstable callback identity upstream
+    // causing `selectedMemberIds` to look "new" while its membership is
+    // actually unchanged.
+    const signature = memberIds.slice().sort().join(",");
+    if (
+      lastComposerRequestRef.current === signature &&
+      !composerRequestPendingRef.current &&
+      composerRecommendations.length > 0
+    ) {
+      return;
+    }
+    lastComposerRequestRef.current = signature;
+    composerRequestPendingRef.current = true;
     try {
       const response = await apiFetch("/recommendations/what-can-we-play", {
         method: "POST",
@@ -1415,6 +1440,8 @@ export function App() {
       if (!silent) {
         setStatus(error instanceof Error ? error.message : "Composer recommendation load failed");
       }
+    } finally {
+      composerRequestPendingRef.current = false;
     }
   }
 
@@ -1509,28 +1536,42 @@ export function App() {
   // Resolve the owners of a game from the crew library and seed them as the
   // selected planner members (auto-refires the composer recommendation).
   // Shared by the Library "Plan" shortcut and the Games-page `?plan=` deep
-  // link consumption effect.
-  function onSeedMembersForGame(appId: number) {
-    const game = crewGames.find((row) => row.appId === appId);
-    const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
-    setSelectedMemberIds(ownerIds);
-  }
+  // link consumption effect. Stable identity (useCallback) so it's safe as a
+  // child effect dependency; reads `selectedMemberIds` via the functional
+  // setState form (rather than as a closure dep) so the callback doesn't
+  // change identity every time the selection changes. Idempotent against a
+  // redundant re-seed with the same owner set: returns the same array
+  // reference when membership already matches, so callers relying on
+  // identity (e.g. the composer-recommendations effect keyed on
+  // `selectedMemberIds`) don't see a spurious "new" selection.
+  const onSeedMembersForGame = useCallback(
+    (appId: number) => {
+      const game = crewGames.find((row) => row.appId === appId);
+      const ownerIds = game?.owners.map((owner) => owner.discordUserId) ?? [];
+      setSelectedMemberIds((current) => {
+        const sortedNext = ownerIds.slice().sort();
+        const sortedCurrent = current.slice().sort();
+        const sameMembership =
+          sortedNext.length === sortedCurrent.length &&
+          sortedNext.every((id, index) => id === sortedCurrent[index]);
+        return sameMembership ? current : ownerIds;
+      });
+    },
+    [crewGames]
+  );
 
   // Library "Plan" shortcut: hand off to the Games page via the `?plan=`
   // deep link. Games.tsx's PlanNightCard owns seeding members, preselecting
   // the game itself, scrolling to the composer, and toasting once the crew
   // library data (and its own effects) are ready.
-  function onPlan(appId: number) {
-    navigate(pathForPlanNight(appId));
-  }
+  const onPlan = useCallback((appId: number) => navigate(pathForPlanNight(appId)), [navigate]);
 
-  function openProfile(discordUserId: string) {
-    navigate(pathForIslander(discordUserId));
-  }
+  const openProfile = useCallback(
+    (discordUserId: string) => navigate(pathForIslander(discordUserId)),
+    [navigate]
+  );
 
-  function openGame(appId: number) {
-    navigate(pathForGamePage(appId));
-  }
+  const openGame = useCallback((appId: number) => navigate(pathForGamePage(appId)), [navigate]);
 
   async function loadSteamExclusions() {
     try {
