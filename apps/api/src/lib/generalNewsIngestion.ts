@@ -66,6 +66,13 @@ type GeneralCurationResult = {
   // piece, general internet-infrastructure news). Dropped like guides — the AI
   // gaming-relevance gate is the single authority (not regex).
   offTopic?: boolean;
+  // SECOND gate, independent of offTopic: is this genuinely gaming news, but a
+  // story THIS crew (per the injected crew context) has no plausible hook
+  // into? true = plausible crew hook, keep. false = real gaming news, but no
+  // crew overlap — park it. Required on every non-duplicate/non-offTopic/
+  // non-isGuide result (same tier as whyMatters). Bias uncertain → true; this
+  // gate is for confident misses only.
+  crewFit?: boolean;
   // Semantic fingerprint for merge clustering (v3.2). Normalized lowercase
   // "entity:event-topic", e.g. "poe2:1-0-launch", "ea:layoffs-2026q1".
   storyFingerprint?: string;
@@ -104,7 +111,8 @@ type ValidationError =
   | "summary_too_long"
   | "missing_why_matters"
   | "missing_sources"
-  | "invalid_source_urls";
+  | "invalid_source_urls"
+  | "missing_crew_fit";
 
 const MAX_RETRIES_PER_ARTICLE = 2;
 const MAX_RETRY_ROUNDS_PER_CYCLE = 2;
@@ -607,7 +615,10 @@ type RawGeneral = {
   ai_retry_count?: number;
 };
 
-async function buildCrewContext(): Promise<string> {
+// Exported so the off-topic/crew-fit sweep classifier (newsOffTopicSweep.ts)
+// can inject the same crew-context ground truth the main curator uses — TTL
+// cached here, so a sweep run costs at most one extra build, not per-card.
+export async function buildCrewContext(): Promise<string> {
   if (_crewContextCache && Date.now() < _crewContextCache.expiresAt) {
     return _crewContextCache.value;
   }
@@ -819,6 +830,25 @@ Borderline rule: if the article itself states a concrete, material effect on gam
 
 When \`offTopic: true\`: set \`relevanceScore\` to 0 and leave \`summary\`, \`whyMatters\`, and \`sources\` empty — the card will be dropped, so don't spend effort summarizing it. Still emit \`title\`, \`subtitle\`, \`tags\`, and \`storyFingerprint\`.
 
+# Crew-fit gate — SECOND CHECK, park stories with no crew hook
+
+This check is INDEPENDENT of the gate above and answers a different question. The gate above asks "is this gaming news at all?" This gate asks "does THIS crew — per the Crew context injected into every call — have any plausible reason to care?" A story can cleanly pass the gate above (it IS gaming news) and still fail this one (nobody here is going to read it). Run this check on every article that is NOT \`offTopic\`.
+
+Set \`crewFit: true\` when ANY of the following hold:
+- The story touches a game or franchise the crew plays, owns, or has wishlisted (per the Crew context — recent playtime, top owned games, Crew Pick names).
+- It touches a platform, storefront, or service the crew actually uses.
+- It's major industry-wide news any active PC/console gamer would want regardless of personal taste — big acquisitions, major title launches, platform-wide policy changes, GPU pricing news.
+- It clearly matches the crew's genre gravity (per the weighted Crew genre tags in the Crew context) even for a specific title the crew has never touched.
+
+Set \`crewFit: false\` when the story is genuinely gaming news (it already passed the gate above) but is for an audience, genre, or platform the injected Crew context shows zero evidence of interest in — no matching owned/wishlisted game, no matching genre tag, no platform overlap, and it isn't major industry-wide news either.
+
+Canonical example (this exact story already leaked live under the old single-gate logic):
+- "Otome Visual Novel 'Illusion of Itehari: trail' Confirmed for Western Release in 2027" — genuinely gaming news (a real localization announcement), but a niche-genre visual novel with zero overlap with this crew's library, wishlist, or genre preferences. crewFit: false.
+
+Bias: when uncertain, \`crewFit: true\`. This gate exists to catch confident misses only — not to second-guess borderline judgment calls. A high-profile or heavily-covered story leans toward keep even without a direct crew-taste match.
+
+When \`crewFit: false\`: set \`relevanceScore\` to 0 and leave \`summary\`, \`whyMatters\`, and \`sources\` empty — same economy rule as \`offTopic\`, the card will be parked so don't spend effort summarizing it. Still emit \`title\`, \`subtitle\`, \`tags\`, and \`storyFingerprint\`.
+
 # Output sections (every article, every time)
 
 ## 1. Rewritten Title
@@ -859,7 +889,7 @@ The connection must be real and concrete — their games, their platforms, their
 
 Do NOT use phrases like "this is exciting," "this could be impactful," or any generic framing. Write like you're telling a friend who plays in this server, not filing a press release.
 
-If you cannot state a genuine gaming reason this crew would care, that is the signal the story is off-topic — set \`offTopic: true\` instead of manufacturing a connection.
+If you cannot state a genuine reason THIS crew would care: if the story isn't gaming at all, set \`offTopic: true\`; if it IS gaming but outside this crew's orbit (per the crew-fit gate above), set \`crewFit: false\`. Never publish a card whose \`whyMatters\` text admits the crew probably doesn't care — that admission IS the \`crewFit: false\` signal, not something to publish anyway.
 
 If the news is breaking, frame it with urgency — signal that immediate attention matters. For evergreen analysis or updates, use standard treatment.
 
@@ -1073,6 +1103,7 @@ Return a JSON array — one object per input article, in the same order. Every f
     "duplicate": <true | false>,
     "isGuide": <true | false — evergreen player how-to / walkthrough / tier-list / best-build content; when true set relevanceScore 0 and leave summary, whyMatters, sources empty>,
     "offTopic": <true | false — story is not about video games or the video-game industry; when true set relevanceScore 0 and leave summary, whyMatters, sources empty>,
+    "crewFit": <true | false — SECOND gate, independent of offTopic: is this gaming news THIS crew has a plausible hook into (per Crew context)? REQUIRED whenever offTopic is false and duplicate/isGuide are false. When false set relevanceScore 0 and leave summary, whyMatters, sources empty. Bias uncertain → true>,
     "storyFingerprint": "<entity:event-topic — REQUIRED on every article>",
     "mergesIntoExistingId": "<existingId of parent story, or null>",
     "updatedTitle": "<refreshed headline for the parent; only when mergesIntoExistingId is set>",
@@ -1203,6 +1234,10 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
     duplicate: asBool(obj.duplicate),
     isGuide: asBool(obj.isGuide ?? obj.is_guide),
     offTopic: asBool(obj.offTopic ?? obj.off_topic),
+    crewFit:
+      obj.crewFit === undefined && obj.crew_fit === undefined
+        ? undefined
+        : asBool(obj.crewFit ?? obj.crew_fit),
     storyFingerprint: pickString(obj, "storyFingerprint", "story_fingerprint") || undefined,
     mergesIntoExistingId:
       pickString(obj, "mergesIntoExistingId", "merges_into_existing_id") || null,
@@ -1227,9 +1262,11 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
 }
 
 function applyDefaultRelevanceScore(result: GeneralCurationResult): GeneralCurationResult {
-  // Guides and off-topic stories are deliberately excluded — never salvage them
-  // with a fallback score.
-  if (result.isGuide || result.offTopic) return { ...result, relevanceScore: 0 };
+  // Guides, off-topic, and crew-irrelevant stories are deliberately excluded —
+  // never salvage them with a fallback score.
+  if (result.isGuide || result.offTopic || result.crewFit === false) {
+    return { ...result, relevanceScore: 0 };
+  }
   if ((result.relevanceScore ?? 0) > 0) return result;
   if (result.duplicate || isMerge(result)) return result;
   return { ...result, relevanceScore: FALLBACK_RELEVANCE_SCORE };
@@ -1261,7 +1298,10 @@ function buildFallbackCurationResult(item: RawGeneral): GeneralCurationResult | 
       subtitle: "",
       tags: [],
       gameTitle: null,
-      duplicate: true
+      duplicate: true,
+      // Fallback minting never auto-parks on crew-fit — fail open. This branch
+      // is marked `duplicate: true` anyway so it skips validation/persist gating.
+      crewFit: true
     };
   }
 
@@ -1304,7 +1344,10 @@ function buildFallbackCurationResult(item: RawGeneral): GeneralCurationResult | 
     sources: [item.url],
     subtitle: "",
     tags: (item.matched_tags ?? []).slice(0, 3),
-    gameTitle: null
+    gameTitle: null,
+    // Fallback minting never auto-parks on crew-fit — fail open (the AI call
+    // itself failed here, so there's no crew-fit verdict to trust either way).
+    crewFit: true
   };
 }
 
@@ -1400,8 +1443,12 @@ function resolveCurationResultForItem(
 
 function validateCuration(res: GeneralCurationResult, batchUrls: Set<string>): ValidationError[] {
   // Off-topic rows are dropped with an empty summary — skip validation exactly
-  // like duplicates/merges so the empty summary doesn't trigger pointless retries.
-  if (res.duplicate || isMerge(res) || res.offTopic) return [];
+  // like duplicates/merges so the empty summary doesn't trigger pointless
+  // retries. crewFit === false is parked the same way (the second gate,
+  // independent of offTopic) — same carve-out.
+  if (res.duplicate || isMerge(res) || res.offTopic || res.crewFit === false) {
+    return [];
+  }
   const errors: ValidationError[] = [];
   if (!res.title || res.title.trim().length < 8) errors.push("missing_title");
   if (!res.summary || res.summary.trim().length < MIN_SUMMARY_CHARS) {
@@ -1418,6 +1465,12 @@ function validateCuration(res: GeneralCurationResult, batchUrls: Set<string>): V
     );
     if (!allValid) errors.push("invalid_source_urls");
   }
+  // crewFit is required on every non-duplicate/non-merge/non-offTopic/non-guide
+  // result (same tier as whyMatters) — undefined means the model omitted the
+  // field entirely, which the retry-round mechanism should fix. Distinct from
+  // an explicit `false` (handled by the early return above). isGuide rows are
+  // exempt: the prompt never asks the model to emit crewFit for guide content.
+  if (res.crewFit === undefined && !res.isGuide) errors.push("missing_crew_fit");
   return errors;
 }
 
@@ -1462,7 +1515,7 @@ async function curateBatchWithValidation(
       failed
         .map((o) => `${o.item.external_id}: ${o.errors.join(",")}`)
         .join(" | ") +
-      `. Return corrected JSON for these IDs only: populate every required field; summaries must be at least ${MIN_SUMMARY_CHARS} characters — when the excerpt is thin, expand with well-established background context (what the game/studio is, its history, why this matters), NOT padding, while keeping event facts source-bound; for summary_too_long, trim under 1350 words by cutting the least-important detail first.`;
+      `. Return corrected JSON for these IDs only: populate every required field; summaries must be at least ${MIN_SUMMARY_CHARS} characters — when the excerpt is thin, expand with well-established background context (what the game/studio is, its history, why this matters), NOT padding, while keeping event facts source-bound; for summary_too_long, trim under 1350 words by cutting the least-important detail first; for missing_crew_fit, apply the crew-fit gate and emit an explicit true/false (bias uncertain toward true).`;
 
     const retryItems = failed.map((o) => o.item);
     console.warn(
@@ -1597,6 +1650,26 @@ async function persistCurationOutcome(
       [item.id]
     );
     console.log(`[generalNews] off-topic dropped external=${item.external_id}`);
+    return { persisted: true, failed: false };
+  }
+
+  // Crew-irrelevant (genuinely gaming news, but no hook for THIS crew) — the
+  // SECOND gate, independent of offTopic. Same drop-before-publish treatment,
+  // distinct pre_filter_reason so health/admin can tell the two failure modes
+  // apart.
+  if (result.crewFit === false) {
+    await db.query(
+      `UPDATE general_news
+         SET ai_relevance_score = 0,
+             ai_summary = NULL,
+             ai_curated_at = NOW(),
+             ai_validation_failed = FALSE,
+             ai_last_validation_errors = NULL,
+             pre_filter_reason = 'crew_irrelevant'
+       WHERE id = $1`,
+      [item.id]
+    );
+    console.log(`[generalNews] crew-irrelevant dropped external=${item.external_id}`);
     return { persisted: true, failed: false };
   }
 
