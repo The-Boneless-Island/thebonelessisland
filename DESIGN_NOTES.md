@@ -250,6 +250,31 @@ on `claude/confident-mendel-34a474`; that went stale — `a2ee84b` is an ancesto
   fire-and-forget, never fails the request. (Candidate for retirement onto the share
   pipeline — see `BACKLOG.md` → Forums.)
 
+## Overlays must portal (the backdrop-filter containing-block gotcha)
+
+Learned the hard way in the 2026-07 UX refinement sweep (PRs #98–#100). Every page
+renders inside `<main class="bi-main">`, which carries `backdrop-filter` (the glass
+look). Per the Filter Effects spec, a non-`none` backdrop-filter makes that element a
+**containing block for `position: fixed` descendants** — so any fixed-position overlay
+rendered inside a page anchors to the page column, not the viewport (the
+GameDetailDrawer "opened at the top of the page" and looked blank when scrolled). The
+same family of properties (`overflow: hidden`, `isolation: isolate`, transforms, the
+card glass blur) clips/traps `position: absolute` popovers (the share menu and emoji
+picker were unusable).
+
+**The rule: anything that must float above the page — drawers, wizards, popovers,
+lightboxes — must `createPortal(..., document.body)`.** Anchored menus go through the
+shared `PortalPopover` primitive (`apps/web/src/components/PortalPopover.tsx`: fixed
+positioning from the trigger's rect, vertical flip + horizontal clamp, closes on
+Escape/outside/scroll/resize, focus-return on Escape, bottom-sheet mode under ~560px).
+Do NOT "fix" this by removing the blur from `<main>` — it's the site's look; portals
+are the sanctioned pattern (QuickSwitcher and the forum lightbox predate this rule and
+already comply).
+
+Z-index scale after the sweep: MegaMenu desktop 50 · toasts 90 · MegaMenu mobile
+overlay 200 · PortalPopover menus 300 · QuickSwitcher 400 · drawers/wizards 1000.
+Keep new overlays inside this scale.
+
 ## Feature sweep 2026-07
 
 Durable rationale from the eight-workstream sweep (PRs #89–#96). Full per-item detail

@@ -29,7 +29,7 @@ async function buildCrewContext(discordUserId: string): Promise<string> {
   const [voiceResult, topGamesResult, recentActivityResult] = await Promise.all([
     db.query<{ discord_user_id: string; display_name: string }>(
       `SELECT discord_user_id, display_name FROM guild_members
-       WHERE guild_id = $1 AND in_guild = TRUE AND in_voice = TRUE
+       WHERE guild_id = $1 AND in_guild = TRUE AND in_voice = TRUE AND is_bot = FALSE
        ORDER BY display_name ASC LIMIT 16`,
       [guildId]
     ),

@@ -65,7 +65,7 @@ async function resolveFeaturedScope(requestedScope: FeaturedScope): Promise<{
       `
         SELECT discord_user_id
         FROM guild_members
-        WHERE guild_id = $1 AND in_guild = TRUE AND in_voice = TRUE
+        WHERE guild_id = $1 AND in_guild = TRUE AND in_voice = TRUE AND is_bot = FALSE
         ORDER BY username ASC
         LIMIT 32
       `,
@@ -80,7 +80,7 @@ async function resolveFeaturedScope(requestedScope: FeaturedScope): Promise<{
     `
       SELECT discord_user_id
       FROM guild_members
-      WHERE guild_id = $1 AND in_guild = TRUE
+      WHERE guild_id = $1 AND in_guild = TRUE AND is_bot = FALSE
       ORDER BY username ASC
       LIMIT 64
     `,

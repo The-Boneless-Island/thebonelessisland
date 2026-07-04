@@ -17,6 +17,30 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Recently shipped
 
+- **UX refinement sweep 2026-07** *(shipped 2026-07-03, PRs #98–#100 via integration
+  train)* — follow-up fixes to the feature sweep below. (1) **The containing-block bug**:
+  `backdrop-filter` on `<main class="bi-main">` (App.tsx) makes it a containing block for
+  `position:fixed` descendants — the GameDetailDrawer was anchoring to the page column
+  (pinned to page top; blank glass when scrolled down). Fixed by portalling to
+  `document.body`; same fix applied to the latent LoanWizard + Games stream-drawer cases;
+  see [`DESIGN_NOTES.md`] → "Overlays must portal". (2) New `PortalPopover` primitive
+  (`components/PortalPopover.tsx`: anchored fixed positioning, flip/clamp, Escape/outside/
+  scroll close, z 300, bottom-sheet under 560px) — SharePopover + forum EmojiPicker
+  migrated onto it, fixing their clipped/behind-everything rendering. (3) Discord-style
+  forum post actions: hover-revealed icon bar top-right of each post (`PostActionBar.tsx`;
+  react + share + quote + edit + delete + report, permissions unchanged; reaction chips
+  stay in the footer; touch devices show the bar dimmed always; reduced-motion honored).
+  (4) Composer modernization (`forumEditor.tsx`, shared by composer + reply): toolbar
+  hidden until focus (always visible on touch), persistent "+" attach, Ctrl/Cmd+B/I/E/K +
+  Ctrl+Shift+X shortcuts, Enter list-continuation (empty item exits), paste-image →
+  upload+insert, paste-URL-onto-selection → link, drag-drop onto the textarea,
+  corner-anchored selection mini-toolbar (desktop), undo-safe inserts via
+  `execCommand("insertText")`. (5) Bot filtering (migration 091 `guild_members.is_bot`):
+  roster sync stores Discord's `user.bot`; `GET /members` excludes bots by default
+  (`?includeBots=1` for the admin People page, which shows a BOT tag); member profile
+  404s for bots; bot-side presence pushes skip bots; weekly-digest highlights, the
+  recommender's voice/crew scopes, and Nuggie chat's "in voice" context exclude bots.
+  Backfill automatic via the 60s roster sync.
 - **Feature sweep 2026-07** *(shipped 2026-07-03, PRs #89–#96 via integration PR)* — eight
   parallel workstreams: (1) bug sweep — Steam achievement % (NUMERIC-as-string `::float8`
   casts), admin blade label overflow, forum OP badge now on the thread author's replies

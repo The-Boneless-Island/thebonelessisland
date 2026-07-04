@@ -16,7 +16,8 @@ const member = (
   roleNames: ["Crew"],
   inVoice: false,
   richPresenceText: null,
-  presenceStatus: "online"
+  presenceStatus: "online",
+  isBot: false
 });
 
 const guildMembers: GuildMember[] = [

@@ -514,29 +514,30 @@ function PostCard({
         </div>
 
         <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12, color: islandTheme.color.textMuted, gap: 12, flexWrap: "wrap" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              <a
-                href={`/forums/thread/${post.threadId}/post/${post.id}`}
-                onClick={(e) => { e.preventDefault(); onCopyLink(); }}
-                title="Copy link to this post"
-                style={{ color: islandTheme.color.textMuted, textDecoration: "none", fontWeight: 700 }}
-              >
-                #{idx}
-              </a>
-              <span>· {formatAbsolute(post.createdAt)}</span>
-              <button
-                type="button"
-                className="island-btn"
-                onClick={onCopyLink}
-                title="Copy permalink"
-                aria-label="Copy permalink"
-                style={{ background: "transparent", border: "none", color: copied ? islandTheme.color.successSoft : islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 12, padding: 0 }}
-              >
-                {copied ? "✓ copied" : "🔗"}
-              </button>
-            </span>
-            {post.editedAt ? <span style={{ fontStyle: "italic" }}>edited {formatRelative(post.editedAt)}</span> : null}
+          {/* Everything stays in one left-aligned group: the top-right corner is
+              reserved for the hover PostActionBar, so nothing legible may live
+              under it. */}
+          <div style={{ display: "flex", alignItems: "baseline", fontSize: 12, color: islandTheme.color.textMuted, gap: 8, flexWrap: "wrap", paddingRight: 176 }}>
+            <a
+              href={`/forums/thread/${post.threadId}/post/${post.id}`}
+              onClick={(e) => { e.preventDefault(); onCopyLink(); }}
+              title="Copy link to this post"
+              style={{ color: islandTheme.color.textMuted, textDecoration: "none", fontWeight: 700 }}
+            >
+              #{idx}
+            </a>
+            <span>· {formatAbsolute(post.createdAt)}</span>
+            <button
+              type="button"
+              className="island-btn"
+              onClick={onCopyLink}
+              title="Copy permalink"
+              aria-label="Copy permalink"
+              style={{ background: "transparent", border: "none", color: copied ? islandTheme.color.successSoft : islandTheme.color.textMuted, cursor: "pointer", font: "inherit", fontSize: 12, padding: 0 }}
+            >
+              {copied ? "✓ copied" : "🔗"}
+            </button>
+            {post.editedAt ? <span style={{ fontStyle: "italic" }}>· edited {formatRelative(post.editedAt)}</span> : null}
           </div>
           <div
             style={{
