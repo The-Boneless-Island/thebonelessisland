@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { apiFetch } from "../api/client.js";
 import { islandTheme } from "../theme.js";
 import { usePushToast } from "../system/toast.js";
+import { PortalPopover } from "./PortalPopover.js";
 
 export type ShareContentType = "forum_thread" | "forum_post" | "news_item" | "activity_event";
 
@@ -99,16 +100,7 @@ export function SharePopover({
   const pushToast = usePushToast();
   const [open, setOpen] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
 
   async function handlePick(target: ShareTarget, e: React.MouseEvent) {
     e.stopPropagation();
@@ -173,8 +165,9 @@ export function SharePopover({
         };
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+    <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
       <button
+        ref={triggerRef}
         type="button"
         onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
         aria-label="Share"
@@ -186,25 +179,16 @@ export function SharePopover({
         <ShareGlyph />
         {variant === "label" ? <span>Share</span> : null}
       </button>
-      {open ? (
+      <PortalPopover
+        open={open}
+        onClose={() => setOpen(false)}
+        anchorRef={triggerRef}
+        align={align}
+        ariaLabel="Share"
+        style={{ minWidth: 200, maxWidth: 260, overflow: "hidden" }}
+      >
         <div
-          role="menu"
           onClick={(e) => e.stopPropagation()}
-          style={{
-            position: "absolute",
-            top: "calc(100% + 6px)",
-            [align]: 0,
-            minWidth: 200,
-            maxWidth: 260,
-            background: islandTheme.color.menuBg,
-            border: `1px solid ${islandTheme.color.border}`,
-            borderRadius: 12,
-            boxShadow: islandTheme.shadow.menu,
-            backdropFilter: islandTheme.glass.blurMenu,
-            WebkitBackdropFilter: islandTheme.glass.blurMenu,
-            zIndex: 60,
-            overflow: "hidden"
-          }}
         >
           <div
             className="island-mono"
@@ -283,7 +267,7 @@ export function SharePopover({
             <span>Share elsewhere</span>
           </button>
         </div>
-      ) : null}
+      </PortalPopover>
     </div>
   );
 }

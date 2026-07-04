@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState, type CSSProperties, type ReactNode } from "react";
+import { Suspense, lazy, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { islandTheme } from "../../theme.js";
 import type { ForumCustomEmojiMap, ForumReaction } from "../../types.js";
 import { REACTION_META } from "./forumShared.js";
@@ -61,23 +61,31 @@ function ReactionPill({
 /**
  * Renders one post's reaction bar: the 5 legacy quick-react keys, plus any
  * arbitrary Unicode-emoji or Discord-custom-emoji keys already present on the
- * post (from other members' reactions), plus a "+" button opening the full
- * EmojiPicker. Reaction keys are never interpolated as HTML — legacy keys use
- * the REACTION_META emoji lookup, raw Unicode keys render as plain text, and
- * custom-emoji keys render an <img> pointed at the CDN url from customEmoji.
+ * post (from other members' reactions), plus (unless showAddButton is false)
+ * a "+" button opening the full EmojiPicker. Reaction keys are never
+ * interpolated as HTML — legacy keys use the REACTION_META emoji lookup, raw
+ * Unicode keys render as plain text, and custom-emoji keys render an <img>
+ * pointed at the CDN url from customEmoji.
+ *
+ * showAddButton defaults to true; PostActionBar (the per-post hover bar) sets
+ * it false and renders its own "+" trigger instead, so this only shows the
+ * already-placed reaction chips in that layout.
  */
 export function ReactionBar({
   reactions,
   myReactions,
   customEmoji,
-  onToggle
+  onToggle,
+  showAddButton = true
 }: {
   reactions: Partial<Record<ForumReaction, number>>;
   myReactions: ForumReaction[];
   customEmoji: ForumCustomEmojiMap;
   onToggle: (reaction: ForumReaction) => void;
+  showAddButton?: boolean;
 }) {
   const [pickerOpen, setPickerOpen] = useState(false);
+  const addTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   // Extra keys already on the post that aren't part of the legacy quick row —
   // e.g. another member picked a Unicode emoji or a guild custom emoji first.
@@ -124,27 +132,31 @@ export function ReactionBar({
           </ReactionPill>
         );
       })}
-      <button
-        type="button"
-        className="island-btn"
-        onClick={() => setPickerOpen((o) => !o)}
-        title="Add reaction"
-        aria-label="Add reaction"
-        aria-expanded={pickerOpen}
-        style={{
-          ...reactionPillBase,
-          background: islandTheme.color.panelMutedBg,
-          color: islandTheme.color.textMuted,
-          border: `1px solid ${islandTheme.color.cardBorder}`,
-          padding: "4px 8px",
-          fontWeight: 700
-        }}
-      >
-        +
-      </button>
-      {pickerOpen ? (
+      {showAddButton ? (
+        <button
+          ref={addTriggerRef}
+          type="button"
+          className="island-btn"
+          onClick={() => setPickerOpen((o) => !o)}
+          title="Add reaction"
+          aria-label="Add reaction"
+          aria-expanded={pickerOpen}
+          style={{
+            ...reactionPillBase,
+            background: islandTheme.color.panelMutedBg,
+            color: islandTheme.color.textMuted,
+            border: `1px solid ${islandTheme.color.cardBorder}`,
+            padding: "4px 8px",
+            fontWeight: 700
+          }}
+        >
+          +
+        </button>
+      ) : null}
+      {showAddButton && pickerOpen ? (
         <Suspense fallback={null}>
           <EmojiPicker
+            anchorRef={addTriggerRef}
             onClose={() => setPickerOpen(false)}
             onPick={(reaction) => {
               onToggle(reaction);
