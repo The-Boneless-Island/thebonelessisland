@@ -71,6 +71,11 @@ function HomePageInner({
 
   const featuredArticle = generalNews[0] ?? null;
   const trending = useCrewTrending();
+  const activityLastSeenAt = (() => {
+    const raw = profile?.clientState?.activity_last_seen_at;
+    const n = typeof raw === "number" ? raw : 0;
+    return Number.isFinite(n) ? n : 0;
+  })();
 
   return (
     <div>
@@ -114,16 +119,25 @@ function HomePageInner({
           />
         </section>
         {featuredArticle && <FeaturedNewsCard item={featuredArticle} onNavigate={onNavigate} />}
-        <CrewTrending onNavigate={onNavigate} games={trending.games} loading={trending.loading} />
-        <ActivityFeed
-          events={activityEvents}
-          onNavigate={onNavigate}
-          activityLastSeenAt={(() => {
-            const raw = profile?.clientState?.activity_last_seen_at;
-            const n = typeof raw === "number" ? raw : 0;
-            return Number.isFinite(n) ? n : 0;
-          })()}
-        />
+        {/* CrewTrending renders null on a quiet week (no trending data) — only
+            reserve it a column in the duo grid when it'll actually render,
+            otherwise ActivityFeed goes full-width so there's no dead half. */}
+        {trending.loading || (trending.games && trending.games.length > 0) ? (
+          <div className="bi-home-duo">
+            <CrewTrending onNavigate={onNavigate} games={trending.games} loading={trending.loading} />
+            <ActivityFeed
+              events={activityEvents}
+              onNavigate={onNavigate}
+              activityLastSeenAt={activityLastSeenAt}
+            />
+          </div>
+        ) : (
+          <ActivityFeed
+            events={activityEvents}
+            onNavigate={onNavigate}
+            activityLastSeenAt={activityLastSeenAt}
+          />
+        )}
         <DriftLog cards={newsCards} onNavigate={onNavigate} />
         <QuickActions guildId={profile?.guildId ?? null} onNavigate={onNavigate} />
       </div>
@@ -479,8 +493,8 @@ function CrewTrending({
                 aria-hidden="true"
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "18px 92px minmax(0, 1fr) auto",
-                  gap: 12,
+                  gridTemplateColumns: "18px 72px minmax(0, 1fr) auto",
+                  gap: 10,
                   alignItems: "center",
                   padding: "8px 10px",
                   borderRadius: 10,
@@ -489,7 +503,7 @@ function CrewTrending({
                 }}
               >
                 <IslandSkeleton width={14} height={16} />
-                <IslandSkeleton width={92} height={43} radius={8} />
+                <IslandSkeleton width={72} height={34} radius={8} />
                 <div style={{ display: "grid", gap: 6 }}>
                   <IslandSkeleton width="55%" height={12} />
                   <IslandSkeleton width="35%" height={10} />
@@ -546,8 +560,8 @@ function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
         alt={game.name}
         className="bi-trending-row-art"
         style={{
-          width: 92,
-          height: 43,
+          width: 72,
+          height: 34,
           borderRadius: 8,
           border: `1px solid ${islandTheme.color.cardBorder}`
         }}
@@ -1750,7 +1764,11 @@ function ActivityFeed({
             style={{
               ...islandInputStyle,
               flex: "1 1 200px",
-              minWidth: 160,
+              // Narrower floor than the old 160 so this comfortably shares a
+              // row with the sort/date selects at the .bi-home-duo column
+              // width (~half the prior full-bleed section) instead of
+              // forcing an early wrap.
+              minWidth: 140,
               fontSize: 13,
               padding: "0.4rem 0.6rem",
               font: "inherit"
