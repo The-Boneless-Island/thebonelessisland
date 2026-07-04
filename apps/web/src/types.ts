@@ -83,6 +83,7 @@ export type GuildMember = {
   presenceStatus: PresenceStatus | null;
   bannerUrl?: string | null;
   accentColor?: number | null;
+  isBot: boolean;
 };
 
 export type SteamSummary = {
