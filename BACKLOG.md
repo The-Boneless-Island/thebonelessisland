@@ -17,6 +17,28 @@ against code: `NEWS_AI_OVERHAUL_PLAN.md`, `FORUMS_V2_PLAN.md`,
 
 ## Recently shipped
 
+- **Polish sweep 2026-07 (round 3)** *(shipped 2026-07-04, PRs #102–#105 via integration
+  train)* — four fixes off round-1/2 live testing. (1) **Plan-button render loop** (the
+  severe one): the Games `?plan=` deep-link consumption effect listed unstable App.tsx
+  function props as deps → re-ran every App render while the param was present; each run
+  toasted + reseeded planner members (→ a recommendations POST), and react-router v7's
+  transition-priority URL clear kept getting preempted, so the loop self-sustained —
+  hundreds of toasts, tab lockup, and a 100-req/60s rate-limit 429 window. Fixed with a
+  one-shot `consumedPlanRef` guard + `useCallback` on the App callbacks + idempotent
+  member seeding + an exact-repeat guard on the composer POST; the toast queue is now
+  capped at 6 with same-message+tone collapse (`system/toast.tsx`). See `DESIGN_NOTES.md`
+  → "Polish sweep 2026-07". (2) **Flat emoji picker**: `EmojiPicker.tsx` rebuilt as one
+  Discord-style scroll panel (search / localStorage MRU "Frequently used" / guild section
+  fetched on mount / 8 unicode categories, sticky headers, no tabs); `ReactionBar.tsx`
+  chips now render only reactions with count > 0 (zero reactions = no row; legacy five
+  keys render but are no longer offered; `showAddButton` prop removed). (3) **News
+  crew-fit gate**: second AI verdict `crewFit` parks gaming-but-crew-irrelevant stories
+  (`crew_irrelevant`), judged against the injected crew context; sweep v3 retro-parks
+  live leaks (`crew_irrelevant_sweep`, the otome VN card); health exposes
+  `crewIrrelevant`. (4) **Home duo grid**: "Hot this week" ‖ "Activity feed" 2-col
+  ≥981px (`.bi-home-duo`), trending covers 92→72px, ActivityFeed full-width when
+  trending is empty; Friends Online untouched.
+
 - **UX refinement sweep 2026-07** *(shipped 2026-07-03, PRs #98–#100 via integration
   train)* — follow-up fixes to the feature sweep below. (1) **The containing-block bug**:
   `backdrop-filter` on `<main class="bi-main">` (App.tsx) makes it a containing block for
