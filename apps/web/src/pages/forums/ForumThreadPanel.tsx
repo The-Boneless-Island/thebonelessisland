@@ -554,15 +554,12 @@ function PostCard({
           </div>
           {!post.isDeleted && post.attachments.length > 0 ? <AttachmentGallery attachments={post.attachments} /> : null}
           {!post.isDeleted ? (
-            <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
-              <ReactionBar
-                reactions={post.reactions}
-                myReactions={post.myReactions}
-                customEmoji={customEmoji}
-                onToggle={onReact}
-                showAddButton={false}
-              />
-            </div>
+            <ReactionBar
+              reactions={post.reactions}
+              myReactions={post.myReactions}
+              customEmoji={customEmoji}
+              onToggle={onReact}
+            />
           ) : null}
         </div>
       </div>
