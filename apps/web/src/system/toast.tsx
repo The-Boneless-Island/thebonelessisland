@@ -12,6 +12,11 @@ export type ToastItem = {
 
 const TOAST_DURATION_MS = 4200;
 const TOAST_EXIT_MS = 260;
+// Hard cap on concurrent toasts. Defense in depth against any bug (deep-link
+// consumption loops, retry storms, etc.) that pushes the same or many toasts
+// in a tight loop — without this, hundreds of animated DOM nodes can pile up
+// and lock the tab before the underlying bug is even visible in the UI.
+const MAX_TOASTS = 6;
 
 // ── Direct toast queue ────────────────────────────────────────────────────────
 // Any code can push a toast by calling pushToast(message, tone) via the
@@ -35,6 +40,16 @@ export function useToastQueue(): ToastQueue {
   const timersRef = useRef<Map<number, number>>(new Map());
   // Exit-animation timers, keyed by toast id.
   const exitTimersRef = useRef<Map<number, number>>(new Map());
+  // Synchronous mirror of `toasts`, updated in lockstep with every call that
+  // also calls setToasts (not via a useEffect, which only syncs after the
+  // next commit). React's setState updater queue does not guarantee the
+  // functional-update callback runs synchronously past the first queued
+  // update on a fiber — so a burst of several pushToast() calls in the same
+  // synchronous tick (e.g. a runaway effect loop) can't rely on reading a
+  // value back out of setToasts's updater. toastsRef is the actual source
+  // of truth for pushToast's cap/dedup decisions; `toasts` state stays only
+  // for rendering.
+  const toastsRef = useRef<ToastItem[]>(toasts);
 
   const remove = useCallback((toastId: number) => {
     const timeoutId = timersRef.current.get(toastId);
@@ -47,7 +62,8 @@ export function useToastQueue(): ToastQueue {
       window.clearTimeout(exitId);
       exitTimersRef.current.delete(toastId);
     }
-    setToasts((current) => current.filter((item) => item.id !== toastId));
+    toastsRef.current = toastsRef.current.filter((item) => item.id !== toastId);
+    setToasts(toastsRef.current);
   }, []);
 
   // Begin the leaving phase: stop the auto-dismiss timer, play the exit
@@ -60,11 +76,10 @@ export function useToastQueue(): ToastQueue {
         window.clearTimeout(timeoutId);
         timersRef.current.delete(toastId);
       }
-      setToasts((current) =>
-        current.map((item) =>
-          item.id === toastId ? { ...item, leaving: true } : item
-        )
+      toastsRef.current = toastsRef.current.map((item) =>
+        item.id === toastId ? { ...item, leaving: true } : item
       );
+      setToasts(toastsRef.current);
       const exitId = window.setTimeout(() => remove(toastId), TOAST_EXIT_MS);
       exitTimersRef.current.set(toastId, exitId);
     },
@@ -104,11 +119,51 @@ export function useToastQueue(): ToastQueue {
 
   const pushToast = useCallback(
     (message: string, tone: ToastTone = "info") => {
+      // Decide against toastsRef (synchronously authoritative — see the ref's
+      // own comment) rather than the `toasts` state value, so this stays
+      // correct even when pushToast is called several times in the same
+      // synchronous tick (e.g. a runaway effect re-firing in a tight loop):
+      // each call sees every earlier call's effect immediately, with no
+      // dependency on a render having happened in between.
+
+      // Duplicate collapsing: a repeat of the same message+tone (e.g. a
+      // caller stuck re-firing) restarts the existing toast's countdown
+      // instead of stacking a new one. Reuse pauseToast (clears the running
+      // timer) + startTimer (sets a fresh one) rather than duplicating that
+      // clear-then-set logic here.
+      const duplicate = toastsRef.current.find(
+        (t) => !t.leaving && t.message === message && t.tone === tone
+      );
+      if (duplicate) {
+        pauseToast(duplicate.id);
+        startTimer(duplicate.id);
+        return;
+      }
+
+      // Cap concurrent toasts: if pushing would exceed MAX_TOASTS, drop the
+      // oldest non-leaving toast immediately (no exit animation) to make
+      // room — protects against any bug that pushes toasts in a tight loop
+      // from piling up hundreds of animated DOM nodes and locking the tab.
+      let next = toastsRef.current;
+      if (next.length >= MAX_TOASTS) {
+        const oldestIndex = next.findIndex((t) => !t.leaving);
+        if (oldestIndex !== -1) {
+          const oldestId = next[oldestIndex].id;
+          const timeoutId = timersRef.current.get(oldestId);
+          if (typeof timeoutId === "number") {
+            window.clearTimeout(timeoutId);
+            timersRef.current.delete(oldestId);
+          }
+          next = next.filter((t) => t.id !== oldestId);
+        }
+      }
+
       const id = nextIdRef.current++;
-      setToasts((current) => [...current, { id, message, tone, leaving: false }]);
+      toastsRef.current = [...next, { id, message, tone, leaving: false }];
+      setToasts(toastsRef.current);
       startTimer(id);
     },
-    [startTimer]
+    [pauseToast, startTimer]
   );
 
   useEffect(

@@ -425,12 +425,26 @@ function PlanNightCard(props: GamesPageProps) {
   // toast, and clear the param. Reads `searchParams` fresh inside the effect
   // (rather than trusting a captured value) so a StrictMode double-invoke is
   // a no-op once the param has already been cleared.
+  //
+  // One-shot guard: `onDraftAppIdChange`/`onSeedMembersForGame` are plain
+  // function props from App.tsx, so their identities can change on renders
+  // unrelated to this effect's own inputs — if that happens while `plan` is
+  // still in the URL (i.e. before setSearchParams's clear has committed),
+  // this effect re-fires. `consumedPlanRef` makes that re-fire a no-op: once
+  // an appId has been handled, it's marked consumed and every subsequent run
+  // for that same id returns immediately, so the toast/seed/scroll body can
+  // only ever execute once per deep link regardless of what else churns.
+  const consumedPlanRef = useRef<number | null>(null);
   useEffect(() => {
     const appId = validPlanAppId(searchParams.get("plan"));
     if (appId == null) return;
     // crewGames loads deferred after auth boot — an empty array here means
     // "not loaded yet", not "not found". Wait for it to populate.
     if (crewGames.length === 0) return;
+    // Already handled this exact id — breaks the re-fire loop even if the
+    // URL hasn't cleared yet.
+    if (consumedPlanRef.current === appId) return;
+    consumedPlanRef.current = appId;
 
     const game = crewGames.find((g) => g.appId === appId);
     if (game) {
