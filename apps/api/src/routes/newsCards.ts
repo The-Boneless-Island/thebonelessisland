@@ -2,7 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { recordEvent } from "../lib/activityEvents.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
 import { privateCache } from "../middleware/privateCache.js";
 
 export const newsCardsRouter = express.Router();
@@ -84,7 +84,7 @@ newsCardsRouter.get("/", requireSession, privateCache(60), async (_req, res) => 
   res.json({ cards: result.rows.map(rowToCard) });
 });
 
-newsCardsRouter.post("/", requireParentRole, async (req, res) => {
+newsCardsRouter.post("/", requireAdminRole, async (req, res) => {
   const body = createSchema.parse(req.body);
   const discordUserId = String(res.locals.userId);
 
@@ -130,7 +130,7 @@ newsCardsRouter.post("/", requireParentRole, async (req, res) => {
   res.status(201).json({ card });
 });
 
-newsCardsRouter.patch("/:id", requireParentRole, async (req, res) => {
+newsCardsRouter.patch("/:id", requireAdminRole, async (req, res) => {
   const id = String(req.params.id);
   const body = updateSchema.parse(req.body);
 
@@ -190,7 +190,7 @@ newsCardsRouter.patch("/:id", requireParentRole, async (req, res) => {
   res.json({ card });
 });
 
-newsCardsRouter.delete("/:id", requireParentRole, async (req, res) => {
+newsCardsRouter.delete("/:id", requireAdminRole, async (req, res) => {
   const id = String(req.params.id);
   const existing = await db.query<{ title: string }>(
     `SELECT title FROM news_cards WHERE id::text = $1 AND archived_at IS NULL`,

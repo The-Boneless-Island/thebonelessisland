@@ -658,7 +658,7 @@ function ForumsEmptyState() {
         body={
           <>
             Forums backend is wired up but no categories were found.<br />
-            Run <code style={{ background: islandTheme.color.panelMutedBg, padding: "2px 6px", borderRadius: 4 }}>npm run db:migrate</code> from <code style={{ background: islandTheme.color.panelMutedBg, padding: "2px 6px", borderRadius: 4 }}>apps/api</code> to create the schema and seed defaults, or have a Parent admin create categories from <strong>Admin → Forum Moderation → Categories</strong>.
+            Run <code style={{ background: islandTheme.color.panelMutedBg, padding: "2px 6px", borderRadius: 4 }}>npm run db:migrate</code> from <code style={{ background: islandTheme.color.panelMutedBg, padding: "2px 6px", borderRadius: 4 }}>apps/api</code> to create the schema and seed defaults, or have an admin create categories from <strong>Admin → Forum Moderation → Categories</strong>.
           </>
         }
       />

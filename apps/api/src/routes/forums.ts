@@ -6,8 +6,8 @@ import { userOrIp } from "../middleware/rateLimit.js";
 import { z } from "zod";
 import { db } from "../db/client.js";
 import { env } from "../config.js";
-import { requireParentRole, requireSession } from "../lib/auth.js";
-import { ensureSettingsLoaded, getAISetting, getGuildId } from "../lib/serverSettings.js";
+import { requireAdminRole, requireSession } from "../lib/auth.js";
+import { ensureSettingsLoaded, getAISetting, getAdminRoleName, getGuildId } from "../lib/serverSettings.js";
 import { recordEvent } from "../lib/activityEvents.js";
 import { applyTransaction } from "../lib/nuggiesLedger.js";
 import { getOrFetchLinkPreview } from "../lib/forumLinkPreview.js";
@@ -134,7 +134,7 @@ function slugify(input: string): string {
     .slice(0, 80) || "thread";
 }
 
-async function isParent(discordUserId: string): Promise<boolean> {
+async function isAdmin(discordUserId: string): Promise<boolean> {
   const r = await db.query<{ role_names: string[] }>(
     `SELECT COALESCE(gm.role_names, '{}'::text[]) AS role_names
      FROM guild_members gm
@@ -142,7 +142,7 @@ async function isParent(discordUserId: string): Promise<boolean> {
      LIMIT 1`,
     [discordUserId]
   );
-  return (r.rows[0]?.role_names ?? []).includes("Parent");
+  return (r.rows[0]?.role_names ?? []).includes(getAdminRoleName());
 }
 
 // The legacy fixed reaction set. Stored verbatim in forum_post_reactions.reaction.
@@ -526,7 +526,7 @@ forumsRouter.post("/categories/:slug/threads", requireSession, async (req, res) 
     [String(req.params.slug)]
   );
   if (!cat.rows[0]) { res.status(404).json({ error: "Category not found" }); return; }
-  if (cat.rows[0].is_locked && !(await isParent(discordUserId))) {
+  if (cat.rows[0].is_locked && !(await isAdmin(discordUserId))) {
     res.status(403).json({ error: "Category is locked" }); return;
   }
   const categoryId = parseInt(cat.rows[0].id, 10);
@@ -828,7 +828,7 @@ forumsRouter.post("/threads/:id/posts", requireSession, async (req, res) => {
     [threadId]
   );
   if (!t.rows[0] || t.rows[0].is_deleted) { res.status(404).json({ error: "Thread not found" }); return; }
-  if (t.rows[0].is_locked && !(await isParent(discordUserId))) {
+  if (t.rows[0].is_locked && !(await isAdmin(discordUserId))) {
     res.status(403).json({ error: "Thread is locked" }); return;
   }
 
@@ -930,7 +930,7 @@ forumsRouter.patch("/posts/:id", requireSession, async (req, res) => {
   if (!p.rows[0] || p.rows[0].is_deleted) { res.status(404).json({ error: "Post not found" }); return; }
 
   const isAuthor = String(p.rows[0].author_user_id) === String(userId);
-  const isMod = await isParent(discordUserId);
+  const isMod = await isAdmin(discordUserId);
   if (!isAuthor && !isMod) { res.status(403).json({ error: "Not authorized" }); return; }
 
   const bodyMin = getSetting("forums_post_min_chars", 2);
@@ -1012,7 +1012,7 @@ forumsRouter.delete("/posts/:id", requireSession, async (req, res) => {
   if (!p.rows[0] || p.rows[0].is_deleted) { res.status(404).json({ error: "Post not found" }); return; }
 
   const isAuthor = String(p.rows[0].author_user_id) === String(userId);
-  const isMod = await isParent(discordUserId);
+  const isMod = await isAdmin(discordUserId);
   if (!isAuthor && !isMod) { res.status(403).json({ error: "Not authorized" }); return; }
 
   if (p.rows[0].is_op) {
@@ -1376,7 +1376,7 @@ forumsRouter.patch("/threads/:id", requireSession, async (req, res) => {
   if (!t.rows[0]) { res.status(404).json({ error: "Thread not found" }); return; }
 
   const isAuthor = String(t.rows[0].author_user_id) === String(userId);
-  const isMod = await isParent(discordUserId);
+  const isMod = await isAdmin(discordUserId);
 
   // Title edit allowed for author or mod. Pin/lock/move are mod-only.
   if (parsed.data.isPinned !== undefined || parsed.data.isLocked !== undefined || parsed.data.categoryId !== undefined) {
@@ -1431,7 +1431,7 @@ forumsRouter.delete("/threads/:id", requireSession, async (req, res) => {
   if (!t.rows[0]) { res.status(404).json({ error: "Thread not found" }); return; }
 
   const isAuthor = String(t.rows[0].author_user_id) === String(userId);
-  const isMod = await isParent(discordUserId);
+  const isMod = await isAdmin(discordUserId);
   if (!isAuthor && !isMod) { res.status(403).json({ error: "Not authorized" }); return; }
 
   await db.query("UPDATE forum_threads SET is_deleted = TRUE WHERE id = $1", [threadId]);
@@ -2036,7 +2036,7 @@ const adminCategorySchema = z.object({
   autoDiscordBridge: z.boolean().optional(),
 });
 
-forumsRouter.post("/admin/categories", requireSession, requireParentRole, async (req, res) => {
+forumsRouter.post("/admin/categories", requireSession, requireAdminRole, async (req, res) => {
   const parsed = adminCategorySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
@@ -2051,7 +2051,7 @@ forumsRouter.post("/admin/categories", requireSession, requireParentRole, async 
 
 const adminUpdateCategorySchema = adminCategorySchema.partial().omit({ slug: true });
 
-forumsRouter.patch("/admin/categories/:id", requireSession, requireParentRole, async (req, res) => {
+forumsRouter.patch("/admin/categories/:id", requireSession, requireAdminRole, async (req, res) => {
   const parsed = adminUpdateCategorySchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
@@ -2072,13 +2072,13 @@ forumsRouter.patch("/admin/categories/:id", requireSession, requireParentRole, a
   res.json({ ok: true });
 });
 
-forumsRouter.delete("/admin/categories/:id", requireSession, requireParentRole, async (req, res) => {
+forumsRouter.delete("/admin/categories/:id", requireSession, requireAdminRole, async (req, res) => {
   const id = parseInt(String(req.params.id), 10);
   await db.query("DELETE FROM forum_categories WHERE id = $1", [id]);
   res.json({ ok: true });
 });
 
-forumsRouter.get("/admin/reports", requireSession, requireParentRole, async (_req, res) => {
+forumsRouter.get("/admin/reports", requireSession, requireAdminRole, async (_req, res) => {
   const r = await db.query<{
     id: string; reason: string; status: string; created_at: string;
     post_id: string | null; thread_id: string | null;
@@ -2126,7 +2126,7 @@ const resolveReportSchema = z.object({
   action: z.enum(["dismiss", "delete_post", "delete_thread"]),
 });
 
-forumsRouter.post("/admin/reports/:id/resolve", requireSession, requireParentRole, async (req, res) => {
+forumsRouter.post("/admin/reports/:id/resolve", requireSession, requireAdminRole, async (req, res) => {
   const parsed = resolveReportSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
@@ -2178,7 +2178,7 @@ forumsRouter.post("/admin/reports/:id/resolve", requireSession, requireParentRol
   res.json({ ok: true });
 });
 
-forumsRouter.get("/admin/bans", requireSession, requireParentRole, async (_req, res) => {
+forumsRouter.get("/admin/bans", requireSession, requireAdminRole, async (_req, res) => {
   const r = await db.query<{
     user_id: string; discord_user_id: string; display_name: string; avatar_url: string | null;
     reason: string; expires_at: string | null; created_at: string;
@@ -2212,7 +2212,7 @@ const banSchema = z.object({
   expiresAt: z.string().datetime().optional(),
 });
 
-forumsRouter.post("/admin/bans", requireSession, requireParentRole, async (req, res) => {
+forumsRouter.post("/admin/bans", requireSession, requireAdminRole, async (req, res) => {
   const parsed = banSchema.safeParse(req.body);
   if (!parsed.success) { res.status(400).json({ error: "Invalid request" }); return; }
 
@@ -2239,7 +2239,7 @@ forumsRouter.post("/admin/bans", requireSession, requireParentRole, async (req, 
   res.json({ ok: true });
 });
 
-forumsRouter.delete("/admin/bans/:discordUserId", requireSession, requireParentRole, async (req, res) => {
+forumsRouter.delete("/admin/bans/:discordUserId", requireSession, requireAdminRole, async (req, res) => {
   const target = await resolveInternalId(String(req.params.discordUserId));
   const modUserId = await resolveInternalId(String(res.locals.userId));
   if (!target || !modUserId) { res.status(404).json({ error: "User not found" }); return; }
@@ -2253,7 +2253,7 @@ forumsRouter.delete("/admin/bans/:discordUserId", requireSession, requireParentR
   res.json({ ok: true });
 });
 
-forumsRouter.get("/admin/mod-log", requireSession, requireParentRole, async (_req, res) => {
+forumsRouter.get("/admin/mod-log", requireSession, requireAdminRole, async (_req, res) => {
   const r = await db.query<{
     id: string; action: string; notes: string | null; created_at: string;
     mod_display: string;

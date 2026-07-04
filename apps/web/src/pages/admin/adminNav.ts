@@ -226,7 +226,7 @@ export const ADMIN_PAGES: Record<AdminPageId, AdminPageMeta> = {
     icon: "🪪",
     accent: DISCORD,
     blurb: "Which Discord server runs the island, and who's admin.",
-    keywords: ["guild", "server", "discord", "id", "admin", "role", "parent", "identity", "oauth"],
+    keywords: ["guild", "server", "discord", "id", "admin", "role", "identity", "oauth"],
     sections: []
   },
   bridge: {

@@ -2191,7 +2191,7 @@ function DriftLog({ cards, onNavigate }: { cards: NewsCardData[]; onNavigate: (p
       {cards.length === 0 ? (
         <IslandCard style={{ padding: "16px 18px" }}>
           <div style={{ fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.55 }}>
-            The drift log is quiet right now. Parents can post news cards from the Admin → Drift Log page.
+            The drift log is quiet right now. Admins can post news cards from the Admin → Drift Log page.
           </div>
         </IslandCard>
       ) : (

@@ -1,7 +1,7 @@
 import express from "express";
 import { z } from "zod";
 import { db } from "../db/client.js";
-import { getGuildId } from "../lib/serverSettings.js";
+import { getAdminRoleName, getGuildId } from "../lib/serverSettings.js";
 import { requireSession } from "../lib/auth.js";
 import { getEquippedItemsByUserId, hasClaimedDailyToday } from "../lib/nuggiesLedger.js";
 import { composePresenceText } from "../lib/presence.js";
@@ -153,6 +153,7 @@ profileRouter.get("/me", async (req, res) => {
           }
         : null,
       roleNames: row.role_names ?? [],
+      isAdmin: (row.role_names ?? []).includes(getAdminRoleName()),
       inVoice: Boolean(row.in_voice),
       presenceStatus: row.presence_status,
       richPresenceText: composePresenceText({

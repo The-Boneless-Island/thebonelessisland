@@ -46,7 +46,7 @@ IDENTITY PHILOSOPHY:
 - All features should work without Steam, but Steam enhances them
 
 INFORMATION ARCHITECTURE (current):
-Top nav: a MegaMenu (`MegaMenu.tsx`) with three hover-expand groups — **Games** (Library, Gaming News), **Community** (Members, Sunday Tide Check, Forums, Leaderboard, Crew Achievements), **Nuggies** (Balance & Shop, The Arcade, History, Milestones) — plus an **Admin** link gated to the "Parent" role. There is no "Home" nav item: Home is the root route (`/`), reached via the brand logo. "Crew Achievements" lives nested under Community (route `/achievements`); the Nuggies economy is its own group (route `/nuggies`). Page↔path map lives in `apps/web/src/lib/routes.ts`.
+Top nav: a MegaMenu (`MegaMenu.tsx`) with three hover-expand groups — **Games** (Library, Gaming News), **Community** (Members, Sunday Tide Check, Forums, Leaderboard, Crew Achievements), **Nuggies** (Balance & Shop, The Arcade, History, Milestones) — plus an **Admin** link gated to the configured admin role (`admin_role_name` setting / `ADMIN_ROLE_NAME` env var). There is no "Home" nav item: Home is the root route (`/`), reached via the brand logo. "Crew Achievements" lives nested under Community (route `/achievements`); the Nuggies economy is its own group (route `/nuggies`). Page↔path map lives in `apps/web/src/lib/routes.ts`.
 Topbar uses `position: fixed` (not sticky) so it stays locked to the viewport during overscroll/rubber-band. A 62px spacer div in App.tsx compensates for the removed document-flow space.
 User menu (avatar dropdown): banner-then-accent-gradient-then-hashed header (`bannerBackground()` in `islandUi.tsx`) + full online/idle/dnd/in-voice/offline status dot (`statusOf()` in `web/src/lib/presence.ts`, shared with the Community crew card) sourced from `selfMember` — the caller's own row in the already-polled `GET /members` list threaded down App.tsx → Topbar → UserMenu, not the once-at-boot `/profile/me` — plus Booster chip + up to 3 role pills + rich presence (Discord activity → Steam in-game → legacy voice text → hidden when null; composed in `/profile/me` via `composePresenceText()` in `apps/api/src/lib/presence.ts`) + Steam-linked dot + theme toggle (Day/Night) + Profile + "View islander card" (own crew-facing profile) + Sign out.
 Sub-pages: Games → Library + Gaming News; Nuggies group → economy page (fully live); Community group → Members, Forums, Leaderboard, Crew Achievements, Sunday Tide Check; Admin → persistent-sidebar operations pages.
@@ -109,7 +109,7 @@ PRIMARY PROBLEM TO SOLVE:
 
 8. ADMIN
 - Persistent left sidebar → 18 deep-linkable `/admin/*` pages (registry: `apps/web/src/pages/admin/adminNav.ts`)
-- Role-gated to Discord "Parent" role
+- Role-gated to the configured Discord admin role (`admin_role_name`)
 - Pages: dashboard, members, forums, library, game-nights, recommender, news, patch-sources, drift-log, economy, shop, economy-rules, ai, persona, guild, bridge, sync, audit. Settings live on their feature page (one control per fact); high-risk controls sit in a per-page "danger zone" behind a confirm phrase. See `DESIGN_NOTES.md` for the IA rationale.
 - Tournaments deliberately removed — no near-term plans to implement
 
@@ -168,7 +168,7 @@ CURRENT STATE:
 - Steam wishlist sync live (`POST /steam/sync-wishlist`, chained after `/steam/sync-owned-games`); pooled via `GET /steam/crew-wishlist` — powers the Group Wishlist card
 - Steam News ingestion live (`game_news` + lazy `ISteamNews/GetNewsForApp/v2` fetch, 6h staleness window) → `GET /games/news` returns scope-tagged feed for crew-owned + wishlisted apps. Powers the Patches & Updates rolodex on Games.
 - Activity event ledger live (`activity_events`) with emitters in game-night create / RSVP / finalize and Steam link / unlink / sync. `GET /activity` powers Home Activity Feed + Community activity timeline with server-side category mapping.
-- Curated news cards live (`news_cards`). `GET /news-cards` is session-only; `POST/PATCH/DELETE` gated by `requireParentRole` (env `PARENT_ROLE_NAME`, default `Parent`). Powers Home Drift Log + Admin → News Curation CRUD UI.
+- Curated news cards live (`news_cards`). `GET /news-cards` is session-only; `POST/PATCH/DELETE` gated by `requireAdminRole` (env `ADMIN_ROLE_NAME`, no default — required). Powers Home Drift Log + Admin → News Curation CRUD UI.
 - Game night create/RSVP/finalize endpoints live (UI no longer surfaces voting)
 - Design implementation: 8 phases shipped (foundation, topbar, home, games, library, community, admin, cleanup)
 - Topbar: `position: fixed` (not sticky) — prevents overscroll/rubber-band drift. 62px spacer div in App.tsx compensates for removed document flow.
@@ -223,7 +223,7 @@ SECURITY HARDENING (May 2026, pre-beta):
 - **CORS wildcard rejection**: `WEB_ORIGIN` is Zod-refined to require a fully-qualified http(s) URL with no `*`. Misconfigured `WEB_ORIGIN=*` would fail startup.
 - **SSM Parameter Store loader** (`apps/api/src/lib/secrets.ts`, `apps/bot/src/lib/secrets.ts`): when `NODE_ENV=production` AND `SECRETS_SOURCE=ssm`, fetches every parameter under `/boneless/prod/*` and populates `process.env` before Zod parse. KMS-decrypted, CloudTrail-audited, IAM-gated. No-op in dev (dev keeps reading `.env` via dotenv). Top-level `await loadSecrets()` in `config.ts` (api) and `index.ts` (bot) blocks the import chain so dependent code sees populated env.
 - **Dockerfiles**: `apps/api/Dockerfile` and `apps/bot/Dockerfile` are single-stage Node 20 Alpine images, run via `tsx` (no compile step). Non-root user, tini as PID 1, env injection at deploy time (never baked in). Multi-stage build with `tsc` is a future optimization. `.dockerignore` at repo root excludes `.git`, `.env*`, `node_modules`, `dist`, editor files.
-- **`.env.example`** fully resynced to every `process.env.*` reference: NODE_ENV, API_PORT, WEB_ORIGIN, API_BASE_URL, VITE_API_BASE_URL, DATABASE_URL, SESSION_SECRET, SESSION_SECRET_PREVIOUS (rotation slot), DISCORD_* (OAuth + bot creds), PARENT_ROLE_NAME, STEAM_WEB_API_KEY, IGDB_*, ANTHROPIC/OPENAI/GEMINI keys. Organized by purpose with one-line explanatory comments.
+- **`.env.example`** fully resynced to every `process.env.*` reference: NODE_ENV, API_PORT, WEB_ORIGIN, API_BASE_URL, VITE_API_BASE_URL, DATABASE_URL, SESSION_SECRET, SESSION_SECRET_PREVIOUS (rotation slot), DISCORD_* (OAuth + bot creds), ADMIN_ROLE_NAME, STEAM_WEB_API_KEY, IGDB_*, ANTHROPIC/OPENAI/GEMINI keys. Organized by purpose with one-line explanatory comments.
 
 ASSISTANT EXPECTATIONS:
 - Assume this is a long-lived project

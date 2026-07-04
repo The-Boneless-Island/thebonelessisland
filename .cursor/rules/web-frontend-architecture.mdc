@@ -14,7 +14,7 @@ alwaysApply: false
 - `isAuthenticated` starts `null` → `LoginScreen` until resolved.
 - Routing is **React Router** (`react-router`): the URL is the source of truth. `App.tsx` derives `page: PageId` from the path via `pageFromPath(location.pathname)` (`lib/routes.ts`); navigation goes through `navigateToPage(next)` → `navigate(pathForPage(next))`. Each routed page is **lazy-loaded** (`lazy()` + `<Suspense>`); unknown path → `null` page → `NotFoundPage`.
 - Page<->path map + helpers (`pathForPage`, `pageFromPath`, `pathForIslander`, `pathForForumThread`, `pathForGame`, `activityHref`) live in `apps/web/src/lib/routes.ts`. Forums and Admin parse their own sub-paths internally.
-- `isAdmin = profileData?.roleNames.includes("Parent")`.
+- `isAdmin = profileData?.isAdmin` — computed server-side (`apps/api/src/routes/profile.ts`) against the configured admin role name, not re-derived on the client.
 - Pages **may** call `apiFetch` directly for their own data (e.g. `Achievements`, `Community`, `CommunityLeaderboard`, `CrewAchievements`, `Forums`, `IslanderProfile`). `App.tsx` still owns the shared/polled loaders and passes that data + callbacks down as props.
 
 ## Pages (apps/web/src/pages/)

@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { timingSafeEqual } from "node:crypto";
 import { db } from "../db/client.js";
 import { env } from "../config.js";
-import { getGuildId, getParentRoleName } from "./serverSettings.js";
+import { getGuildId, getAdminRoleName } from "./serverSettings.js";
 
 /**
  * Constant-time check of the bot shared-secret header. A plain `===` short-circuits
@@ -61,7 +61,7 @@ export function requireSession(req: Request, res: Response, next: NextFunction) 
   next();
 }
 
-export async function requireParentRole(req: Request, res: Response, next: NextFunction) {
+export async function requireAdminRole(req: Request, res: Response, next: NextFunction) {
   const discordUserId = req.session?.userId;
   if (!discordUserId) {
     res.status(401).json({ error: "Not authenticated" });
@@ -87,8 +87,8 @@ export async function requireParentRole(req: Request, res: Response, next: NextF
   );
 
   const roleNames = result.rows[0]?.role_names ?? [];
-  if (!roleNames.includes(getParentRoleName())) {
-    res.status(403).json({ error: "Parent role required" });
+  if (!roleNames.includes(getAdminRoleName())) {
+    res.status(403).json({ error: "Admin role required" });
     return;
   }
 
