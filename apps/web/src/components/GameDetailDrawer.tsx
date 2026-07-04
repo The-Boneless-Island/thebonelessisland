@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { IslandTag, SpecStrip, memberColor } from "../islandUi.js";
@@ -79,7 +80,15 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
       ? detail.store.priceDiscountPct
       : null;
 
-  return (
+  // Portal to <body>: apps/web/src/App.tsx renders every page inside a "main"
+  // with a backdrop-filter, which makes that element a containing block for
+  // position:fixed descendants — without this portal, this drawer's fixed
+  // wrapper anchors to that in-page column (which can be thousands of pixels
+  // tall while scrolling) instead of the real viewport, painting the drawer
+  // at the top of the page or leaving it blank if scrolled down. Same fix as
+  // apps/web/src/pages/forums/forumEditor.tsx's lightbox and
+  // apps/web/src/components/QuickSwitcher.tsx.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -570,7 +579,8 @@ export default function GameDetailDrawer({ appId, onClose }: GameDetailDrawerPro
           </>
         )}
       </aside>
-    </div>
+    </div>,
+    document.body
   );
 }
 

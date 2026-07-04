@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useSearchParams } from "react-router";
 import { IslandCard, IslandTag, islandInputStyle, islandTagStyle } from "../islandUi.js";
 import { islandTheme } from "../theme.js";
@@ -2279,7 +2280,14 @@ function StreamDrawer({ members }: { members: GuildMember[] }) {
 
   if (inGame.length === 0) return null;
 
-  return (
+  // Portal to <body>: this whole page renders inside App.tsx's "main" element
+  // (backdrop-filter set), which becomes a containing block for position:fixed
+  // descendants. Both the tab and the drawer below use position:fixed via the
+  // .bi-stream-tab / .bi-stream-drawer classes (see IslandSceneShell.tsx) —
+  // without this portal they'd anchor to the in-page column instead of the
+  // real viewport, same bug as GameDetailDrawer/LoanWizard. Styling/classes
+  // are untouched; only the mount point moves.
+  return createPortal(
     <>
       <button
         type="button"
@@ -2407,7 +2415,8 @@ function StreamDrawer({ members }: { members: GuildMember[] }) {
           })}
         </div>
       </aside>
-    </>
+    </>,
+    document.body
   );
 }
 

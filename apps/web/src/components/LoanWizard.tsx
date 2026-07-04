@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { calcAmountDue, calcDueAt, calcRepayBreakdown, clampLoanDays } from "@island/shared";
 import { apiFetch } from "../api/client.js";
 import { IslandButton, IslandCard, islandInputStyle } from "../islandUi.js";
@@ -176,7 +177,12 @@ export function LoanWizard({
         (step === 1 && repayBreakdown != null) ||
         (step === 2 && repayBreakdown?.canRepay === true);
 
-  return (
+  // Portal to <body>: apps/web/src/App.tsx wraps every page in a "main" with
+  // a backdrop-filter, which makes it a containing block for position:fixed
+  // descendants — without this portal this wizard's fixed backdrop would
+  // anchor to that in-page column instead of the real viewport. Same fix as
+  // apps/web/src/components/GameDetailDrawer.tsx / QuickSwitcher.tsx.
+  return createPortal(
     <div
       role="presentation"
       onClick={onClose}
@@ -365,6 +371,7 @@ export function LoanWizard({
           </div>
         </IslandCard>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
