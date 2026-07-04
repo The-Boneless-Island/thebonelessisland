@@ -92,11 +92,12 @@ function parseClassifierArray(text: string): ClassifierVerdict[] {
       const id = typeof obj.id === "string" ? obj.id : String(obj.id ?? "");
       if (!id) return [];
       const gaming = obj.gaming === true || obj.gaming === "true";
-      // Fail open: a missing/malformed crewFit reads as true (keep), mirroring
-      // the main curator's "bias uncertain toward true" rule — this sweep
-      // should never silently start parking cards a prior classifier version
-      // never judged.
-      const crewFit = obj.crewFit === undefined ? true : obj.crewFit === true || obj.crewFit === "true";
+      // Fail open: only an EXPLICIT false parks — missing or malformed
+      // (null, 1, "True", …) reads as true (keep), mirroring the main
+      // curator's "bias uncertain toward true" rule. This sweep must never
+      // silently park cards over a value a prior classifier version (or a
+      // drifting model) never actually judged.
+      const crewFit = obj.crewFit === false || obj.crewFit === "false" ? false : true;
       return [{ id, gaming, crewFit }];
     });
   } catch {
@@ -162,9 +163,20 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
     // Same crew-context ground truth the main curator injects into every
     // curation call (buildCrewContext() is TTL-cached, so this costs at most
     // one extra build for this whole sweep run, not per-card/per-batch).
-    const { buildCrewContext } = await import("../generalNewsIngestion.js");
+    const { buildCrewContext, crewContextHasSignal } = await import("../generalNewsIngestion.js");
     const crewContext = await buildCrewContext();
     const classifierSystemPrompt = buildClassifierPrompt(crewContext);
+    // Hard guard for the destructive one-shot: with an all-"none" crew
+    // context (zero Steam links — a supported Discord-only configuration),
+    // "no evidence of interest" is true of EVERY card and Check 2 would
+    // mass-park the live feed. Ignore crew-fit verdicts entirely in that
+    // case; the gaming gate (Check 1) still applies.
+    const crewFitEnabled = crewContextHasSignal(crewContext);
+    if (!crewFitEnabled) {
+      console.log(
+        "[generalNews] off-topic sweep: crew context has no signal — crew-fit parking disabled for this run"
+      );
+    }
 
     for (let i = 0; i < cards.rows.length; i += SWEEP_BATCH_SIZE) {
       const batch = cards.rows.slice(i, i + SWEEP_BATCH_SIZE);
@@ -200,7 +212,7 @@ export async function runOffTopicSweepOnce(opts: { force?: boolean } = {}): Prom
           if (!v) continue; // no verdict echoed back — leave the card as-is (conservative)
           if (!v.gaming) {
             offTopicIds.push(c.id);
-          } else if (!v.crewFit) {
+          } else if (crewFitEnabled && !v.crewFit) {
             crewIrrelevantIds.push(c.id);
           }
         }

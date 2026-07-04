@@ -128,15 +128,19 @@ export function useToastQueue(): ToastQueue {
 
       // Duplicate collapsing: a repeat of the same message+tone (e.g. a
       // caller stuck re-firing) restarts the existing toast's countdown
-      // instead of stacking a new one. Reuse pauseToast (clears the running
-      // timer) + startTimer (sets a fresh one) rather than duplicating that
-      // clear-then-set logic here.
+      // instead of stacking a new one. Only restart when a timer is actually
+      // running — a missing timer means the user is hover-pausing that toast
+      // (pause-on-hover cleared it), and arming a fresh countdown here would
+      // auto-dismiss the toast under their cursor; resumeToast re-arms it on
+      // mouse-leave as usual.
       const duplicate = toastsRef.current.find(
         (t) => !t.leaving && t.message === message && t.tone === tone
       );
       if (duplicate) {
-        pauseToast(duplicate.id);
-        startTimer(duplicate.id);
+        if (timersRef.current.has(duplicate.id)) {
+          pauseToast(duplicate.id);
+          startTimer(duplicate.id);
+        }
         return;
       }
 

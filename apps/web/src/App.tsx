@@ -109,13 +109,15 @@ export function App() {
   const lastGuildMembersRef = useRef<string | null>(null);
   const lastGameNightsRef = useRef<string | null>(null);
   const lastSelectedNightRef = useRef<string | null>(null);
-  // Signature (sorted, joined member ids) of the last member set actually
-  // requested from /recommendations/what-can-we-play, plus whether that
-  // request is still in flight — lets loadComposerRecommendations skip an
-  // exact repeat once a result is already loaded, guarding against any
-  // future identity churn on `selectedMemberIds` re-hammering the endpoint.
-  const lastComposerRequestRef = useRef<string | null>(null);
-  const composerRequestPendingRef = useRef(false);
+  // Signature (sorted, joined member ids) of the composer request currently
+  // in flight — collapses an identical concurrent burst (e.g. upstream
+  // identity churn making `selectedMemberIds` look "new" while its membership
+  // is unchanged) into one POST. Deliberately no completed-request memo: a
+  // memo taken before the response poisons the guard when the request fails
+  // (stale results pinned for the session), and one taken after suppresses
+  // legitimate refetches on page re-entry. Once a request settles — success
+  // or failure — the same selection may fetch again.
+  const composerRequestInFlightRef = useRef<string | null>(null);
   // Routing: the URL is the source of truth. `page` is derived from the path so
   // refresh / back-forward / shared links all land on the right page; navigation
   // goes through the router via navigateToPage. `null` page → unknown path → 404.
@@ -1396,27 +1398,16 @@ export function App() {
 
   async function loadComposerRecommendations(memberIds: string[], silent = true) {
     if (memberIds.length === 0) {
-      lastComposerRequestRef.current = null;
       setComposerRecommendations([]);
       return;
     }
-    // Belt-and-braces against future identity churn re-hammering the
-    // recommender: if this exact member set was already requested and a
-    // result is already loaded (not empty, not still in flight), skip the
-    // fetch. Genuinely new member selections always go through — this only
-    // catches exact repeats, e.g. an unstable callback identity upstream
-    // causing `selectedMemberIds` to look "new" while its membership is
-    // actually unchanged.
+    // Collapse identical concurrent requests into one POST (see the ref's
+    // comment for why this is in-flight-only, not a completed-request memo).
     const signature = memberIds.slice().sort().join(",");
-    if (
-      lastComposerRequestRef.current === signature &&
-      !composerRequestPendingRef.current &&
-      composerRecommendations.length > 0
-    ) {
+    if (composerRequestInFlightRef.current === signature) {
       return;
     }
-    lastComposerRequestRef.current = signature;
-    composerRequestPendingRef.current = true;
+    composerRequestInFlightRef.current = signature;
     try {
       const response = await apiFetch("/recommendations/what-can-we-play", {
         method: "POST",
@@ -1441,7 +1432,11 @@ export function App() {
         setStatus(error instanceof Error ? error.message : "Composer recommendation load failed");
       }
     } finally {
-      composerRequestPendingRef.current = false;
+      // Only clear if a newer overlapping request hasn't already claimed the
+      // slot (its own finally will clear it).
+      if (composerRequestInFlightRef.current === signature) {
+        composerRequestInFlightRef.current = null;
+      }
     }
   }
 

@@ -7,13 +7,21 @@ type RepairableResult = {
   summary?: string;
   whyMatters?: string;
   sources?: string[];
+  crewFit?: boolean;
 };
 
 const REPAIRABLE_ERRORS = new Set([
   "missing_title",
   "missing_why_matters",
   "missing_sources",
-  "summary_too_short"
+  "summary_too_short",
+  // Repaired deterministically (fail-open true), not via the model — the
+  // light repair pass has no crew context to judge fit with, and a result
+  // that got this far has a real summary; parking it over a missing flag at
+  // the last-resort stage would be strictly worse than keeping it. Without
+  // this entry, any co-occurring repairable error becomes unrepairable
+  // (isRepairableValidation requires every() error to be in the set).
+  "missing_crew_fit"
 ]);
 
 export function isRepairableValidation(errors: string[]): boolean {
@@ -77,6 +85,7 @@ export async function tryValidationRepair(input: RepairInput): Promise<Repairabl
     if (jsonStart < 0 || jsonEnd < jsonStart) return null;
     const parsed = JSON.parse(text.slice(jsonStart, jsonEnd + 1)) as RepairableResult;
     if (parsed.id !== input.externalId) parsed.id = input.externalId;
+    if (input.errors.includes("missing_crew_fit")) parsed.crewFit = true;
     console.log(
       `[generalNews] validation repair for ${input.externalId} via ${getAISetting("ai_provider") ?? "ai"}`
     );

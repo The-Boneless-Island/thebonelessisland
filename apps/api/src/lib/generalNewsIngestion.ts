@@ -704,6 +704,19 @@ export async function buildCrewContext(): Promise<string> {
   return context;
 }
 
+// True when the crew context carries any actual signal (games/tags), false
+// when it degraded to all-"none" lines — e.g. a Discord-only install with
+// zero Steam links (a supported configuration). Judging crew-fit against an
+// empty context would read as "zero evidence of interest" for EVERY story
+// and mass-park the feed, so crew-fit consumers must gate on this.
+export function crewContextHasSignal(context: string): boolean {
+  return !(
+    /^Playing this week: none$/m.test(context) &&
+    /^Top owned games: none$/m.test(context) &&
+    /^Crew genre tags: none$/m.test(context)
+  );
+}
+
 // Locate the first balanced top-level JSON array in `text`. Tolerates any
 // leading prose ("## Existing Stories\n\n[...]"), trailing fence, or extra
 // commentary the model may emit when it strays from "return ONLY a JSON array".
@@ -833,6 +846,8 @@ When \`offTopic: true\`: set \`relevanceScore\` to 0 and leave \`summary\`, \`wh
 # Crew-fit gate — SECOND CHECK, park stories with no crew hook
 
 This check is INDEPENDENT of the gate above and answers a different question. The gate above asks "is this gaming news at all?" This gate asks "does THIS crew — per the Crew context injected into every call — have any plausible reason to care?" A story can cleanly pass the gate above (it IS gaming news) and still fail this one (nobody here is going to read it). Run this check on every article that is NOT \`offTopic\`.
+
+If the Crew context below is empty ("none" for playtime, owned games, and genre tags), you have no evidence to judge fit with — in that case default \`crewFit: true\` for everything except stories you are CERTAIN no general gaming audience would care about. Never treat an empty context as "zero interest in everything".
 
 Set \`crewFit: true\` when ANY of the following hold:
 - The story touches a game or franchise the crew plays, owns, or has wishlisted (per the Crew context — recent playtime, top owned games, Crew Pick names).
@@ -1183,6 +1198,19 @@ function asBool(v: unknown): boolean {
   return v === true || v === "true";
 }
 
+// crewFit is the one flag where coercing a malformed value to `false` is
+// destructive: false = permanent park with no validation backstop (the
+// crewFit:false carve-out skips the summary/whyMatters checks entirely, and
+// ai_curated_at gets set so the row never re-enters the queue). Accept only
+// an explicit true/false; anything else (null, 1, "yes", "True"…) reads as
+// absent so the missing_crew_fit retry asks the model again instead of
+// silently parking a live story.
+function normalizeCrewFit(v: unknown): boolean | undefined {
+  if (v === true || v === "true") return true;
+  if (v === false || v === "false") return false;
+  return undefined;
+}
+
 function pickString(obj: Record<string, unknown>, ...keys: string[]): string {
   for (const k of keys) {
     const v = obj[k];
@@ -1234,10 +1262,7 @@ function normalizeCurationEntry(raw: unknown): GeneralCurationResult {
     duplicate: asBool(obj.duplicate),
     isGuide: asBool(obj.isGuide ?? obj.is_guide),
     offTopic: asBool(obj.offTopic ?? obj.off_topic),
-    crewFit:
-      obj.crewFit === undefined && obj.crew_fit === undefined
-        ? undefined
-        : asBool(obj.crewFit ?? obj.crew_fit),
+    crewFit: normalizeCrewFit(obj.crewFit ?? obj.crew_fit),
     storyFingerprint: pickString(obj, "storyFingerprint", "story_fingerprint") || undefined,
     mergesIntoExistingId:
       pickString(obj, "mergesIntoExistingId", "merges_into_existing_id") || null,
@@ -1566,7 +1591,11 @@ async function curateBatchWithValidation(
         title: repair.title?.trim() || o.result.title,
         summary: repair.summary?.trim() || o.result.summary,
         whyMatters: repair.whyMatters?.trim() || o.result.whyMatters,
-        sources: Array.isArray(repair.sources) && repair.sources.length > 0 ? repair.sources : o.result.sources
+        sources: Array.isArray(repair.sources) && repair.sources.length > 0 ? repair.sources : o.result.sources,
+        // Repair resolves missing_crew_fit deterministically to true (fail
+        // open) — see validationRepair.ts. Never let it flip an existing
+        // explicit verdict.
+        crewFit: o.result.crewFit === undefined ? repair.crewFit : o.result.crewFit
       },
       o.item
     );
@@ -1656,8 +1685,10 @@ async function persistCurationOutcome(
   // Crew-irrelevant (genuinely gaming news, but no hook for THIS crew) — the
   // SECOND gate, independent of offTopic. Same drop-before-publish treatment,
   // distinct pre_filter_reason so health/admin can tell the two failure modes
-  // apart.
-  if (result.crewFit === false) {
+  // apart. A merge child is exempt: "this belongs to live story X" and "no
+  // crew hook" are contradictory verdicts, and the parent card is already
+  // published — trust the merge so its synthesis refresh isn't discarded.
+  if (result.crewFit === false && !isMerge(result)) {
     await db.query(
       `UPDATE general_news
          SET ai_relevance_score = 0,
