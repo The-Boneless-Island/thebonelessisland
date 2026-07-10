@@ -172,6 +172,34 @@ export function App() {
   const myDiscordIdRef = useRef<string | null>(null);
   const invalidate = useInvalidateAppQueries();
 
+  // Lightweight profile refresh: refetch /profile/me and update profileData only.
+  // Deliberately does NOT touch the Profile-page form state (steamVisibility /
+  // featureOptIn), the diagnostics JSON, or status toasts — unlike loadProfile,
+  // which resets all of those. That matters because this fires on any balance
+  // change (SSE), possibly while the user is mid-edit on the Profile page, and we
+  // must not clobber their unsaved selections. On any failure we keep the stale
+  // profile: a transient blip must never flicker an authenticated user out.
+  const refreshProfile = useCallback(async () => {
+    try {
+      const response = await apiFetch(`/profile/me`, { credentials: "include" });
+      if (!response.ok) return;
+      const data = (await response.json()) as { profile?: MeProfile | null };
+      const profile = data.profile ?? null;
+      if (!profile) return;
+      setProfileData(profile);
+      preloadRankBadge(profile.lifetimeEarned ?? 0);
+    } catch {
+      // Network blip — keep the stale profile rather than nulling it out.
+    }
+  }, []);
+
+  // Optimistic in-place patch of the cached profile. The daily-claim flow uses
+  // this so the new balance / claimedToday survive navigation immediately,
+  // without waiting for the SSE-driven refreshProfile round-trip below.
+  const patchProfile = useCallback((patch: Partial<MeProfile>) => {
+    setProfileData((prev) => (prev ? { ...prev, ...patch } : prev));
+  }, []);
+
   useAppPolling({
     isAuthenticated,
     page: page ?? "home",
@@ -571,6 +599,14 @@ export function App() {
       es.close();
     };
   }, [isAuthenticated, invalidate]);
+
+  // When this member's Nuggies balance changes — daily claim, casino, loan,
+  // admin grant, anything that bumps nuggiesSignal off the SSE bus — pull a
+  // fresh profile so the homepage balance and daily-claim status reconcile to
+  // server truth in real time, on whatever page the user is currently viewing.
+  useEffect(() => {
+    if (nuggiesSignal > 0) void refreshProfile();
+  }, [nuggiesSignal, refreshProfile]);
 
   useEffect(() => {
     if (isAuthenticated !== true || page !== "games") return;
@@ -1945,6 +1981,7 @@ export function App() {
           newsCards={newsCards}
           tagline={tagline}
           onNavigate={navigateToPage}
+          onProfilePatch={patchProfile}
         />
       ) : null}
 

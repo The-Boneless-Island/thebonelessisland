@@ -35,6 +35,7 @@ type HomePageProps = {
   newsCards: NewsCardData[];
   tagline?: string;
   onNavigate: (page: PageId) => void;
+  onProfilePatch: (patch: Partial<MeProfile>) => void;
 };
 
 type HeroPhase = "visible" | "fading" | "collapsing" | "gone";
@@ -47,7 +48,8 @@ function HomePageInner({
   activityEvents,
   newsCards,
   tagline,
-  onNavigate
+  onNavigate,
+  onProfilePatch
 }: HomePageProps) {
   const alreadySeen = sessionStorage.getItem("hero_seen") === "1";
   const [heroPhase, setHeroPhase] = useState<HeroPhase>(alreadySeen ? "gone" : "visible");
@@ -105,7 +107,7 @@ function HomePageInner({
       )}
       <div style={{ display: "grid", gap: 16 }}>
         <section className="bi-home-top">
-          <NuggiesSnapshot profile={profile} onNavigate={onNavigate} />
+          <NuggiesSnapshot profile={profile} onNavigate={onNavigate} onProfilePatch={onProfilePatch} />
           <IslandPulse
             profile={profile}
             onlineCount={activeMembers.length}
@@ -742,13 +744,23 @@ function IslandPulse({
   );
 }
 
-function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; onNavigate: (page: PageId) => void }) {
-  const baseBalance = profile?.nuggieBalance;
+function NuggiesSnapshot({
+  profile,
+  onNavigate,
+  onProfilePatch
+}: {
+  profile: MeProfile | null;
+  onNavigate: (page: PageId) => void;
+  onProfilePatch: (patch: Partial<MeProfile>) => void;
+}) {
+  // Render straight off the profile prop. The claim flow patches the parent
+  // profile (via onProfilePatch) rather than holding a local balance override,
+  // so the post-claim balance survives navigating away and back — the whole
+  // point of this component's state living upstream now.
   const optedOut = profile?.nuggiesOptedOut ?? false;
   const equipped = profile?.equippedItems ?? [];
   const lifetimeEarned = profile?.lifetimeEarned ?? 0;
 
-  const [balanceOverride, setBalanceOverride] = useState<number | null>(null);
   const [claimedToday, setClaimedToday] = useState<boolean | null>(
     typeof profile?.claimedToday === "boolean" ? profile.claimedToday : null
   );
@@ -776,7 +788,7 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
     return () => clearInterval(id);
   }, [claimedToday]);
 
-  const balance = balanceOverride ?? baseBalance;
+  const balance = profile?.nuggieBalance;
   // Count-up instead of snapping when the balance changes (claim, SSE update).
   const animatedBalance = useCountUp(balance ?? 0);
 
@@ -788,13 +800,20 @@ function NuggiesSnapshot({ profile, onNavigate }: { profile: MeProfile | null; o
       const res = await apiFetch("/nuggies/daily", { method: "POST" });
       const body = (await res.json().catch(() => ({}))) as { newBalance?: number; amount?: number; error?: string };
       if (res.ok && body.newBalance !== undefined) {
-        setBalanceOverride(body.newBalance);
+        // Patch the parent profile so the balance + claimed state persist across
+        // navigation. The SSE-driven refreshProfile in App will reconcile to the
+        // exact server figure shortly after (idempotent — same value, no flicker).
+        onProfilePatch({ nuggieBalance: body.newBalance, claimedToday: true });
         setClaimedToday(true);
         setClaimFlash({ amount: body.amount ?? 0 });
         setClaimConfetti((n) => n + 1);
         setTimeout(() => setClaimFlash(null), 3500);
         void refetchActivity();
       } else if (res.status === 409) {
+        // Already claimed (e.g. claimed on another device). Persist the corrected
+        // status upstream so it survives navigation even if SSE is unavailable;
+        // the balance itself reconciles on the next refreshProfile.
+        onProfilePatch({ claimedToday: true });
         setClaimedToday(true);
       } else {
         setClaimError(body.error ?? "Claim failed");
