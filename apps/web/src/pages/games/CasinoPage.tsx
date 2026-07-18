@@ -143,6 +143,7 @@ export function CasinoPage() {
       <CoinflipGame
         startBalance={balance}
         maxBet={maxBet}
+        cooldownSecs={cooldownSecs}
         onResolved={handleResolved}
         onBack={() => setView("lobby")}
       />
@@ -153,6 +154,7 @@ export function CasinoPage() {
       <GuessNumberGame
         startBalance={balance}
         maxBet={maxBet}
+        cooldownSecs={cooldownSecs}
         onResolved={handleResolved}
         onBack={() => setView("lobby")}
       />
@@ -163,6 +165,7 @@ export function CasinoPage() {
       <BlackjackGame
         startBalance={balance}
         maxBet={maxBet}
+        cooldownSecs={cooldownSecs}
         initialState={active && active.gameType === "blackjack" ? active : null}
         onResolved={handleResolved}
         onBack={() => setView("lobby")}

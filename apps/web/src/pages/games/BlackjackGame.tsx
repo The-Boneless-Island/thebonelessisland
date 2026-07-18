@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { IslandButton, IslandCard } from "../../islandUi.js";
+import { IslandButton, IslandCard, useCountUp } from "../../islandUi.js";
+import { ConfettiBurst } from "../../system/celebration.js";
 import { islandTheme } from "../../theme.js";
 import {
   blackjackResultLabel,
@@ -10,26 +11,50 @@ import {
   type GameStateResponse
 } from "../../api/games.js";
 import { useRefetchActivity } from "../../system/activityContext.js";
+import {
+  BackBtn,
+  BetControls,
+  EMPTY_RUN,
+  OutcomeBanner,
+  SeatLabel,
+  SessionStrip,
+  casinoControlBarStyle,
+  casinoErrorStyle,
+  casinoFeltStyle,
+  casinoHeaderStyle,
+  tallyRound,
+  useCooldown
+} from "./casinoShared.js";
 
 type Props = {
   startBalance: number | null;
   maxBet: number;
+  cooldownSecs: number;
   initialState: GameStateResponse | null; // resume support
   onResolved: (newBalance: number) => void;
   onBack: () => void;
 };
 
-type Phase = "idle" | "starting" | "active" | "stepping" | "settled" | "error";
+type Phase = "idle" | "starting" | "active" | "stepping" | "settled";
 
-export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, onBack }: Props) {
+// One-click round loop: after a hand settles the last table stays on the felt,
+// the outcome shows as a banner, and the bet controls + "Deal again" are right
+// there — no intermediate "New hand" screen swap. The primary button counts
+// the server cooldown down in place.
+export function BlackjackGame({ startBalance, maxBet, cooldownSecs, initialState, onResolved, onBack }: Props) {
   const [bet, setBet] = useState(25);
   const [phase, setPhase] = useState<Phase>(() => (initialState && initialState.status === "active" ? "active" : "idle"));
   const [state, setState] = useState<GameStateResponse | null>(initialState);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [run, setRun] = useState(EMPTY_RUN);
+  const [confetti, setConfetti] = useState(0);
   const refetchActivity = useRefetchActivity();
+  const cooldown = useCooldown();
 
   const balanceAvail = startBalance ?? 0;
+  const animatedBalance = useCountUp(balanceAvail);
   const validBet = Number.isInteger(bet) && bet >= 1 && bet <= Math.min(maxBet, balanceAvail);
+  const inHand = phase === "active" || phase === "stepping";
 
   // Poll for state changes while active (keeps in sync if user also has bot view).
   // No document.visibilityState guard here on purpose: this interval only
@@ -60,22 +85,38 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
     };
   }, [phase]);
 
+  function settle(data: GameStateResponse) {
+    setState(data);
+    setPhase("settled");
+    if (data.result?.type === "blackjack") {
+      const payout = data.payout ?? 0;
+      const won = data.result.result === "win" || data.result.result === "blackjack";
+      setRun((prev) => tallyRound(prev, payout - data.bet, won));
+      if (won) setConfetti((n) => n + 1);
+    }
+    if (typeof data.newBalance === "number") onResolved(data.newBalance);
+    void refetchActivity();
+  }
+
   async function deal() {
-    if (!validBet || phase === "starting") return;
+    if (!validBet || phase === "starting" || !cooldown.ready) return;
     setPhase("starting");
     setErrorMsg(null);
+    cooldown.arm(cooldownSecs);
     const res = await startBlackjack(bet);
     if (!res.ok) {
-      setErrorMsg(res.error.error);
-      setPhase("error");
+      if (res.error.code === "cooldown" && res.error.secondsLeft) {
+        cooldown.arm(res.error.secondsLeft);
+      } else {
+        setErrorMsg(res.error.error);
+      }
+      setPhase("idle");
       return;
     }
-    setState(res.data);
     if (res.data.status === "resolved") {
-      setPhase("settled");
-      if (typeof res.data.newBalance === "number") onResolved(res.data.newBalance);
-      void refetchActivity();
+      settle(res.data);
     } else {
+      setState(res.data);
       setPhase("active");
     }
   }
@@ -87,28 +128,30 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
     const res = await blackjackStep(state.sessionId, action);
     if (!res.ok) {
       setErrorMsg(res.error.error);
-      setPhase("error");
+      setPhase("active");
       return;
     }
-    setState(res.data);
     if (res.data.status === "resolved") {
-      setPhase("settled");
-      if (typeof res.data.newBalance === "number") onResolved(res.data.newBalance);
-      void refetchActivity();
+      settle(res.data);
     } else {
+      setState(res.data);
       setPhase("active");
     }
   }
 
-  function reset() {
-    setPhase("idle");
-    setState(null);
-    setErrorMsg(null);
-  }
+  const settled = phase === "settled" && state?.result?.type === "blackjack";
+  const dealLabel = phase === "starting"
+    ? "Shuffling…"
+    : !cooldown.ready
+      ? `Ready in ${cooldown.secondsLeft}s`
+      : settled
+        ? "Deal again"
+        : "Deal";
 
   return (
-    <IslandCard style={{ display: "grid", gap: 14, padding: 18 }}>
-      <div style={headerStyle}>
+    <IslandCard style={{ display: "grid", gap: 14, padding: 18, position: "relative" }}>
+      <ConfettiBurst trigger={confetti} />
+      <div style={casinoHeaderStyle}>
         <div>
           <div className="island-display" style={{ fontSize: 18, fontWeight: 700 }}>Blackjack</div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
@@ -118,14 +161,14 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
         <BackBtn onBack={onBack} />
       </div>
 
-      {/* Felt table */}
+      {/* Felt table — stays up after the hand settles so the result reads. */}
       {state && (
-        <div style={feltStyle}>
+        <div style={casinoFeltStyle}>
           <div style={seatStyle}>
             <SeatLabel>Dealer</SeatLabel>
             <CardRow
               cards={state.data.dealerHand ?? []}
-              hidden={phase === "active" || phase === "stepping" ? state.data.dealerHidden ?? 0 : 0}
+              hidden={inHand ? state.data.dealerHidden ?? 0 : 0}
               total={
                 state.status === "resolved"
                   ? state.data.dealerTotal
@@ -148,63 +191,26 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
               </div>
             )}
           </div>
+          <SessionStrip run={run} />
         </div>
       )}
 
       {/* Outcome banner */}
-      {phase === "settled" && state?.result?.type === "blackjack" && (
-        <div className="casino-result-enter" style={outcomeStyle(state.result.result)}>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>
-            {state.result.result === "blackjack" && "🃏✨ "}
-            {blackjackResultLabel(state.result.result)}
-          </div>
-          <div style={{ fontSize: 12, color: islandTheme.color.textSubtle, marginTop: 4 }}>
-            {payoutNote(state)}
-            {state.newBalance != null && ` · balance now ₦${state.newBalance.toLocaleString()}`}
-          </div>
-        </div>
+      {settled && state?.result?.type === "blackjack" && (
+        <OutcomeBanner
+          won={state.result.result === "win" || state.result.result === "blackjack"}
+          push={state.result.result === "push"}
+          headline={`${state.result.result === "blackjack" ? "🃏✨ " : ""}${blackjackResultLabel(state.result.result)}`}
+          net={(state.payout ?? 0) - state.bet}
+          detail={state.result.result === "push" ? "Bet refunded" : null}
+        />
       )}
 
-      {phase === "error" && errorMsg && <div style={errorStyle}>{errorMsg}</div>}
+      {errorMsg && <div style={casinoErrorStyle}>{errorMsg}</div>}
 
       {/* Controls */}
-      <div style={controlBarStyle}>
-        {phase === "idle" || phase === "error" ? (
-          <div style={{ display: "grid", gap: 10 }}>
-            <label style={{ ...labelStyle, textAlign: "center" }}>Bet (Nuggies)</label>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "center" }}>
-              <input
-                type="number"
-                min={1}
-                max={Math.min(maxBet, balanceAvail)}
-                value={bet}
-                onChange={(e) => setBet(parseInt(e.target.value, 10) || 0)}
-                style={{ ...inputStyle, width: 130, textAlign: "center" }}
-              />
-              {[10, 25, 50, 100].map((amount) => (
-                <button
-                  key={amount}
-                  type="button"
-                  onClick={() => setBet(Math.min(amount, maxBet, balanceAvail))}
-                  style={chipPresetStyle}
-                  disabled={amount > balanceAvail || amount > maxBet}
-                >
-                  {amount}
-                </button>
-              ))}
-              <IslandButton variant="primary" disabled={!validBet} onClick={() => void deal()} style={{ minWidth: 120 }}>
-                Deal
-              </IslandButton>
-            </div>
-            <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
-              Balance: ₦{balanceAvail.toLocaleString()}
-            </div>
-          </div>
-        ) : phase === "starting" ? (
-          <div style={{ fontSize: 13, color: islandTheme.color.textMuted, textAlign: "center" }}>
-            Shuffling…
-          </div>
-        ) : phase === "active" || phase === "stepping" ? (
+      <div style={casinoControlBarStyle}>
+        {inHand ? (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
             <IslandButton
               variant="primary"
@@ -234,37 +240,23 @@ export function BlackjackGame({ startBalance, maxBet, initialState, onResolved, 
             ) : null}
           </div>
         ) : (
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-            <IslandButton variant="primary" onClick={reset}>New hand</IslandButton>
-            <IslandButton variant="secondary" onClick={onBack}>Back to casino</IslandButton>
+          <div style={{ display: "grid", gap: 12 }}>
+            <BetControls bet={bet} setBet={setBet} balance={balanceAvail} maxBet={maxBet} disabled={phase === "starting"} />
+            <IslandButton
+              variant="primary"
+              disabled={!validBet || phase === "starting" || !cooldown.ready}
+              onClick={() => void deal()}
+              style={{ alignSelf: "center", minWidth: 180 }}
+            >
+              {dealLabel}
+            </IslandButton>
+            <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
+              Balance: ₦{animatedBalance.toLocaleString()}
+            </div>
           </div>
         )}
       </div>
     </IslandCard>
-  );
-}
-
-function payoutNote(state: GameStateResponse): string {
-  const payout = state.payout ?? 0;
-  if (payout > state.bet) return `+${payout - state.bet} Nuggies`;
-  if (payout === state.bet) return `bet refunded`;
-  return `-${state.bet - payout} Nuggies`;
-}
-
-function SeatLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="island-mono"
-      style={{
-        fontSize: 12,
-        color: islandTheme.color.textMuted,
-        textTransform: "uppercase",
-        letterSpacing: "0.16em",
-        textAlign: "center"
-      }}
-    >
-      {children}
-    </div>
   );
 }
 
@@ -346,48 +338,6 @@ function CardView({ card, hidden }: { card?: Card; hidden?: boolean }) {
   );
 }
 
-function BackBtn({ onBack }: { onBack: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onBack}
-      className="island-mono"
-      style={{
-        background: "transparent",
-        border: "none",
-        color: islandTheme.color.textMuted,
-        fontSize: 12,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        cursor: "pointer",
-        font: "inherit"
-      }}
-    >
-      ← Casino
-    </button>
-  );
-}
-
-const headerStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 12
-};
-
-const feltStyle: React.CSSProperties = {
-  position: "relative",
-  padding: "26px 18px 30px",
-  borderRadius: 18,
-  background:
-    "radial-gradient(120% 90% at 50% 0%, rgba(20, 110, 80, 0.55) 0%, rgba(10, 60, 48, 0.85) 55%, rgba(6, 30, 26, 0.95) 100%)",
-  border: "1px solid rgba(34, 197, 94, 0.28)",
-  boxShadow:
-    "inset 0 0 80px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35)",
-  display: "grid",
-  gap: 18
-};
-
 const seatStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
@@ -417,62 +367,3 @@ const betChipStyle: React.CSSProperties = {
   border: "1px solid rgba(250, 204, 21, 0.35)",
   letterSpacing: "0.04em"
 };
-
-const controlBarStyle: React.CSSProperties = {
-  padding: "12px 14px",
-  borderRadius: 14,
-  background: "rgba(8, 16, 22, 0.55)",
-  border: `1px solid ${islandTheme.color.cardBorder}`
-};
-
-const chipPresetStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 999,
-  border: "1px solid rgba(250, 204, 21, 0.35)",
-  background: "rgba(250, 204, 21, 0.08)",
-  color: "#fde68a",
-  fontWeight: 700,
-  fontSize: 12,
-  fontFamily: "var(--island-mono, monospace)",
-  cursor: "pointer",
-  letterSpacing: "0.04em"
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: islandTheme.color.textMuted,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  fontFamily: "var(--island-mono, monospace)"
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: `1px solid ${islandTheme.color.cardBorder}`,
-  background: islandTheme.color.panelMutedBg,
-  color: islandTheme.color.textPrimary,
-  fontSize: 14,
-  font: "inherit"
-};
-
-const errorStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  background: "rgba(239, 68, 68, 0.10)",
-  border: "1px solid rgba(239, 68, 68, 0.35)",
-  color: "#fca5a5",
-  fontSize: 13
-};
-
-function outcomeStyle(result: "win" | "lose" | "push" | "blackjack"): React.CSSProperties {
-  const win = result === "win" || result === "blackjack";
-  const push = result === "push";
-  return {
-    padding: "12px 14px",
-    borderRadius: 10,
-    background: win ? "rgba(34, 197, 94, 0.12)" : push ? "rgba(245, 158, 11, 0.10)" : "rgba(239, 68, 68, 0.10)",
-    border: `1px solid ${win ? "rgba(34, 197, 94, 0.30)" : push ? "rgba(245, 158, 11, 0.30)" : "rgba(239, 68, 68, 0.30)"}`
-  };
-}
