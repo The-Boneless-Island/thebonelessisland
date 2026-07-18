@@ -600,6 +600,23 @@ export function App() {
     };
   }, [isAuthenticated, invalidate]);
 
+  // A slept tab (Edge sleeping tabs, backgrounded mobile) misses SSE frames
+  // and freezes every timer, and the daily-claim reset emits no SSE event at
+  // all — so a tab waking the next morning still holds yesterday's profile
+  // (claimedToday, balance). Reconcile with the server the moment the tab is
+  // visible again. EventSource auto-reconnects on its own; this covers the
+  // state that changed while nobody was listening. Failures keep the stale
+  // profile (refreshProfile already swallows them) — better stale than a
+  // flicker to signed-out.
+  useEffect(() => {
+    if (isAuthenticated !== true) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refreshProfile();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isAuthenticated, refreshProfile]);
+
   // When this member's Nuggies balance changes — daily claim, casino, loan,
   // admin grant, anything that bumps nuggiesSignal off the SSE bus — pull a
   // fresh profile so the homepage balance and daily-claim status reconcile to
