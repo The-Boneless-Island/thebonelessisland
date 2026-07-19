@@ -304,7 +304,8 @@ const SETTING_PAGE_OVERRIDES: Record<string, { page: AdminPageId; anchor: string
   official_announcements_ping_everyone: { page: "bridge", anchor: "bridge-official" },
   patch_alerts_enabled: { page: "bridge", anchor: "bridge-patches" },
   patch_notes_channel_id: { page: "bridge", anchor: "bridge-patches" },
-  share_enabled: { page: "bridge", anchor: "bridge-share" }
+  share_enabled: { page: "bridge", anchor: "bridge-share" },
+  admin_alert_channel_id: { page: "bridge", anchor: "bridge-admin-alerts" }
 };
 
 const DOMAIN_DEFAULT_PAGE: Record<SettingMeta["domain"], AdminPageId> = {

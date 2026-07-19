@@ -938,6 +938,37 @@ async function getCachedSetting(key: string): Promise<string> {
   return value;
 }
 
+// ── Admin ops alerts ─────────────────────────────────────────────────────────
+//
+// Posts operational notes (announcements dropped by config, deliveries that
+// dead-lettered) to the admin_alert_channel_id channel, if one is configured.
+// Best-effort by design: an alert failure must never affect the announcement
+// pipeline's own delivery outcome, so every path here swallows.
+//
+// Config-gate alerts are deduped per key: without this, a busy day with the
+// achievements toggle off would post one alert per dropped unlock. One nudge
+// per key per window is enough for a human to act on.
+
+const ADMIN_ALERT_DEDUPE_MS = 6 * 60 * 60 * 1000;
+const adminAlertLastSent = new Map<string, number>();
+
+async function postAdminAlert(dedupeKey: string | null, text: string): Promise<void> {
+  try {
+    if (dedupeKey) {
+      const last = adminAlertLastSent.get(dedupeKey);
+      if (last && Date.now() - last < ADMIN_ALERT_DEDUPE_MS) return;
+    }
+    const channelId = (await getCachedSetting("admin_alert_channel_id")).trim();
+    if (!channelId) return;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel?.isSendable()) return;
+    await channel.send({ content: text, allowedMentions: { parse: [] } });
+    if (dedupeKey) adminAlertLastSent.set(dedupeKey, Date.now());
+  } catch (err) {
+    console.error("[admin-alerts] post failed", err);
+  }
+}
+
 // Ordinal scheme — keys decoupled from tier display names so renames don't
 // touch this list. Index aligned with MILESTONE_TIERS in apps/api.
 const TIER_ROLE_KEYS_IN_LADDER_ORDER = [
@@ -1175,12 +1206,24 @@ async function processTideWeekly(payload: TideWeeklyPayload): Promise<void> {
 
 async function processAchievementUnlocked(payload: AchievementUnlockedPayload): Promise<void> {
   const enabled = await getCachedSetting("achievement_announcements_enabled");
-  if (enabled !== "true") return;
+  if (enabled !== "true") {
+    void postAdminAlert(
+      "gate:achievement_announcements_enabled",
+      "⚠️ Dropped an achievement announcement: `achievement_announcements_enabled` is OFF. Unlocks will keep being dropped silently until it's enabled in Admin → Settings."
+    );
+    return;
+  }
   // Reuse the milestone channel for small unlocks until/unless a separate
   // channel setting is introduced. Achievements are smaller-stakes than
   // milestones but live in the same celebration stream.
   const channelId = await getCachedSetting("milestone_channel_id");
-  if (!channelId) return;
+  if (!channelId) {
+    void postAdminAlert(
+      "gate:milestone_channel_id",
+      "⚠️ Dropped an achievement announcement: `milestone_channel_id` is not set. Configure the milestone channel in Admin → Discord."
+    );
+    return;
+  }
 
   const { ok, data } = await internalApi("GET", `/internal/achievement-variants/${encodeURIComponent(payload.key)}`);
   let flavorText: string | null = null;
@@ -1205,17 +1248,19 @@ async function processAchievementUnlocked(payload: AchievementUnlockedPayload): 
   const text = `${prefix}${body}`;
   const rendered = text.replace(/\{\{user\}\}/g, `<@${payload.discordUserId}>`);
 
-  try {
-    const channel = await client.channels.fetch(channelId);
-    if (channel && channel.isSendable()) {
-      await channel.send({
-        content: rendered,
-        allowedMentions: { users: [payload.discordUserId] },
-      });
-    }
-  } catch (err) {
-    console.error(`[achievements] channel post failed for ${payload.discordUserId}@${payload.key}`, err);
+  // Throws propagate: a failed send must mark this row's delivery attempt
+  // failed so the outbox retries/dead-letters it (attempts/last_error
+  // contract in processPendingAnnouncements). This handler used to swallow
+  // send errors, which acked the row as delivered and dropped the
+  // announcement with only a bot-container log line as evidence.
+  const channel = await client.channels.fetch(channelId);
+  if (!channel?.isSendable()) {
+    throw new Error(`Achievement channel ${channelId} is not sendable`);
   }
+  await channel.send({
+    content: rendered,
+    allowedMentions: { users: [payload.discordUserId] },
+  });
 }
 
 // Role grant is idempotent — re-adding a role a member already has is a
@@ -1268,7 +1313,15 @@ async function processMilestoneAnnouncement(payload: MilestonePayload): Promise<
   // attempts/last_error contract in processPendingAnnouncements below.
   const enabled = await getCachedSetting("milestone_announcements_enabled");
   const channelId = await getCachedSetting("milestone_channel_id");
-  if (enabled !== "true" || !channelId) return;
+  if (enabled !== "true" || !channelId) {
+    void postAdminAlert(
+      enabled !== "true" ? "gate:milestone_announcements_enabled" : "gate:milestone_channel_id",
+      enabled !== "true"
+        ? "⚠️ Dropped a milestone announcement: `milestone_announcements_enabled` is OFF. The tier role was still granted, but nothing was posted. Enable it in Admin → Discord."
+        : "⚠️ Dropped a milestone announcement: `milestone_channel_id` is not set. The tier role was still granted, but nothing was posted. Configure it in Admin → Discord."
+    );
+    return;
+  }
 
   const channel = await client.channels.fetch(channelId);
   if (!channel?.isSendable()) return;
@@ -1340,7 +1393,7 @@ let processInFlight = false;
  * without a confirmed ack) risks silently losing an announcement forever,
  * which is worse than an occasional double-post.
  */
-async function ackAnnouncement(id: number, ok: boolean, error?: string): Promise<void> {
+async function ackAnnouncement(id: number, ok: boolean, error?: string, kind?: string): Promise<void> {
   const body = { id, ok, error };
   // internalApi returns { ok:false } for HTTP errors but THROWS for network
   // failures and the 10s fetch timeout — both must count as a failed ack
@@ -1348,16 +1401,33 @@ async function ackAnnouncement(id: number, ok: boolean, error?: string): Promise
   // land in the poller's catch and record a false "failed delivery" for an
   // announcement that actually sent (guaranteeing a duplicate), and a throw
   // from the failure-path ack would abort the rest of the batch.
-  const tryAck = async (): Promise<{ ok: boolean; status: number | "network-error" }> => {
+  const tryAck = async (): Promise<{ ok: boolean; status: number | "network-error"; deadLettered: boolean }> => {
     try {
       const res = await internalApi("POST", `/internal/bot/announcements/${id}/processed`, body);
-      return { ok: res.ok, status: res.status };
+      const deadLettered =
+        res.ok &&
+        res.data != null &&
+        typeof res.data === "object" &&
+        "deadLettered" in res.data &&
+        (res.data as { deadLettered?: boolean }).deadLettered === true;
+      return { ok: res.ok, status: res.status, deadLettered };
     } catch {
-      return { ok: false, status: "network-error" };
+      return { ok: false, status: "network-error", deadLettered: false };
     }
   };
   const first = await tryAck();
-  if (first.ok) return;
+  if (first.ok) {
+    if (first.deadLettered) {
+      // Row exhausted its retries — it will never post. Surface it in the
+      // admin channel (no dedupe: dead letters are rare and each one is a
+      // distinct lost announcement worth a human look).
+      void postAdminAlert(
+        null,
+        `🛑 Announcement delivery failed permanently (row #${id}, kind \`${kind ?? "unknown"}\`) after 5 attempts: ${error ?? "unknown error"}. It will not retry — check the target channel id and the bot's permissions there.`
+      );
+    }
+    return;
+  }
   console.error(`[announcements] ack failed for row ${id}, retrying once`, { status: first.status });
   await new Promise((resolve) => setTimeout(resolve, 2_000));
   const second = await tryAck();
@@ -1365,6 +1435,11 @@ async function ackAnnouncement(id: number, ok: boolean, error?: string): Promise
     console.error(`[announcements] ack retry also failed for row ${id} — row will re-poll (at-least-once)`, {
       status: second.status,
     });
+  } else if (second.deadLettered) {
+    void postAdminAlert(
+      null,
+      `🛑 Announcement delivery failed permanently (row #${id}, kind \`${kind ?? "unknown"}\`) after 5 attempts: ${error ?? "unknown error"}. It will not retry — check the target channel id and the bot's permissions there.`
+    );
   }
 }
 
@@ -1397,7 +1472,7 @@ async function processPendingAnnouncements(): Promise<void> {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[announcements] handler failed for row ${row.id}`, err);
-        await ackAnnouncement(row.id, false, message);
+        await ackAnnouncement(row.id, false, message, row.kind);
       }
     }
   } catch (err) {

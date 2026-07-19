@@ -454,6 +454,29 @@ export function BridgeAdminPage({
             </>
           ),
         },
+        {
+          anchor: "bridge-admin-alerts",
+          label: "Admin alerts",
+          content: (
+            <>
+              <IslandCard
+                style={{
+                  padding: "12px 16px",
+                  background: "rgba(56, 189, 248, 0.08)",
+                  border: "1px solid rgba(56, 189, 248, 0.30)"
+                }}
+              >
+                <p style={{ margin: 0, fontSize: 13, color: islandTheme.color.textSubtle, lineHeight: 1.5 }}>
+                  When set, the bot posts operational notes to this channel: announcements it had to
+                  drop because a toggle above is OFF or a channel is unset, and deliveries that failed
+                  permanently after retries (bad channel ID, missing permissions). Point it at a
+                  private staff channel — silent drops become visible instead of vanishing.
+                </p>
+              </IslandCard>
+              <InlineSettings keys={["admin_alert_channel_id"]} settings={settings} onSave={onUpdate} title="" />
+            </>
+          ),
+        },
       ]}
     />
   );

@@ -76,17 +76,22 @@ internalRouter.post(
           "UPDATE bot_announcements SET processed_at = NOW() WHERE id = $1 AND processed_at IS NULL",
           [id]
         );
+        res.json({ ok: true, deadLettered: false });
       } else {
-        await db.query(
+        // RETURNING tells the bot whether this failure was the row's last
+        // chance (dead letter) so it can raise an admin alert — the row is
+        // otherwise invisible from Discord's side once it stops retrying.
+        const r = await db.query<{ dead: boolean }>(
           `UPDATE bot_announcements
            SET attempts = attempts + 1,
                last_error = $2,
                processed_at = CASE WHEN attempts + 1 >= $3 THEN NOW() ELSE processed_at END
-           WHERE id = $1 AND processed_at IS NULL`,
+           WHERE id = $1 AND processed_at IS NULL
+           RETURNING (attempts >= $3) AS dead`,
           [id, body.error ?? "Unknown error", ANNOUNCEMENT_MAX_ATTEMPTS]
         );
+        res.json({ ok: true, deadLettered: r.rows[0]?.dead === true });
       }
-      res.json({ ok: true });
     } catch (err) {
       console.error("[internal] POST /bot/announcements/:id/processed error:", err);
       res.status(500).json({ error: "Failed to record announcement outcome" });
