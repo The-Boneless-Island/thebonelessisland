@@ -34,6 +34,23 @@ CVE-2026-42504
 # 2-alpine tag on Go 1.26.4+. REMOVE both lines then.
 CVE-2026-27145
 
+# CVE-2026-39822 — Go stdlib os.Root symlink-following directory traversal, in
+# the same caddy:2-alpine Caddy binary (Go 1.26.3; fix is Go 1.26.5 / 1.25.12)
+# as the two stdlib CVEs above.
+#
+# Why waived: same blocker — we do not compile Caddy, and no Caddy image built
+# on Go 1.26.5+ is published yet (the floating 2-alpine tag still resolves to
+# Go 1.26.3 as of 2026-07-18). Exploitation requires the process to open
+# attacker-influenced paths through os.Root over a tree containing
+# attacker-placed symlinks. Our web container serves only the baked-in SPA
+# build output (no uploads, no writable served tree, no symlinks) and
+# reverse-proxies the API, so there is no path for an attacker to introduce a
+# symlink for Caddy to follow.
+#
+# Revisit: clears when Caddy republishes the floating 2-alpine tag on Go
+# 1.26.5+ (which also clears the two entries above). REMOVE this line then.
+CVE-2026-39822
+
 # CVE-2026-12151 — undici DoS (unbounded memory) in undici 6.24.1, pulled
 # transitively by discord.js (@discordjs/rest) for the Nuggie bot. Hoists to the
 # root node_modules, so it appears in all three images' scans.
