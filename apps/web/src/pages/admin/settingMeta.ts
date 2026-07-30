@@ -715,6 +715,18 @@ const RAW: SettingMeta[] = [
     type: "string"
   },
   {
+    key: "admin_alert_channel_id",
+    label: "Admin alerts channel ID",
+    description: "Discord channel where the bot posts operational alerts: announcements dropped because a toggle is off or a channel is unset, and deliveries that failed permanently after retries. Blank = no alerts.",
+    whenToChange: "Point it at a private admin/staff channel so silent announcement drops become visible.",
+    example: "1234567890123456789",
+    ifWrong: "Announcement failures stay invisible outside the bot container logs and the bot_announcements table.",
+    tags: ["discord", "bridge", "admin", "alerts", "channel", "id", "ops"],
+    dangerLevel: "low",
+    domain: "people",
+    type: "string"
+  },
+  {
     key: "share_enabled",
     label: "Sharing: enabled",
     description: "Turn off the share-to-Discord feature sitewide.",
