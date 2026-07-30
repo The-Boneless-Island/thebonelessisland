@@ -1,33 +1,63 @@
 import { useEffect, useState } from "react";
-import { IslandButton, IslandCard, IslandTag, islandTagStyle } from "../../islandUi.js";
+import { IslandButton, IslandCard, islandTagStyle, useCountUp } from "../../islandUi.js";
 import { NuggieCoin } from "../../components/NuggieCoin.js";
+import { ConfettiBurst } from "../../system/celebration.js";
 import { islandTheme } from "../../theme.js";
 import { startCoinflip, type GameStateResponse } from "../../api/games.js";
 import { useRefetchActivity } from "../../system/activityContext.js";
+import {
+  BackBtn,
+  BetControls,
+  EMPTY_RUN,
+  OutcomeBanner,
+  SeatLabel,
+  SessionStrip,
+  casinoControlBarStyle,
+  casinoErrorStyle,
+  casinoFeltStyle,
+  casinoHeaderStyle,
+  casinoLabelStyle,
+  tallyRound,
+  useCooldown,
+  wait
+} from "./casinoShared.js";
 
 type Props = {
   startBalance: number | null;
   maxBet: number;
+  cooldownSecs: number;
   onResolved: (newBalance: number) => void;
   onBack: () => void;
 };
 
-export function CoinflipGame({ startBalance, maxBet, onResolved, onBack }: Props) {
+// One-click round loop: the controls never unmount. Bet and call persist
+// across rounds, the outcome shows as a banner above them, and the primary
+// button counts the server cooldown down in place — so a 10-round run is
+// literally 10 clicks of the same button.
+export function CoinflipGame({ startBalance, maxBet, cooldownSecs, onResolved, onBack }: Props) {
   const [bet, setBet] = useState(10);
   const [call, setCall] = useState<"heads" | "tails">("heads");
-  const [phase, setPhase] = useState<"idle" | "flipping" | "settled" | "error">("idle");
+  const [phase, setPhase] = useState<"idle" | "flipping" | "settled">("idle");
   const [result, setResult] = useState<GameStateResponse | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [run, setRun] = useState(EMPTY_RUN);
+  const [confetti, setConfetti] = useState(0);
   const refetchActivity = useRefetchActivity();
+  const cooldown = useCooldown();
 
   const balanceAvail = startBalance ?? 0;
+  const animatedBalance = useCountUp(balanceAvail);
   const validBet = Number.isInteger(bet) && bet >= 1 && bet <= Math.min(maxBet, balanceAvail);
+  const busy = phase === "flipping";
 
   async function flip() {
-    if (!validBet || phase === "flipping") return;
+    if (!validBet || busy || !cooldown.ready) return;
     setPhase("flipping");
     setErrorMsg(null);
     setResult(null);
+    // The server counts the cooldown from the start call — arm now so the
+    // button's countdown matches reality instead of erroring on a fast replay.
+    cooldown.arm(cooldownSecs);
 
     const res = await startCoinflip(bet, call);
 
@@ -35,28 +65,41 @@ export function CoinflipGame({ startBalance, maxBet, onResolved, onBack }: Props
     await wait(1200);
 
     if (!res.ok) {
-      setErrorMsg(res.error.error);
-      setPhase("error");
+      if (res.error.code === "cooldown" && res.error.secondsLeft) {
+        cooldown.arm(res.error.secondsLeft);
+      } else {
+        setErrorMsg(res.error.error);
+      }
+      setPhase("idle");
       return;
     }
     setResult(res.data);
     setPhase("settled");
+    const r = res.data.result?.type === "coinflip" ? res.data.result : null;
+    if (r) {
+      const net = r.won ? (res.data.payout ?? 0) - res.data.bet : -res.data.bet;
+      setRun((prev) => tallyRound(prev, net, r.won));
+      if (r.won) setConfetti((n) => n + 1);
+    }
     if (typeof res.data.newBalance === "number") onResolved(res.data.newBalance);
     void refetchActivity();
-  }
-
-  function reset() {
-    setPhase("idle");
-    setResult(null);
-    setErrorMsg(null);
   }
 
   const r = result?.result?.type === "coinflip" ? result.result : null;
   const showOutcome = phase === "settled" && r;
 
+  const buttonLabel = busy
+    ? "Flipping…"
+    : !cooldown.ready
+      ? `Ready in ${cooldown.secondsLeft}s`
+      : showOutcome
+        ? `Flip again for ₦${bet}`
+        : `Flip for ₦${bet}`;
+
   return (
-    <IslandCard style={{ display: "grid", gap: 14, padding: 18 }}>
-      <div style={headerStyle}>
+    <IslandCard style={{ display: "grid", gap: 14, padding: 18, position: "relative" }}>
+      <ConfettiBurst trigger={confetti} />
+      <div style={casinoHeaderStyle}>
         <div>
           <div className="island-display" style={{ fontSize: 18, fontWeight: 700 }}>Coinflip</div>
           <div style={{ fontSize: 12, color: islandTheme.color.textMuted }}>
@@ -67,102 +110,67 @@ export function CoinflipGame({ startBalance, maxBet, onResolved, onBack }: Props
       </div>
 
       {/* Felt stage */}
-      <div style={feltStyle}>
-        <SeatLabel>{phase === "flipping" ? "Flipping…" : showOutcome ? "Result" : "Coin"}</SeatLabel>
-        <Coin
-          face={showOutcome ? r!.outcome : "heads"}
-          spinning={phase === "flipping"}
-        />
-        {phase !== "settled" && (
-          <div style={callTagStyle}>You called <strong style={{ color: "#fde68a" }}>{call}</strong></div>
-        )}
+      <div style={casinoFeltStyle}>
+        <SeatLabel>{busy ? "Flipping…" : showOutcome ? "Result" : "Coin"}</SeatLabel>
+        <Coin face={showOutcome ? r!.outcome : "heads"} spinning={busy} landed={!!showOutcome} won={showOutcome ? r!.won : false} />
+        <div style={callTagStyle}>
+          You call <strong style={{ color: "#fde68a" }}>{call}</strong>
+        </div>
+        <SessionStrip run={run} />
       </div>
 
       {/* Outcome banner */}
       {showOutcome && r && (
-        <div className="casino-result-enter" style={outcomeStyle(r.won)}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>
-            {r.won ? "🎉 You won!" : "😕 You lost"}
+        <OutcomeBanner
+          won={r.won}
+          headline={r.won ? "🎉 You won!" : "😕 You lost"}
+          net={r.won ? result!.payout! - result!.bet : -result!.bet}
+          detail={
+            <>
+              Coin landed on <strong>{r.outcome}</strong> · you called <strong>{r.call}</strong>
+            </>
+          }
+        />
+      )}
+
+      {errorMsg && <div style={casinoErrorStyle}>{errorMsg}</div>}
+
+      {/* Controls — always mounted so a replay is a single click. */}
+      <div style={casinoControlBarStyle}>
+        <div style={{ display: "grid", gap: 12 }}>
+          <BetControls bet={bet} setBet={setBet} balance={balanceAvail} maxBet={maxBet} disabled={busy} />
+
+          <div style={{ display: "grid", gap: 8 }}>
+            <label style={{ ...casinoLabelStyle, textAlign: "center" }}>Your call</label>
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              <CallChip active={call === "heads"} onClick={() => setCall("heads")} disabled={busy}>
+                🪙 Heads
+              </CallChip>
+              <CallChip active={call === "tails"} onClick={() => setCall("tails")} disabled={busy}>
+                🥏 Tails
+              </CallChip>
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: islandTheme.color.textSubtle, marginTop: 4 }}>
-            Coin landed on <strong>{r.outcome}</strong> · you called <strong>{r.call}</strong>
-            {" · "}
-            {r.won ? `+${result!.payout! - result!.bet} Nuggies` : `-${result!.bet} Nuggies`}
-            {result?.newBalance != null && ` · balance now ₦${result.newBalance.toLocaleString()}`}
+
+          <IslandButton
+            variant="primary"
+            disabled={!validBet || busy || !cooldown.ready}
+            onClick={() => void flip()}
+            style={{ alignSelf: "center", minWidth: 210 }}
+          >
+            {buttonLabel}
+          </IslandButton>
+
+          <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
+            Balance: ₦{animatedBalance.toLocaleString()}
           </div>
         </div>
-      )}
-
-      {phase === "error" && errorMsg && (
-        <div style={errorStyle}>{errorMsg}</div>
-      )}
-
-      {/* Controls */}
-      <div style={controlBarStyle}>
-        {phase !== "settled" ? (
-          <div style={{ display: "grid", gap: 12 }}>
-            <div style={{ display: "grid", gap: 8 }}>
-              <label style={{ ...labelStyle, textAlign: "center" }}>Bet (Nuggies)</label>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "center" }}>
-                <input
-                  type="number"
-                  min={1}
-                  max={Math.min(maxBet, balanceAvail)}
-                  value={bet}
-                  onChange={(e) => setBet(parseInt(e.target.value, 10) || 0)}
-                  disabled={phase === "flipping"}
-                  style={{ ...inputStyle, width: 130, textAlign: "center" }}
-                />
-                {[10, 25, 50, 100].map((amount) => (
-                  <button
-                    key={amount}
-                    type="button"
-                    onClick={() => setBet(Math.min(amount, maxBet, balanceAvail))}
-                    disabled={phase === "flipping" || amount > balanceAvail || amount > maxBet}
-                    style={chipPresetStyle}
-                  >
-                    {amount}
-                  </button>
-                ))}
-              </div>
-              <div style={{ fontSize: 12, color: islandTheme.color.textMuted, textAlign: "center" }}>
-                Balance: ₦{balanceAvail.toLocaleString()}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gap: 8 }}>
-              <label style={labelStyle}>Your call</label>
-              <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-                <CallChip active={call === "heads"} onClick={() => setCall("heads")} disabled={phase === "flipping"}>
-                  🪙 Heads
-                </CallChip>
-                <CallChip active={call === "tails"} onClick={() => setCall("tails")} disabled={phase === "flipping"}>
-                  🥏 Tails
-                </CallChip>
-              </div>
-            </div>
-
-            <IslandButton
-              variant="primary"
-              disabled={!validBet || phase === "flipping"}
-              onClick={() => void flip()}
-              style={{ alignSelf: "center", minWidth: 200 }}
-            >
-              {phase === "flipping" ? "Flipping…" : `Flip for ₦${bet}`}
-            </IslandButton>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 8, justifyContent: "center", flexWrap: "wrap" }}>
-            <IslandButton variant="primary" onClick={reset}>Play again</IslandButton>
-            <IslandButton variant="secondary" onClick={onBack}>Back to casino</IslandButton>
-          </div>
-        )}
       </div>
     </IslandCard>
   );
 }
 
-function Coin({ face, spinning }: { face: "heads" | "tails"; spinning: boolean }) {
+function Coin({ face, spinning, landed, won }: { face: "heads" | "tails"; spinning: boolean; landed: boolean; won: boolean }) {
   const [tickFace, setTickFace] = useState<"heads" | "tails">(face);
 
   useEffect(() => {
@@ -177,16 +185,18 @@ function Coin({ face, spinning }: { face: "heads" | "tails"; spinning: boolean }
   }, [spinning, face]);
 
   const shown = spinning ? tickFace : face;
+  const className = spinning ? "casino-coin-spinning" : landed ? "casino-coin-land" : "";
 
   return (
     <div
-      className={spinning ? "casino-coin-spinning" : ""}
+      className={className}
       style={{
         width: 128,
         height: 128,
         borderRadius: "50%",
-        boxShadow:
-          "0 0 24px rgba(251, 191, 36, 0.35), 0 12px 28px rgba(0, 0, 0, 0.55), inset 0 0 0 2px rgba(120, 53, 15, 0.55)"
+        boxShadow: landed && won
+          ? "0 0 40px rgba(251, 191, 36, 0.6), 0 12px 28px rgba(0, 0, 0, 0.55), inset 0 0 0 2px rgba(120, 53, 15, 0.55)"
+          : "0 0 24px rgba(251, 191, 36, 0.35), 0 12px 28px rgba(0, 0, 0, 0.55), inset 0 0 0 2px rgba(120, 53, 15, 0.55)"
       }}
     >
       <NuggieCoin face={shown} size={128} style={{ width: "100%", height: "100%" }} />
@@ -214,134 +224,9 @@ function CallChip({ active, disabled, onClick, children }: { active: boolean; di
   );
 }
 
-function SeatLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      className="island-mono"
-      style={{
-        fontSize: 12,
-        color: islandTheme.color.textMuted,
-        textTransform: "uppercase",
-        letterSpacing: "0.16em",
-        textAlign: "center"
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function BackBtn({ onBack }: { onBack: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onBack}
-      className="island-mono"
-      style={{
-        background: "transparent",
-        border: "none",
-        color: islandTheme.color.textMuted,
-        fontSize: 12,
-        textTransform: "uppercase",
-        letterSpacing: "0.06em",
-        cursor: "pointer",
-        font: "inherit"
-      }}
-    >
-      ← Casino
-    </button>
-  );
-}
-
-function wait(ms: number) {
-  return new Promise<void>((r) => setTimeout(r, ms));
-}
-
-const headerStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "flex-start",
-  gap: 12
-};
-
-const labelStyle: React.CSSProperties = {
-  fontSize: 12,
-  fontWeight: 700,
-  color: islandTheme.color.textMuted,
-  textTransform: "uppercase",
-  letterSpacing: "0.06em",
-  fontFamily: "var(--island-mono, monospace)"
-};
-
-const inputStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  border: `1px solid ${islandTheme.color.cardBorder}`,
-  background: islandTheme.color.panelMutedBg,
-  color: islandTheme.color.textPrimary,
-  fontSize: 14,
-  font: "inherit"
-};
-
-const errorStyle: React.CSSProperties = {
-  padding: "10px 12px",
-  borderRadius: 8,
-  background: "rgba(239, 68, 68, 0.10)",
-  border: "1px solid rgba(239, 68, 68, 0.35)",
-  color: "#fca5a5",
-  fontSize: 13
-};
-
-function outcomeStyle(won: boolean): React.CSSProperties {
-  return {
-    padding: "12px 14px",
-    borderRadius: 10,
-    background: won ? "rgba(34, 197, 94, 0.12)" : "rgba(239, 68, 68, 0.10)",
-    border: `1px solid ${won ? "rgba(34, 197, 94, 0.30)" : "rgba(239, 68, 68, 0.30)"}`,
-    textAlign: "center"
-  };
-}
-
-const feltStyle: React.CSSProperties = {
-  padding: "26px 18px 30px",
-  borderRadius: 18,
-  background:
-    "radial-gradient(120% 90% at 50% 0%, rgba(20, 110, 80, 0.55) 0%, rgba(10, 60, 48, 0.85) 55%, rgba(6, 30, 26, 0.95) 100%)",
-  border: "1px solid rgba(34, 197, 94, 0.28)",
-  boxShadow:
-    "inset 0 0 80px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 8px 24px rgba(0, 0, 0, 0.35)",
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "center",
-  gap: 14
-};
-
 const callTagStyle: React.CSSProperties = {
   fontSize: 12,
   color: islandTheme.color.textMuted,
   letterSpacing: "0.04em",
   fontFamily: "var(--island-mono, monospace)"
 };
-
-const controlBarStyle: React.CSSProperties = {
-  padding: "14px 16px",
-  borderRadius: 14,
-  background: "rgba(8, 16, 22, 0.55)",
-  border: `1px solid ${islandTheme.color.cardBorder}`
-};
-
-const chipPresetStyle: React.CSSProperties = {
-  padding: "8px 12px",
-  borderRadius: 999,
-  border: "1px solid rgba(250, 204, 21, 0.35)",
-  background: "rgba(250, 204, 21, 0.08)",
-  color: "#fde68a",
-  fontWeight: 700,
-  fontSize: 12,
-  fontFamily: "var(--island-mono, monospace)",
-  cursor: "pointer",
-  letterSpacing: "0.04em"
-};
-
-// Suppress TS unused-import noise
-void IslandTag;

@@ -51,6 +51,31 @@ CVE-2026-27145
 # 1.26.5+ (which also clears the two entries above). REMOVE this line then.
 CVE-2026-39822
 
+# CVE-2026-56852 — golang.org/x/text norm.Iter infinite-loop DoS, compiled into
+# the same caddy:2-alpine Caddy binary as the Go-stdlib CVEs above (Caddy vendors
+# x/text v0.37.0; fix is v0.39.0).
+#
+# Why waived: same blocker — we do not compile Caddy, and the floating 2-alpine
+# tag pulled fresh by CI on 2026-07-30 still vendors x/text v0.37.0; no patched
+# Caddy image exists to upgrade to. DoS only (infinite loop on crafted input),
+# and the edge sits behind Cloudflare.
+#
+# Revisit: clears when Caddy republishes the floating 2-alpine tag with x/text
+# v0.39.0+ (likely alongside the Go-stdlib rebuild above). REMOVE then.
+CVE-2026-56852
+
+# GHSA-hrxh-6v49-42gf — gRPC-Go xDS RBAC / HTTP/2 vulnerabilities in the same
+# caddy:2-alpine Caddy binary (vendors grpc-go v1.81.0; fix is v1.82.1).
+#
+# Why waived: same blocker — no patched Caddy image published as of 2026-07-30
+# (fresh CI pull of the floating tag still vendors v1.81.0). The vulnerable
+# surface is gRPC xDS/RBAC serving, which our Caddy config never enables — it
+# only serves the static SPA and reverse-proxies the API over plain HTTP.
+#
+# Revisit: clears when Caddy republishes the floating 2-alpine tag with grpc-go
+# v1.82.1+. REMOVE then.
+GHSA-hrxh-6v49-42gf
+
 # CVE-2026-12151 — undici DoS (unbounded memory) in undici 6.24.1, pulled
 # transitively by discord.js (@discordjs/rest) for the Nuggie bot. Hoists to the
 # root node_modules, so it appears in all three images' scans.
