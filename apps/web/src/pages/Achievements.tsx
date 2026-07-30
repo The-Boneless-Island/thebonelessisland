@@ -3,6 +3,7 @@ import { Link } from "react-router";
 import { apiFetch } from "../api/client.js";
 import { LoanRow } from "../components/LoanRow.js";
 import { pathForPage } from "../lib/routes.js";
+import { resetDayKey } from "../lib/dailyReset.js";
 import { useRefetchActivity } from "../system/activityContext.js";
 import { useNuggiesSignal } from "../system/nuggiesSignal.js";
 import { usePushToast } from "../system/toast.js";
@@ -120,6 +121,32 @@ function AchievementsPageInner({ onProfileChanged }: AchievementsPageProps = {})
   useEffect(() => {
     if (nuggiesSignal > 0) void load();
   }, [nuggiesSignal, load]);
+
+  // A slept tab (Edge sleeping tabs, backgrounded mobile) misses SSE frames,
+  // so "Daily claimed ✓" and the balance can be a day stale when the user
+  // comes back. Reconcile with the server whenever the tab wakes.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [load]);
+
+  // If the page sits open across the reset boundary (midnight Halifax = 11pm
+  // ET), flip "claimed" back off without waiting for a refresh. Day-key
+  // comparison, not a countdown: slept tabs skip any zero-crossing tick.
+  useEffect(() => {
+    if (!claimedToday) return;
+    const claimedKey = resetDayKey();
+    const id = setInterval(() => {
+      if (resetDayKey() !== claimedKey) {
+        setClaimedToday(false);
+        void load();
+      }
+    }, 30_000);
+    return () => clearInterval(id);
+  }, [claimedToday, load]);
 
   async function claimDaily() {
     setClaiming(true);

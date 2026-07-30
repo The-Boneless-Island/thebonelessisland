@@ -4,6 +4,7 @@ import { describeActivityFeedEvent } from "@island/shared";
 import { apiFetch } from "../api/client.js";
 import { putClientState } from "../api/clientState.js";
 import { activityHref, pathForGame, pathForIslander } from "../lib/routes.js";
+import { formatCountdown, msUntilNextDailyReset, resetDayKey } from "../lib/dailyReset.js";
 import { ConfettiBurst } from "../system/celebration.js";
 import { LOGO_BG_URL } from "../assets.js";
 import { ActionCard, IslandCard, IslandEmptyState, IslandSkeleton, IslandTag, PresenceRow, StatusDot, islandInputStyle, useCountUp, type StatusTone } from "../islandUi.js";
@@ -615,35 +616,6 @@ function TrendingRow({ game, rank }: { game: TrendingGame; rank: number }) {
 
 // â"€â"€ Nuggies Snapshot â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
 
-// Daily reset boundary: midnight in America/Halifax (= 11pm ET year-round).
-const RESET_TZ = "America/Halifax";
-
-function msUntilNextDailyReset(): number {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: RESET_TZ,
-    hourCycle: "h23",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-  const parts = fmt.formatToParts(new Date());
-  const map: Record<string, string> = {};
-  for (const p of parts) map[p.type] = p.value;
-  const h = Number(map.hour) || 0;
-  const m = Number(map.minute) || 0;
-  const s = Number(map.second) || 0;
-  const msOfDay = h * 3_600_000 + m * 60_000 + s * 1000;
-  return Math.max(0, 86_400_000 - msOfDay);
-}
-
-function formatCountdown(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
 // Center of the home top row. Replaces the old decorative floating logo (which
 // left a huge dead column). A live, glass "island pulse" panel: small ring-free
 // crest + time-aware greeting + crew-aboard count + CTAs. Earns its space and
@@ -779,14 +751,38 @@ function NuggiesSnapshot({
 
   useEffect(() => {
     if (claimedToday !== true) return;
-    setMsLeft(msUntilNextDailyReset());
-    const id = setInterval(() => {
-      const next = msUntilNextDailyReset();
-      setMsLeft(next);
-      if (next === 0) setClaimedToday(false);
-    }, 1000);
-    return () => clearInterval(id);
-  }, [claimedToday]);
+    // Capture which claim window "claimed" refers to. The reset is detected by
+    // the day key changing, NOT by the countdown reaching zero: the countdown
+    // jumps from ~1s straight to ~24h across midnight Halifax (so a zero tick
+    // never fires), and a slept tab (Edge sleeping tabs, backgrounded mobile)
+    // freezes timers entirely and skips the boundary anyway.
+    const claimedKey = resetDayKey();
+    const tick = () => {
+      if (resetDayKey() !== claimedKey) {
+        // Reset passed → this claim window is over, so claimedToday=true is
+        // stale by definition. Patch upstream too: the profile-sync effect
+        // above would otherwise revert local state to the parent's stale true.
+        // A wrong device clock is reconciled by the wake-time profile refetch
+        // in App; a premature claim attempt just gets the server's 409.
+        onProfilePatch({ claimedToday: false });
+        setClaimedToday(false);
+        return;
+      }
+      setMsLeft(msUntilNextDailyReset());
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    // A waking tab's next interval tick can lag; recompute immediately so the
+    // frozen countdown never lingers on screen.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [claimedToday, onProfilePatch]);
 
   const balance = profile?.nuggieBalance;
   // Count-up instead of snapping when the balance changes (claim, SSE update).
