@@ -16,8 +16,8 @@
     "db:migrate": "npm run db:migrate -w @island/api"
   },
   "devDependencies": {
-    "concurrently": "^10.0.4",
-    "prettier": "^3.9.4",
+    "concurrently": "^10.0.5",
+    "prettier": "^3.9.6",
     "typescript": "^6.0.3"
   },
   "overrides": {
